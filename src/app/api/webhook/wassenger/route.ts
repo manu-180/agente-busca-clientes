@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
   let tipoMensaje: 'texto' | 'audio' | 'imagen' | 'otro' = 'texto'
   if (tipoOriginal === 'ptt' || tipoOriginal === 'audio') tipoMensaje = 'audio'
   else if (tipoOriginal === 'image') tipoMensaje = 'imagen'
-  else if (tipoOriginal !== 'chat') tipoMensaje = 'otro'
+  else if (tipoOriginal !== 'chat' && tipoOriginal !== 'text') tipoMensaje = 'otro'
 
   let { data: lead } = await supabase
     .from('leads')
