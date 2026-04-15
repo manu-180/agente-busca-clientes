@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
+import { generarRespuestaAgente, enviarMensajeAgente } from '@/lib/agente'
 
 export async function POST(req: NextRequest) {
   let body
@@ -102,16 +103,12 @@ export async function POST(req: NextRequest) {
   // Si es audio/imagen, el agente no puede procesar
   if (tipoMensaje !== 'texto') {
     const respAudio = 'Disculpá, no puedo escuchar audios ni ver imágenes por acá. ¿Me lo podés escribir en texto?'
-    
-    // Enviar respuesta via Wassenger
-    await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/agente/enviar`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        telefono: telefonoLimpio,
-        mensaje: respAudio,
-        lead_id: lead.id,
-      }),
+
+    console.log('[Wassenger] Enviando respuesta por audio/imagen recibido')
+    await enviarMensajeAgente({
+      telefono: telefonoLimpio,
+      mensaje: respAudio,
+      lead_id: lead.id,
     })
 
     return NextResponse.json({ ok: true, agente: true, tipo: 'audio_fallback' })
@@ -129,36 +126,25 @@ export async function POST(req: NextRequest) {
 
   // Llamar al agente para generar respuesta
   try {
-    const agenteRes = await fetch(
-      `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/agente/responder`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          telefono: telefonoLimpio,
-          mensaje_nuevo: mensaje,
-          lead_id: lead.id,
-        }),
-      }
-    )
-    const agenteData = await agenteRes.json()
+    console.log('[Wassenger] Generando respuesta del agente...')
+    const { respuesta } = await generarRespuestaAgente({
+      telefono: telefonoLimpio,
+      mensaje_nuevo: mensaje,
+      lead_id: lead.id,
+    })
 
-    if (agenteData.respuesta) {
-      // Enviar respuesta via Wassenger
-      await fetch(`${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/agente/enviar`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          telefono: telefonoLimpio,
-          mensaje: agenteData.respuesta,
-          lead_id: lead.id,
-        }),
+    if (respuesta) {
+      console.log('[Wassenger] Agente generó respuesta, enviando...')
+      await enviarMensajeAgente({
+        telefono: telefonoLimpio,
+        mensaje: respuesta,
+        lead_id: lead.id,
       })
     }
 
     return NextResponse.json({ ok: true, agente: true })
   } catch (error) {
-    console.error('Error en agente:', error)
+    console.error('[Wassenger] Error en agente:', error)
     return NextResponse.json({ ok: true, agente: false, error: 'agente_error' })
   }
 }
