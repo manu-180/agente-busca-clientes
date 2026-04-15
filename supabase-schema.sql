@@ -63,7 +63,8 @@ CREATE TABLE IF NOT EXISTS conversaciones (
   rol rol_mensaje NOT NULL,
   tipo_mensaje tipo_mensaje NOT NULL DEFAULT 'texto',
   timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
-  leido BOOLEAN NOT NULL DEFAULT false
+  leido BOOLEAN NOT NULL DEFAULT false,
+  manual BOOLEAN NOT NULL DEFAULT false
 );
 
 -- Tabla apex_info (conocimiento del agente)
@@ -107,6 +108,7 @@ ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS rol rol_mensaje;
 ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS tipo_mensaje tipo_mensaje DEFAULT 'texto';
 ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS timestamp TIMESTAMPTZ DEFAULT now();
 ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS leido BOOLEAN DEFAULT false;
+ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS manual BOOLEAN NOT NULL DEFAULT false;
 
 ALTER TABLE apex_info ADD COLUMN IF NOT EXISTS id UUID DEFAULT gen_random_uuid();
 ALTER TABLE apex_info ADD COLUMN IF NOT EXISTS categoria TEXT;

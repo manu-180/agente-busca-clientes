@@ -35,6 +35,8 @@ export interface Conversacion {
   tipo_mensaje: 'texto' | 'audio' | 'imagen' | 'otro'
   timestamp: string
   leido: boolean
+  /** true = enviado manualmente (inbox); false = agente automático / webhook */
+  manual?: boolean
 }
 
 export interface ApexInfo {

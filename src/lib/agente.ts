@@ -142,6 +142,7 @@ export async function enviarMensajeAgente({
         mensaje,
         rol: 'agente',
         tipo_mensaje: 'texto',
+        manual: true,
       })
     }
 

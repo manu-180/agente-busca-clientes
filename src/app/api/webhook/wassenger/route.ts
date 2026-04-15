@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { buildAgentPrompt } from '@/lib/prompts'
 
+const OWNER_PHONE = '5491124842720'
+const VENTANA_RESPUESTA_MANUAL_MS = 5 * 60 * 1000
+
 const WASSENGER_MESSAGES_URL = 'https://api.wassenger.com/v1/messages'
 
 async function enviarWassengerYGuardar(
@@ -40,6 +43,7 @@ async function enviarWassengerYGuardar(
     mensaje: texto,
     rol: 'agente',
     tipo_mensaje: 'texto',
+    manual: false,
   })
 }
 
@@ -69,6 +73,10 @@ export async function POST(req: NextRequest) {
 
   if (!telefono || !mensaje) {
     return NextResponse.json({ ok: true, skipped: true })
+  }
+
+  if (telefono.includes(OWNER_PHONE)) {
+    return NextResponse.json({ ok: true, skipped: true, motivo: 'mensaje_propio' })
   }
 
   const supabase = createSupabaseServer()
@@ -131,6 +139,25 @@ export async function POST(req: NextRequest) {
 
   if (!agenteGlobalOn || !agenteLeadOn) {
     return NextResponse.json({ ok: true, agente: false })
+  }
+
+  const desdeManual = new Date(Date.now() - VENTANA_RESPUESTA_MANUAL_MS).toISOString()
+  const { data: recienteManual } = await supabase
+    .from('conversaciones')
+    .select('id')
+    .eq('lead_id', lead.id)
+    .eq('rol', 'agente')
+    .eq('manual', true)
+    .gte('timestamp', desdeManual)
+    .limit(1)
+    .maybeSingle()
+
+  if (recienteManual) {
+    return NextResponse.json({
+      ok: true,
+      skipped: true,
+      motivo: 'dueño_respondió_reciente',
+    })
   }
 
   if (tipoMensaje !== 'texto') {
