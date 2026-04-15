@@ -3,9 +3,11 @@ export type EstadoLead =
   | 'contactado'
   | 'respondio'
   | 'interesado'
+  | 'presupuesto_enviado'
   | 'cerrado'
   | 'descartado'
   | 'no_interesado'
+  | 'cliente'
 
 export type OrigenLead = 'outbound' | 'inbound'
 
@@ -37,6 +39,8 @@ export interface Conversacion {
   leido: boolean
   /** true = enviado manualmente (inbox); false = agente automático / webhook */
   manual?: boolean
+  /** true = mensaje de seguimiento automático (cron) */
+  es_followup?: boolean
 }
 
 export interface ApexInfo {

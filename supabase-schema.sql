@@ -10,7 +10,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'estado_lead') THEN
     CREATE TYPE estado_lead AS ENUM (
       'pendiente', 'contactado', 'respondio',
-      'interesado', 'cerrado', 'descartado', 'no_interesado'
+      'interesado', 'presupuesto_enviado', 'cerrado', 'descartado', 'no_interesado', 'cliente'
     );
   END IF;
 END $$;
@@ -109,6 +109,7 @@ ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS tipo_mensaje tipo_mensaje DE
 ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS timestamp TIMESTAMPTZ DEFAULT now();
 ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS leido BOOLEAN DEFAULT false;
 ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS manual BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS es_followup BOOLEAN NOT NULL DEFAULT false;
 
 ALTER TABLE apex_info ADD COLUMN IF NOT EXISTS id UUID DEFAULT gen_random_uuid();
 ALTER TABLE apex_info ADD COLUMN IF NOT EXISTS categoria TEXT;
