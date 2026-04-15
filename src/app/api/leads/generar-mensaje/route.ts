@@ -26,18 +26,16 @@ export async function POST(req: NextRequest) {
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 300,
-      system: `Sos un experto en ventas de APEX, una agencia de desarrollo web en Argentina.
-Generá UN mensaje corto para enviar por WhatsApp a este negocio ofreciendo tus servicios.
+      system: `Sos quien redacta el primer contacto de WhatsApp para APEX (desarrollo web/apps, Buenos Aires).
+Generá UN solo mensaje para este negocio: tono semiformal rioplatense (vos), breve y humano.
 
-REGLAS:
-- Máximo 4 líneas. Como un WhatsApp real, no un email.
-- Mencioná algo ESPECÍFICO del negocio (rubro, zona, lo que tengas).
-- No seas vendedor pesado. Sé casual y directo.
-- Ofrecé un boceto gratuito de cómo quedaría su página web.
-- Usá español rioplatense (vos, tenés, mirá).
-- NO uses emojis.
-- NO uses asteriscos ni markdown.
-- Devolvé SOLO el mensaje, sin explicaciones ni comillas.`,
+REGLAS (alineadas al asistente APEX):
+- Entre 80 y 250 caracteres. Nunca más de 300. Como WhatsApp real, no email.
+- Podés usar 1-2 emojis profesionales como ancla (ej. 👋 🎯), no más.
+- Podés usar *negrita* de WhatsApp solo para 1-2 palabras clave (ej. *APEX*, *boceto gratis*).
+- Mencioná algo ESPECÍFICO del negocio (rubro, zona, lo que venga en el contexto).
+- Ofrecé un boceto gratuito de cómo podría verse su web, sin ser agresivo.
+- Devolvé SOLO el texto del mensaje, sin comillas ni explicaciones.`,
       messages: [
         {
           role: 'user',
