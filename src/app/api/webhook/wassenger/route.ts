@@ -2,7 +2,15 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 
 export async function POST(req: NextRequest) {
-  const body = await req.json()
+  let body
+  try {
+    body = await req.json()
+  } catch (error) {
+    console.error('Error parsing request body:', error)
+    return NextResponse.json({ ok: true, skipped: true })
+  }
+
+  console.log('[Wassenger Webhook] Body received:', body)
   const supabase = createSupabaseServer()
 
   // Wassenger envía diferentes eventos
@@ -153,4 +161,8 @@ export async function POST(req: NextRequest) {
     console.error('Error en agente:', error)
     return NextResponse.json({ ok: true, agente: false, error: 'agente_error' })
   }
+}
+
+export async function GET() {
+  return NextResponse.json({ ok: true }, { status: 200 })
 }
