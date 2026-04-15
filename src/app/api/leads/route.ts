@@ -4,7 +4,9 @@ import { createSupabaseServer } from '@/lib/supabase-server'
 const LEADS_TABLES = ['leads', 'leads_apex_next'] as const
 
 async function ejecutarConTablaLeads<T>(
-  callback: (tabla: (typeof LEADS_TABLES)[number]) => Promise<{ data: T | null; error: { message: string } | null }>
+  callback: (
+    tabla: (typeof LEADS_TABLES)[number]
+  ) => PromiseLike<{ data: T | null; error: { message: string } | null }>
 ) {
   for (const tabla of LEADS_TABLES) {
     const resultado = await callback(tabla)
