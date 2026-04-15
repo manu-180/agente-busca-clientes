@@ -1,9 +1,50 @@
+import Anthropic from '@anthropic-ai/sdk'
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
-import { generarRespuestaAgente, enviarMensajeAgente } from '@/lib/agente'
+import { buildAgentPrompt } from '@/lib/prompts'
+
+const WASSENGER_MESSAGES_URL = 'https://api.wassenger.com/v1/messages'
+
+async function enviarWassengerYGuardar(
+  supabase: ReturnType<typeof createSupabaseServer>,
+  telefono: string,
+  leadId: string,
+  texto: string
+) {
+  const apiKey = process.env.WASSENGER_API_KEY
+  if (!apiKey) {
+    throw new Error('Falta WASSENGER_API_KEY')
+  }
+
+  const res = await fetch(WASSENGER_MESSAGES_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Token: apiKey,
+    },
+    body: JSON.stringify({
+      phone: telefono,
+      message: texto,
+      device: process.env.WASSENGER_DEVICE_ID,
+    }),
+  })
+
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`Wassenger error: ${res.status} - ${err}`)
+  }
+
+  await supabase.from('conversaciones').insert({
+    lead_id: leadId,
+    telefono,
+    mensaje: texto,
+    rol: 'agente',
+    tipo_mensaje: 'texto',
+  })
+}
 
 export async function POST(req: NextRequest) {
-  let body
+  let body: Record<string, unknown>
   try {
     body = await req.json()
   } catch (error) {
@@ -12,50 +53,45 @@ export async function POST(req: NextRequest) {
   }
 
   console.log('[Wassenger Webhook] Body received:', body)
-  const supabase = createSupabaseServer()
 
-  // Wassenger envía diferentes eventos
-  const event = body.event
-  
-  // Solo procesar mensajes recibidos
-  if (event !== 'message:in:new' && event !== 'message:received') {
+  const evento = body.event as string | undefined
+
+  if (evento !== 'message:in:new') {
     return NextResponse.json({ ok: true, skipped: true })
   }
 
-  const data = body.data || body
-  const telefono = data.fromNumber || data.phone || data.from
-  const mensaje = data.body || data.message || data.text || ''
-  const tipoOriginal = data.type || 'chat'
+  const data = (body.data ?? {}) as Record<string, unknown>
+  const rawPhone = data.fromNumber as string | undefined
+  const mensaje = (data.body ?? data.message ?? data.text ?? '') as string
+  const tipoOriginal = (data.type ?? 'chat') as string
+
+  const telefono = rawPhone?.replace(/^\+/, '').replace('@c.us', '') ?? ''
 
   if (!telefono || !mensaje) {
     return NextResponse.json({ ok: true, skipped: true })
   }
 
-  // Limpiar teléfono (sacar @c.us si viene)
-  const telefonoLimpio = telefono.replace('@c.us', '').replace('+', '')
+  const supabase = createSupabaseServer()
 
-  // Determinar tipo de mensaje
   let tipoMensaje: 'texto' | 'audio' | 'imagen' | 'otro' = 'texto'
   if (tipoOriginal === 'ptt' || tipoOriginal === 'audio') tipoMensaje = 'audio'
   else if (tipoOriginal === 'image') tipoMensaje = 'imagen'
   else if (tipoOriginal !== 'chat') tipoMensaje = 'otro'
 
-  // Buscar lead existente por teléfono
   let { data: lead } = await supabase
     .from('leads')
     .select('*')
-    .eq('telefono', telefonoLimpio)
+    .eq('telefono', telefono)
     .single()
 
-  // Si no existe, crear como inbound
   if (!lead) {
     const { data: nuevoLead } = await supabase
       .from('leads')
       .insert({
-        nombre: `Lead ${telefonoLimpio.slice(-4)}`,
+        nombre: `Lead ${telefono.slice(-4)}`,
         rubro: 'Por definir',
         zona: 'Por definir',
-        telefono: telefonoLimpio,
+        telefono,
         descripcion: 'Lead entrante desde WhatsApp',
         mensaje_inicial: '',
         estado: 'respondio',
@@ -71,50 +107,45 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'No se pudo crear/encontrar lead' }, { status: 500 })
   }
 
-  // Guardar mensaje del cliente
   await supabase.from('conversaciones').insert({
     lead_id: lead.id,
-    telefono: telefonoLimpio,
+    telefono,
     mensaje: tipoMensaje !== 'texto' ? `[${tipoMensaje.toUpperCase()}] ${mensaje}` : mensaje,
     rol: 'cliente',
     tipo_mensaje: tipoMensaje,
     leido: false,
   })
 
-  // Actualizar estado del lead si estaba en contactado
   if (lead.estado === 'contactado' || lead.estado === 'pendiente') {
-    await supabase
-      .from('leads')
-      .update({ estado: 'respondio' })
-      .eq('id', lead.id)
+    await supabase.from('leads').update({ estado: 'respondio' }).eq('id', lead.id)
   }
 
-  // Verificar si el agente está activo (global y para este lead)
   const { data: configAgente } = await supabase
     .from('configuracion')
     .select('valor')
     .eq('clave', 'agente_activo')
     .single()
 
-  if (configAgente?.valor !== 'true' || !lead.agente_activo) {
+  const agenteGlobalOn = configAgente?.valor === 'true'
+  const agenteLeadOn = !!lead.agente_activo
+
+  if (!agenteGlobalOn || !agenteLeadOn) {
     return NextResponse.json({ ok: true, agente: false })
   }
 
-  // Si es audio/imagen, el agente no puede procesar
   if (tipoMensaje !== 'texto') {
-    const respAudio = 'Disculpá, no puedo escuchar audios ni ver imágenes por acá. ¿Me lo podés escribir en texto?'
-
+    const respAudio =
+      'Disculpá, no puedo escuchar audios ni ver imágenes por acá. ¿Me lo podés escribir en texto?'
     console.log('[Wassenger] Enviando respuesta por audio/imagen recibido')
-    await enviarMensajeAgente({
-      telefono: telefonoLimpio,
-      mensaje: respAudio,
-      lead_id: lead.id,
-    })
-
+    try {
+      await enviarWassengerYGuardar(supabase, telefono, lead.id, respAudio)
+    } catch (e) {
+      console.error('Wassenger audio fallback:', e)
+      return NextResponse.json({ ok: false, error: 'wassenger_error' }, { status: 500 })
+    }
     return NextResponse.json({ ok: true, agente: true, tipo: 'audio_fallback' })
   }
 
-  // Si el lead dijo que no le interesa, no responder
   const noInteresa = ['no me interesa', 'no gracias', 'no quiero', 'dejá de escribir', 'no molestes']
   if (noInteresa.some(phrase => mensaje.toLowerCase().includes(phrase))) {
     await supabase
@@ -124,27 +155,62 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, agente: false, motivo: 'no_interesado' })
   }
 
-  // Llamar al agente para generar respuesta
+  const anthropicKey = process.env.ANTHROPIC_API_KEY
+  if (!anthropicKey) {
+    console.error('Falta ANTHROPIC_API_KEY')
+    return NextResponse.json({ ok: false, error: 'config' }, { status: 500 })
+  }
+
   try {
     console.log('[Wassenger] Generando respuesta del agente...')
-    const { respuesta } = await generarRespuestaAgente({
-      telefono: telefonoLimpio,
-      mensaje_nuevo: mensaje,
-      lead_id: lead.id,
+
+    const { data: apexInfo } = await supabase
+      .from('apex_info')
+      .select('categoria, titulo, contenido')
+      .eq('activo', true)
+
+    const apexInfoTexto = (apexInfo ?? [])
+      .map(info => `[${info.categoria.toUpperCase()}] ${info.titulo}\n${info.contenido}`)
+      .join('\n\n')
+
+    const { data: historial } = await supabase
+      .from('conversaciones')
+      .select('rol, mensaje, timestamp')
+      .eq('lead_id', lead.id)
+      .order('timestamp', { ascending: true })
+      .limit(20)
+
+    const historialTexto = (historial ?? [])
+      .map(h => `[${h.rol === 'agente' ? 'APEX' : 'CLIENTE'}] ${h.mensaje}`)
+      .join('\n')
+
+    const systemPrompt = buildAgentPrompt(
+      lead.origen as 'outbound' | 'inbound',
+      apexInfoTexto,
+      historialTexto
+    )
+
+    const client = new Anthropic({ apiKey: anthropicKey })
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 300,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: mensaje }],
     })
 
-    if (respuesta) {
-      console.log('[Wassenger] Agente generó respuesta, enviando...')
-      await enviarMensajeAgente({
-        telefono: telefonoLimpio,
-        mensaje: respuesta,
-        lead_id: lead.id,
-      })
+    const respuesta =
+      response.content[0].type === 'text' ? response.content[0].text.trim() : ''
+
+    if (!respuesta) {
+      return NextResponse.json({ ok: true, agente: true, vacio: true })
     }
+
+    console.log('[Wassenger] Agente generó respuesta, enviando...')
+    await enviarWassengerYGuardar(supabase, telefono, lead.id, respuesta)
 
     return NextResponse.json({ ok: true, agente: true })
   } catch (error) {
-    console.error('[Wassenger] Error en agente:', error)
+    console.error('[Wassenger] Error en agente / Wassenger:', error)
     return NextResponse.json({ ok: true, agente: false, error: 'agente_error' })
   }
 }
