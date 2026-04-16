@@ -1,6 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { buildAgentPrompt } from '@/lib/prompts'
+import {
+  esPrimeraRespuestaCliente,
+  pareceMensajeAutomaticoNegocio,
+  RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
+} from '@/lib/outbound-auto-reply'
 import { enviarMensajeWassenger } from '@/lib/wassenger'
 
 export async function generarRespuestaAgente({
@@ -78,7 +83,18 @@ export async function generarRespuestaAgente({
       .order('timestamp', { ascending: true })
       .limit(20)
 
-    const historialTexto = (historial ?? [])
+    const filasHistorial = historial ?? []
+
+    if (
+      lead.origen === 'outbound' &&
+      esPrimeraRespuestaCliente(filasHistorial) &&
+      pareceMensajeAutomaticoNegocio(mensaje_nuevo)
+    ) {
+      console.log('[AGENTE] Outbound: primer mensaje del cliente parece automático del negocio')
+      return { respuesta: RESPUESTA_OUTBOUND_TRAS_AUTOMATICO }
+    }
+
+    const historialTexto = filasHistorial
       .map(h => `[${h.rol === 'agente' ? 'APEX' : 'CLIENTE'}] ${h.mensaje}`)
       .join('\n')
 

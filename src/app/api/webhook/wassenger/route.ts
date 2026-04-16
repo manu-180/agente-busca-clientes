@@ -2,6 +2,11 @@ import Anthropic from '@anthropic-ai/sdk'
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { buildAgentPrompt } from '@/lib/prompts'
+import {
+  esPrimeraRespuestaCliente,
+  pareceMensajeAutomaticoNegocio,
+  RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
+} from '@/lib/outbound-auto-reply'
 
 const OWNER_PHONE = '5491124842720'
 const VENTANA_RESPUESTA_MANUAL_MS = 5 * 60 * 1000
@@ -207,7 +212,20 @@ export async function POST(req: NextRequest) {
       .order('timestamp', { ascending: true })
       .limit(20)
 
-    const historialTexto = (historial ?? [])
+    const filasHistorial = historial ?? []
+
+    const outboundPrimeroYAuto =
+      lead.origen === 'outbound' &&
+      esPrimeraRespuestaCliente(filasHistorial) &&
+      pareceMensajeAutomaticoNegocio(mensaje)
+
+    if (outboundPrimeroYAuto) {
+      console.log('[Wassenger] Outbound: primer mensaje del cliente parece automático del negocio')
+      await enviarWassengerYGuardar(supabase, telefono, lead.id, RESPUESTA_OUTBOUND_TRAS_AUTOMATICO)
+      return NextResponse.json({ ok: true, agente: true, tipo: 'outbound_auto_negocio' })
+    }
+
+    const historialTexto = filasHistorial
       .map(h => `[${h.rol === 'agente' ? 'APEX' : 'CLIENTE'}] ${h.mensaje}`)
       .join('\n')
 
