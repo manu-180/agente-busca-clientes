@@ -3,13 +3,15 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { buildAgentPrompt } from '@/lib/prompts'
 import {
-  esPrimeraRespuestaCliente,
   pareceMensajeAutomaticoNegocio,
   RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
 } from '@/lib/outbound-auto-reply'
 
+export const maxDuration = 30
+
 const OWNER_PHONE = '5491124842720'
 const VENTANA_RESPUESTA_MANUAL_MS = 5 * 60 * 1000
+const DEBOUNCE_MS = 3500
 
 const WASSENGER_MESSAGES_URL = 'https://api.wassenger.com/v1/messages'
 
@@ -120,14 +122,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'No se pudo crear/encontrar lead' }, { status: 500 })
   }
 
-  await supabase.from('conversaciones').insert({
-    lead_id: lead.id,
-    telefono,
-    mensaje: tipoMensaje !== 'texto' ? `[${tipoMensaje.toUpperCase()}] ${mensaje}` : mensaje,
-    rol: 'cliente',
-    tipo_mensaje: tipoMensaje,
-    leido: false,
-  })
+  const { data: insertadoMsg } = await supabase
+    .from('conversaciones')
+    .insert({
+      lead_id: lead.id,
+      telefono,
+      mensaje: tipoMensaje !== 'texto' ? `[${tipoMensaje.toUpperCase()}] ${mensaje}` : mensaje,
+      rol: 'cliente',
+      tipo_mensaje: tipoMensaje,
+      leido: false,
+    })
+    .select('id, timestamp')
+    .single()
+
+  const miMsgTimestamp = (insertadoMsg as { timestamp?: string } | null)?.timestamp
 
   if (lead.estado === 'contactado' || lead.estado === 'pendiente') {
     await supabase.from('leads').update({ estado: 'respondio' }).eq('id', lead.id)
@@ -187,6 +195,52 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, agente: false, motivo: 'no_interesado' })
   }
 
+  // Debounce: esperar para agrupar mensajes consecutivos del mismo contacto
+  await new Promise<void>(resolve => setTimeout(resolve, DEBOUNCE_MS))
+
+  if (miMsgTimestamp) {
+    const { data: msgPosterior } = await supabase
+      .from('conversaciones')
+      .select('id')
+      .eq('lead_id', lead.id)
+      .eq('rol', 'cliente')
+      .gt('timestamp', miMsgTimestamp)
+      .limit(1)
+      .maybeSingle()
+
+    if (msgPosterior) {
+      // Llegó un mensaje más nuevo; ese webhook se encargará de responder
+      return NextResponse.json({ ok: true, skipped: true, motivo: 'debounce' })
+    }
+  }
+
+  // Combinar todos los mensajes de texto sin respuesta en uno solo
+  const { data: ultimoAgenteMensaje } = await supabase
+    .from('conversaciones')
+    .select('timestamp')
+    .eq('lead_id', lead.id)
+    .eq('rol', 'agente')
+    .order('timestamp', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const desdeUltimoAgente = ultimoAgenteMensaje?.timestamp ?? '1970-01-01T00:00:00.000Z'
+
+  const { data: pendientes } = await supabase
+    .from('conversaciones')
+    .select('mensaje')
+    .eq('lead_id', lead.id)
+    .eq('rol', 'cliente')
+    .eq('tipo_mensaje', 'texto')
+    .gt('timestamp', desdeUltimoAgente)
+    .order('timestamp', { ascending: true })
+
+  const mensajeCombinado =
+    (pendientes ?? [])
+      .map(m => m.mensaje)
+      .filter(Boolean)
+      .join('\n') || mensaje
+
   const anthropicKey = process.env.ANTHROPIC_API_KEY
   if (!anthropicKey) {
     console.error('Falta ANTHROPIC_API_KEY')
@@ -214,13 +268,15 @@ export async function POST(req: NextRequest) {
 
     const filasHistorial = historial ?? []
 
-    const outboundPrimeroYAuto =
+    // Detectar respuesta automática del negocio (WhatsApp Business) en outbound temprano
+    const cantidadMensajesAgente = filasHistorial.filter(h => h.rol === 'agente').length
+    const esAutoMensajeNegocio =
       lead.origen === 'outbound' &&
-      esPrimeraRespuestaCliente(filasHistorial) &&
-      pareceMensajeAutomaticoNegocio(mensaje)
+      cantidadMensajesAgente <= 1 &&
+      pareceMensajeAutomaticoNegocio(mensajeCombinado)
 
-    if (outboundPrimeroYAuto) {
-      console.log('[Wassenger] Outbound: primer mensaje del cliente parece automático del negocio')
+    if (esAutoMensajeNegocio) {
+      console.log('[Wassenger] Outbound: mensaje del cliente parece respuesta automática del negocio')
       await enviarWassengerYGuardar(supabase, telefono, lead.id, RESPUESTA_OUTBOUND_TRAS_AUTOMATICO)
       return NextResponse.json({ ok: true, agente: true, tipo: 'outbound_auto_negocio' })
     }
@@ -240,7 +296,7 @@ export async function POST(req: NextRequest) {
       model: 'claude-sonnet-4-20250514',
       max_tokens: 300,
       system: systemPrompt,
-      messages: [{ role: 'user', content: mensaje }],
+      messages: [{ role: 'user', content: mensajeCombinado }],
     })
 
     const respuesta =

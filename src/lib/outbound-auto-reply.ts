@@ -26,11 +26,6 @@ export function pareceMensajeAutomaticoNegocio(texto: string): boolean {
   return n >= 2 || (RE_BIENVENIDO.test(texto) && texto.length > 160 && dolares >= 1)
 }
 
-/** Tras insertar el mensaje entrante: solo un mensaje de cliente en el hilo. */
-export function esPrimeraRespuestaCliente(historial: { rol: string }[]): boolean {
-  return historial.filter(m => m.rol === 'cliente').length === 1
-}
+export const RESPUESTA_OUTBOUND_TRAS_AUTOMATICO = `Gracias por la info. Te escribimos nosotros con una propuesta que quedó en el mensaje de arriba.
 
-export const RESPUESTA_OUTBOUND_TRAS_AUTOMATICO = `Hola! Te escribimos nosotros recién con la propuesta; el *boceto* y el link quedaron en el mensaje de arriba.
-
-Para ver *servicios* y casos de APEX, entrá a *www.theapexweb.com*. Si te interesa, contestame y lo vemos.`
+Cuando quieras charlamos. Para conocer el trabajo de APEX entrá a *www.theapexweb.com*`
