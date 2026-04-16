@@ -98,8 +98,13 @@ export async function POST(req: NextRequest) {
         rubro,
       }
     })
+    const candidatosFiltrados = preliminares.filter(
+      (item) => Boolean(item.telefono) && !item.tiene_web
+    )
 
-    const telefonos = Array.from(new Set(preliminares.map((p) => p.telefono).filter(Boolean)))
+    const telefonos = Array.from(
+      new Set(candidatosFiltrados.map((p) => p.telefono).filter(Boolean))
+    )
     let telefonosExistentes = new Set<string>()
 
     if (telefonos.length > 0) {
@@ -111,7 +116,7 @@ export async function POST(req: NextRequest) {
       telefonosExistentes = new Set(existentes.telefonos)
     }
 
-    const resultados = preliminares.map((item) => ({
+    const resultados = candidatosFiltrados.map((item) => ({
       ...item,
       ya_registrado: item.telefono ? telefonosExistentes.has(item.telefono) : false,
     }))
