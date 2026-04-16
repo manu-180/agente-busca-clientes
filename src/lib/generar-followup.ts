@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { SYSTEM_PROMPT_FOLLOWUP } from '@/lib/prompts'
 import type { Lead } from '@/types'
 
-const MAX_CHARS = 150
+const MAX_CHARS = 300
 
 export async function generarMensajeFollowupClaude(lead: Lead, historialBreve: string): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY
