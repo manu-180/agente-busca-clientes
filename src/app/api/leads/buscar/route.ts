@@ -116,10 +116,12 @@ export async function POST(req: NextRequest) {
       telefonosExistentes = new Set(existentes.telefonos)
     }
 
-    const resultados = candidatosFiltrados.map((item) => ({
-      ...item,
-      ya_registrado: item.telefono ? telefonosExistentes.has(item.telefono) : false,
-    }))
+    const resultados = candidatosFiltrados
+      .map((item) => ({
+        ...item,
+        ya_registrado: item.telefono ? telefonosExistentes.has(item.telefono) : false,
+      }))
+      .filter((item) => !item.ya_registrado)
 
     return NextResponse.json({ resultados })
   } catch {

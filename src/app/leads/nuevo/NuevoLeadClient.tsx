@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react'
 import { Loader2, MapPin, Phone, Sparkles, Save, Send, Star, Globe, ExternalLink } from 'lucide-react'
 import { ResultadoBusquedaLead } from '@/types'
+import { getDefaultPais, PAISES_HISPANOHABLANTES } from '@/lib/locations-ar'
 
 interface LeadCardState extends ResultadoBusquedaLead {
   mensaje_sugerido: string
@@ -33,13 +34,35 @@ function buildDescripcion(lead: ResultadoBusquedaLead) {
 
 export default function NuevoLeadClient() {
   const [rubro, setRubro] = useState('')
-  const [zona, setZona] = useState('Buenos Aires')
+  const [paisCodigo, setPaisCodigo] = useState(getDefaultPais().codigo)
+  const [provinciaNombre, setProvinciaNombre] = useState(getDefaultPais().provincias[0]?.nombre || '')
+  const [localidadNombre, setLocalidadNombre] = useState(
+    getDefaultPais().provincias[0]?.localidades[0]?.nombre || ''
+  )
   const [resultados, setResultados] = useState<LeadCardState[]>([])
   const [buscando, setBuscando] = useState(false)
   const [errorBusqueda, setErrorBusqueda] = useState<string | null>(null)
   const [enviadosHoy, setEnviadosHoy] = useState<number>(0)
 
-  const puedeBuscar = useMemo(() => rubro.trim().length > 0 && !buscando, [rubro, buscando])
+  const paisSeleccionado = useMemo(
+    () => PAISES_HISPANOHABLANTES.find((p) => p.codigo === paisCodigo) || getDefaultPais(),
+    [paisCodigo]
+  )
+
+  const provinciaSeleccionada = useMemo(
+    () => paisSeleccionado.provincias.find((p) => p.nombre === provinciaNombre) || paisSeleccionado.provincias[0],
+    [paisSeleccionado, provinciaNombre]
+  )
+
+  const puedeBuscar = useMemo(
+    () => rubro.trim().length > 0 && localidadNombre.trim().length > 0 && !buscando,
+    [rubro, localidadNombre, buscando]
+  )
+
+  const zona = useMemo(
+    () => `${localidadNombre}, ${provinciaSeleccionada?.nombre}, ${paisSeleccionado.nombre}`,
+    [localidadNombre, provinciaSeleccionada?.nombre, paisSeleccionado.nombre]
+  )
 
   useEffect(() => {
     setEnviadosHoy(getEnviadosHoy())
@@ -213,17 +236,69 @@ export default function NuevoLeadClient() {
               className="w-full bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
             />
           </div>
-          <div>
-            <label className="text-xs text-apex-muted font-mono uppercase tracking-wider block mb-1.5">
-              Zona
-            </label>
-            <input
-              type="text"
-              value={zona}
-              onChange={(event) => setZona(event.target.value)}
-              placeholder="Ej: Palermo, Buenos Aires"
-              className="w-full bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
-            />
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs text-apex-muted font-mono uppercase tracking-wider block mb-1.5">
+                País
+              </label>
+              <select
+                value={paisCodigo}
+                onChange={(event) => {
+                  const nuevoCodigo = event.target.value
+                  setPaisCodigo(nuevoCodigo)
+                  const nuevoPais = PAISES_HISPANOHABLANTES.find((p) => p.codigo === nuevoCodigo)
+                  const primeraProvincia = nuevoPais?.provincias[0]
+                  setProvinciaNombre(primeraProvincia?.nombre || '')
+                  setLocalidadNombre(primeraProvincia?.localidades[0]?.nombre || '')
+                }}
+                className="w-full bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
+              >
+                {PAISES_HISPANOHABLANTES.map((pais) => (
+                  <option key={pais.codigo} value={pais.codigo}>
+                    {pais.nombre}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs text-apex-muted font-mono uppercase tracking-wider block mb-1.5">
+                  Provincia
+                </label>
+                <select
+                  value={provinciaNombre}
+                  onChange={(event) => {
+                    const nuevoNombre = event.target.value
+                    setProvinciaNombre(nuevoNombre)
+                    const prov = paisSeleccionado.provincias.find((p) => p.nombre === nuevoNombre)
+                    setLocalidadNombre(prov?.localidades[0]?.nombre || '')
+                  }}
+                  className="w-full bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
+                >
+                  {paisSeleccionado.provincias.map((provincia) => (
+                    <option key={provincia.nombre} value={provincia.nombre}>
+                      {provincia.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-apex-muted font-mono uppercase tracking-wider block mb-1.5">
+                  Localidad
+                </label>
+                <select
+                  value={localidadNombre}
+                  onChange={(event) => setLocalidadNombre(event.target.value)}
+                  className="w-full bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
+                >
+                  {provinciaSeleccionada?.localidades.map((loc) => (
+                    <option key={loc.nombre} value={loc.nombre}>
+                      {loc.nombre}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -368,16 +443,6 @@ export default function NuevoLeadClient() {
                         />
 
                         <div className="grid grid-cols-1 gap-2">
-                          <button
-                            type="button"
-                            onClick={() => guardarLead(index, false)}
-                            disabled={deshabilitado || lead.guardando}
-                            className="flex items-center justify-center gap-2 bg-apex-border text-white px-3 py-2 rounded-lg text-xs font-medium hover:bg-apex-muted/30 transition-colors disabled:opacity-40"
-                          >
-                            {lead.guardando ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                            Solo guardar
-                          </button>
-
                           <button
                             type="button"
                             onClick={() => guardarLead(index, true)}
