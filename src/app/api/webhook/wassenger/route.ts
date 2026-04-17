@@ -20,6 +20,29 @@ import { extraerContenidoNuevo } from '@/lib/echo-detection'
 
 export const maxDuration = 30
 
+// Tool que termina la conversación por protocolo (stop_reason: "tool_use")
+// evita que el modelo agregue preguntas de seguimiento después del cierre
+const END_CONVERSATION_TOOL: Anthropic.Tool = {
+  name: 'end_conversation',
+  description:
+    'Call this when the customer clearly agreed to move forward, said goodbye, or the conversation is naturally over. Provide only the immediate next step or a brief closing line.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      final_message: {
+        type: 'string',
+        description: 'Final message to send. Maximum 15 words. Just the next step or a simple goodbye.',
+      },
+      reason: {
+        type: 'string',
+        enum: ['deal_closed', 'goodbye', 'no_interest'],
+        description: 'Why the conversation is ending.',
+      },
+    },
+    required: ['final_message', 'reason'],
+  },
+}
+
 const OWNER_PHONE = '5491124842720'
 const VENTANA_RESPUESTA_MANUAL_MS = 5 * 60 * 1000
 // Fix B: debounce subido de 3.5s → 6s para dar más margen a mensajes rápidos consecutivos
@@ -385,6 +408,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, agente: true, tipo: 'handoff_human' })
     }
 
+    if (decision.action === 'confirm_close') {
+      const closeMsg = 'Genial. Te escribe alguien del equipo a la brevedad para coordinar los detalles.'
+      try {
+        await enviarWassengerYGuardar(supabase, telefono, lead.id, closeMsg)
+        await supabase
+          .from('leads')
+          .update({
+            estado: 'interesado',
+            conversacion_cerrada: true,
+            conversacion_cerrada_at: new Date().toISOString(),
+          })
+          .eq('id', lead.id)
+        await registrarEventoConversacional({
+          leadId: lead.id,
+          telefono,
+          eventName: 'confirm_close_sent',
+          decisionAction: decision.action,
+          decisionReason: decision.reason,
+          confidence: decision.confidence,
+        })
+      } catch (e) {
+        console.error('Wassenger confirm_close error:', e)
+        return NextResponse.json({ ok: false, error: 'wassenger_error' }, { status: 500 })
+      }
+      return NextResponse.json({ ok: true, agente: true, tipo: 'confirm_close' })
+    }
+
     const anthropicKey = process.env.ANTHROPIC_API_KEY
     if (!anthropicKey) {
       console.error('Falta ANTHROPIC_API_KEY')
@@ -524,21 +574,75 @@ export async function POST(req: NextRequest) {
     ]
 
     const client = new Anthropic({ apiKey: anthropicKey })
+
+    // En estado de conversación cerrada: parámetros más restrictivos para evitar over-engagement
+    const isClosingState = lead.conversacion_cerrada === true
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 500,
+      max_tokens: isClosingState ? 60 : 500,
+      ...(isClosingState && { temperature: 0.2 }),
       system: systemPrompt,
       messages: mensajesCompletos,
+      tools: [END_CONVERSATION_TOOL],
+      tool_choice: { type: 'auto' },
     })
 
-    const respuestaRaw = response.content[0].type === 'text' ? response.content[0].text : ''
-    let chequeo = auditarCoherenciaRubro(
-      respuestaRaw,
-      String(lead.rubro ?? ''),
-      lead.descripcion as string | null | undefined
-    )
+    // Extraer la respuesta considerando el caso de tool_use (end_conversation)
+    let respuestaRaw: string
+    let dealClosedByTool = false
 
-    if (chequeo.texto && chequeo.intrusa) {
+    if (response.stop_reason === 'tool_use') {
+      const toolUse = response.content.find(
+        (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use'
+      )
+      if (toolUse?.name === 'end_conversation') {
+        const input = toolUse.input as { final_message: string; reason: string }
+        respuestaRaw = input.final_message ?? ''
+        dealClosedByTool = true
+        if (input.reason === 'deal_closed') {
+          await supabase
+            .from('leads')
+            .update({
+              estado: 'cerrado',
+              conversacion_cerrada: true,
+              conversacion_cerrada_at: new Date().toISOString(),
+            })
+            .eq('id', lead.id)
+        } else if (input.reason === 'goodbye') {
+          await supabase
+            .from('leads')
+            .update({
+              conversacion_cerrada: true,
+              conversacion_cerrada_at: new Date().toISOString(),
+            })
+            .eq('id', lead.id)
+        }
+      } else {
+        respuestaRaw = ''
+      }
+    } else {
+      respuestaRaw = response.content[0]?.type === 'text' ? response.content[0].text : ''
+    }
+
+    // Guardrail post-generación: si está en estado de cierre y el modelo igual preguntó algo,
+    // reemplazar con template estático para no reabrir la conversación
+    if (isClosingState && !dealClosedByTool && respuestaRaw.includes('?')) {
+      respuestaRaw = 'Cualquier cosa por acá estamos.'
+    }
+
+    let chequeo: ReturnType<typeof auditarCoherenciaRubro>
+
+    if (dealClosedByTool) {
+      // Mensajes de cierre por tool: confiar en el modelo, solo sanitizar
+      chequeo = { texto: respuestaRaw, verticalLead: 'generico' as const, intrusa: null, ok: true }
+    } else {
+      chequeo = auditarCoherenciaRubro(
+        respuestaRaw,
+        String(lead.rubro ?? ''),
+        lead.descripcion as string | null | undefined
+      )
+
+      if (chequeo.texto && chequeo.intrusa) {
       console.warn(
         '[Wassenger] Mezcla de vertical detectada → regenerando.',
         'lead:',
@@ -618,6 +722,7 @@ export async function POST(req: NextRequest) {
         }
       }
     }
+    } // end else (not dealClosedByTool)
 
     const respuesta = sanitizarRespuestaModelo(chequeo.texto)
 

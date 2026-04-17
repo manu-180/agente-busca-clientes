@@ -172,6 +172,20 @@ export async function generarRespuestaAgente({
       }
     }
 
+    if (decision.action === 'confirm_close') {
+      await supabase
+        .from('leads')
+        .update({
+          estado: 'interesado',
+          conversacion_cerrada: true,
+          conversacion_cerrada_at: new Date().toISOString(),
+        })
+        .eq('id', lead.id)
+      return {
+        respuesta: 'Genial. Te escribe alguien del equipo a la brevedad para coordinar los detalles.',
+      }
+    }
+
     const cantidadMensajesAgente = filasHistorial.filter(h => h.rol === 'agente').length
     if (
       lead.origen === 'outbound' &&

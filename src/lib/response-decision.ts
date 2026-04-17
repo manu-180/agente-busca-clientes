@@ -6,6 +6,7 @@ export type DecisionAction =
   | 'full_reply'
   | 'handoff_human'
   | 'close_conversation'
+  | 'confirm_close'
 
 export type DecisionReason =
   | 'empty'
@@ -17,6 +18,7 @@ export type DecisionReason =
   | 'low_signal_ack'
   | 'simple_greeting'
   | 'default_full_reply'
+  | 'commit_signal'
 
 export interface ConversationDecision {
   action: DecisionAction
@@ -95,6 +97,80 @@ const CLOSING_PHRASES = [
 ]
 
 const GREETINGS = new Set(['hola', 'buenas', 'buen dia', 'buen día', 'hello'])
+
+// Señales de compromiso real — el cliente ya decidió, solo necesita el próximo paso
+const COMMIT_SIGNALS = [
+  'arranquemos',
+  'arrancamos',
+  'lo quiero',
+  'me lo quedo',
+  'lo tomo',
+  'lo tomamos',
+  'cerramos',
+  'trato hecho',
+  'como pago',
+  'cómo pago',
+  'como pagamos',
+  'cómo pagamos',
+  'a que cuenta',
+  'a qué cuenta',
+  'cuando empezamos',
+  'cuándo empezamos',
+  'cuando arrancamos',
+  'cuándo arrancamos',
+  'dale arrancamos',
+  'dale arranquemos',
+  'si arranquemos',
+  'sí arranquemos',
+  'si arrancamos',
+  'sí arrancamos',
+  'hacemos trato',
+  'quiero empezar',
+  'cuando comenzamos',
+  'cuándo comenzamos',
+]
+
+// Palabras clave en el último mensaje del agente que indican una propuesta/oferta
+const PROPOSAL_KEYWORDS = [
+  'boceto',
+  'reunion',
+  'reunión',
+  'presupuesto',
+  'propuesta',
+  'llamada',
+  'coordinamos',
+  'coordinar',
+  'agendar',
+  'mostrarte',
+  'mostrate',
+  'te mando',
+  'te paso',
+  'avanzamos',
+  'sin compromiso',
+  'lo armamos',
+  'te preparo',
+  'arrancamos',
+  'empezamos',
+]
+
+// Detecta si un low_signal_ack ("dale", "ok") es una respuesta a una propuesta del agente
+function isCommitToProposal(
+  normalized: string,
+  history?: Array<{ rol: ConversationRole; mensaje: string }>
+): boolean {
+  if (!LOW_SIGNAL_ACKS.has(normalized)) return false
+  if (!history || history.length === 0) return false
+
+  const lastAgentMsg = [...history].reverse().find(h => h.rol === 'agente')
+  if (!lastAgentMsg) return false
+
+  const lastAgent = lastAgentMsg.mensaje
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+
+  return PROPOSAL_KEYWORDS.some(kw => lastAgent.includes(kw))
+}
 
 function normalize(input: string): string {
   return input
@@ -186,6 +262,17 @@ export function decidirRespuestaConversacional(input: DecisionInput): Conversati
     }
   }
 
+  // Señal de compromiso explícita → confirm_close (respuesta mínima de cierre)
+  if (includesAny(normalized, COMMIT_SIGNALS)) {
+    return {
+      action: 'confirm_close',
+      reason: 'commit_signal',
+      confidence: 0.92,
+      closeConversation: true,
+      eventName: 'confirm_close_commit_signal',
+    }
+  }
+
   if (isQuestionOrActionable(normalized)) {
     return {
       action: 'full_reply',
@@ -202,6 +289,17 @@ export function decidirRespuestaConversacional(input: DecisionInput): Conversati
       confidence: 0.85,
       closeConversation: true,
       eventName: 'conversation_closed_soft',
+    }
+  }
+
+  // Low-signal ack que responde a una propuesta del agente → confirm_close en vez de silencio
+  if (isCommitToProposal(normalized, input.history)) {
+    return {
+      action: 'confirm_close',
+      reason: 'commit_signal',
+      confidence: 0.85,
+      closeConversation: true,
+      eventName: 'confirm_close_proposal_ack',
     }
   }
 
