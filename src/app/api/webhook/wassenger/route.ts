@@ -1,11 +1,15 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
-import { buildAgentPrompt } from '@/lib/prompts'
+import { buildAgentPrompt, buildUserMessageWithLeadContext } from '@/lib/prompts'
 import {
   pareceMensajeAutomaticoNegocio,
   RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
 } from '@/lib/outbound-auto-reply'
+import { decidirRespuestaConversacional } from '@/lib/response-decision'
+import { obtenerConfigConversacional } from '@/lib/conversation-config'
+import { registrarEventoConversacional } from '@/lib/conversation-events'
+import { sanitizarYCoherenciaRubro } from '@/lib/response-guardrails'
 
 export const maxDuration = 30
 
@@ -179,20 +183,19 @@ export async function POST(req: NextRequest) {
     console.log('[Wassenger] Enviando respuesta por audio/imagen recibido')
     try {
       await enviarWassengerYGuardar(supabase, telefono, lead.id, respAudio)
+      await registrarEventoConversacional({
+        leadId: lead.id,
+        telefono,
+        eventName: 'non_text_fallback_sent',
+        decisionAction: 'full_reply',
+        decisionReason: 'default_full_reply',
+        confidence: 1,
+      })
     } catch (e) {
       console.error('Wassenger audio fallback:', e)
       return NextResponse.json({ ok: false, error: 'wassenger_error' }, { status: 500 })
     }
     return NextResponse.json({ ok: true, agente: true, tipo: 'audio_fallback' })
-  }
-
-  const noInteresa = ['no me interesa', 'no gracias', 'no quiero', 'dejá de escribir', 'no molestes']
-  if (noInteresa.some(phrase => mensaje.toLowerCase().includes(phrase))) {
-    await supabase
-      .from('leads')
-      .update({ estado: 'no_interesado', agente_activo: false })
-      .eq('id', lead.id)
-    return NextResponse.json({ ok: true, agente: false, motivo: 'no_interesado' })
   }
 
   // Debounce: esperar para agrupar mensajes consecutivos del mismo contacto
@@ -241,6 +244,97 @@ export async function POST(req: NextRequest) {
       .filter(Boolean)
       .join('\n') || mensaje
 
+  const configConversacional = await obtenerConfigConversacional()
+  const decision = decidirRespuestaConversacional({
+    message: mensajeCombinado,
+    history: (pendientes ?? []).map(item => ({ rol: 'cliente', mensaje: item.mensaje })),
+    config: configConversacional,
+  })
+
+  await registrarEventoConversacional({
+    leadId: lead.id,
+    telefono,
+    eventName: decision.eventName,
+    decisionAction: decision.action,
+    decisionReason: decision.reason,
+    confidence: decision.confidence,
+    metadata: {
+      origen: lead.origen,
+      tipo_mensaje: tipoMensaje,
+    },
+  })
+
+  if (decision.disableAgent) {
+    await supabase
+      .from('leads')
+      .update({
+        estado: 'no_interesado',
+        agente_activo: false,
+        conversacion_cerrada: true,
+        conversacion_cerrada_at: new Date().toISOString(),
+      })
+      .eq('id', lead.id)
+    return NextResponse.json({ ok: true, agente: false, motivo: 'no_interesado' })
+  }
+
+  if (decision.closeConversation) {
+    await supabase
+      .from('leads')
+      .update({
+        conversacion_cerrada: true,
+        conversacion_cerrada_at: new Date().toISOString(),
+      })
+      .eq('id', lead.id)
+  } else if (lead.conversacion_cerrada) {
+    await supabase
+      .from('leads')
+      .update({ conversacion_cerrada: false, conversacion_cerrada_at: null })
+      .eq('id', lead.id)
+  }
+
+  if (decision.action === 'no_reply' || decision.action === 'close_conversation') {
+    return NextResponse.json({ ok: true, skipped: true, motivo: decision.reason })
+  }
+
+  if (decision.action === 'micro_ack') {
+    const microAck = 'Gracias por el mensaje. Si querés, te paso el siguiente paso en 1 línea.'
+    try {
+      await enviarWassengerYGuardar(supabase, telefono, lead.id, microAck)
+      await registrarEventoConversacional({
+        leadId: lead.id,
+        telefono,
+        eventName: 'micro_ack_sent',
+        decisionAction: decision.action,
+        decisionReason: decision.reason,
+        confidence: decision.confidence,
+      })
+    } catch (e) {
+      console.error('Wassenger micro ack error:', e)
+      return NextResponse.json({ ok: false, error: 'wassenger_error' }, { status: 500 })
+    }
+    return NextResponse.json({ ok: true, agente: true, tipo: 'micro_ack' })
+  }
+
+  if (decision.action === 'handoff_human') {
+    const handoffMsg =
+      'Perfecto. Te deriva una persona del equipo de APEX para seguir esto con vos. Si querés, te toman el caso por acá.'
+    try {
+      await enviarWassengerYGuardar(supabase, telefono, lead.id, handoffMsg)
+      await registrarEventoConversacional({
+        leadId: lead.id,
+        telefono,
+        eventName: 'handoff_human_sent',
+        decisionAction: decision.action,
+        decisionReason: decision.reason,
+        confidence: decision.confidence,
+      })
+    } catch (e) {
+      console.error('Wassenger handoff error:', e)
+      return NextResponse.json({ ok: false, error: 'wassenger_error' }, { status: 500 })
+    }
+    return NextResponse.json({ ok: true, agente: true, tipo: 'handoff_human' })
+  }
+
   const anthropicKey = process.env.ANTHROPIC_API_KEY
   if (!anthropicKey) {
     console.error('Falta ANTHROPIC_API_KEY')
@@ -278,6 +372,14 @@ export async function POST(req: NextRequest) {
     if (esAutoMensajeNegocio) {
       console.log('[Wassenger] Outbound: mensaje del cliente parece respuesta automática del negocio')
       await enviarWassengerYGuardar(supabase, telefono, lead.id, RESPUESTA_OUTBOUND_TRAS_AUTOMATICO)
+      await registrarEventoConversacional({
+        leadId: lead.id,
+        telefono,
+        eventName: 'outbound_auto_business_reply',
+        decisionAction: 'full_reply',
+        decisionReason: decision.reason,
+        confidence: decision.confidence,
+      })
       return NextResponse.json({ ok: true, agente: true, tipo: 'outbound_auto_negocio' })
     }
 
@@ -285,29 +387,63 @@ export async function POST(req: NextRequest) {
       .map(h => `[${h.rol === 'agente' ? 'APEX' : 'CLIENTE'}] ${h.mensaje}`)
       .join('\n')
 
+    const contextoLead = {
+      nombre: String(lead.nombre ?? ''),
+      rubro: String(lead.rubro ?? ''),
+      zona: String(lead.zona ?? ''),
+      descripcion: lead.descripcion as string | null | undefined,
+      mensajeInicial: lead.mensaje_inicial as string | null | undefined,
+    }
+
     const systemPrompt = buildAgentPrompt(
       lead.origen as 'outbound' | 'inbound',
       apexInfoTexto,
-      historialTexto
+      historialTexto,
+      contextoLead
     )
+
+    const userContent = buildUserMessageWithLeadContext(mensajeCombinado, contextoLead)
 
     const client = new Anthropic({ apiKey: anthropicKey })
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 300,
       system: systemPrompt,
-      messages: [{ role: 'user', content: mensajeCombinado }],
+      messages: [{ role: 'user', content: userContent }],
     })
 
-    const respuesta =
-      response.content[0].type === 'text' ? response.content[0].text.trim() : ''
+    const respuestaRaw = response.content[0].type === 'text' ? response.content[0].text : ''
+    const respuesta = sanitizarYCoherenciaRubro(
+      respuestaRaw,
+      String(lead.rubro ?? ''),
+      lead.descripcion as string | null | undefined
+    )
 
     if (!respuesta) {
+      await registrarEventoConversacional({
+        leadId: lead.id,
+        telefono,
+        eventName: 'llm_blocked_guardrail',
+        decisionAction: 'full_reply',
+        decisionReason: decision.reason,
+        confidence: decision.confidence,
+      })
       return NextResponse.json({ ok: true, agente: true, vacio: true })
     }
 
     console.log('[Wassenger] Agente generó respuesta, enviando...')
     await enviarWassengerYGuardar(supabase, telefono, lead.id, respuesta)
+    await registrarEventoConversacional({
+      leadId: lead.id,
+      telefono,
+      eventName: 'full_reply_sent',
+      decisionAction: 'full_reply',
+      decisionReason: decision.reason,
+      confidence: decision.confidence,
+      metadata: {
+        length: respuesta.length,
+      },
+    })
 
     return NextResponse.json({ ok: true, agente: true })
   } catch (error) {

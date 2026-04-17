@@ -19,6 +19,7 @@ LONGITUD
 - Cada mensaje: ideal *80-250 caracteres* (contá mentalmente). Nunca pases de *300 caracteres* en un solo envío.
 - La información más importante va en las primeras 1-2 líneas (frontload).
 - Si hace falta más detalle, ofrecé ampliar en un siguiente mensaje o preguntá una cosa concreta (no mandes muros de texto).
+- Si el cliente manda solo una reacción breve (ej: “ok”, “gracias”, “👍”), no generes un mensaje largo ni reinicies la conversación.
 
 EMOJIS
 - No uses emojis en ningún mensaje.
@@ -44,6 +45,12 @@ export const SYSTEM_PROMPT_OUTBOUND = `${SYSTEM_PROMPT_BASE}
 
 CONTEXTO: Lead OUTBOUND. Vos escribiste primero; el cliente puede no conocer a APEX.
 
+COHERENCIA DE RUBRO (OBLIGATORIO)
+- Más abajo recibís CONTEXTO DEL NEGOCIO con nombre, rubro y zona. Ese rubro define la ÚNICA vertical del cliente.
+- PROHIBIDO asumir otro tipo de negocio (ej. gimnasio, restaurant, estética) si no figura en ese contexto. Los ejemplos de INFORMACIÓN DE APEX son genéricos: no copies un rubro al azar desde ahí.
+- Si el cliente responde muy corto ("dale", "ok", "me encantaría", "sí"), tu respuesta sigue en el MISMO rubro: usá vocabulario coherente (ej. moda/boutique → catálogo, talles, envíos, look; NO reservas de clases, socios o membresías salvo que el rubro sea gimnasio).
+- Si el rubro en contexto es vago ("Por definir"), preguntá qué tipo de negocio es antes de proponer features específicas.
+
 ESTRATEGIA:
 - Sé cauteloso. Objetivo: curiosidad y confianza, no cierre forzado.
 - Si responde con "?" o "qué onda", ya suma: explicá brevemente qué hace APEX.
@@ -60,7 +67,7 @@ MANEJO DE OBJECIONES:
 
 MENSAJES AUTOMÁTICOS DEL NEGOCIO (WhatsApp Business)
 - Si el cliente manda un bloque largo con *bienvenida*, *promo*, *lista de precios*, *Instagram* u horarios, y en el historial *vos escribiste primero*, tratá eso como respuesta automática del comercio, no como una persona que se confundió de chat.
-- NUNCA digas que le escribieron a vos "por error", que no tenés vínculo con su gimnasio/negocio, o que ellos te contactaron a vos: *el outbound lo inició APEX*.
+- NUNCA digas que le escribieron a vos "por error", que no tenés vínculo con su negocio, o que ellos te contactaron a vos: *el outbound lo inició APEX*.
 - Respondé en pocas líneas: reconocé el mensaje, reforzá que *dejaste la propuesta arriba* e invitalos a ver *www.theapexweb.com* para servicios. Cerrá con una pregunta corta si quieren avanzar.
 
 TONO: cercano, como un contacto que recomienda; un poco más espacio que inbound.`
@@ -68,6 +75,9 @@ TONO: cercano, como un contacto que recomienda; un poco más espacio que inbound
 export const SYSTEM_PROMPT_INBOUND = `${SYSTEM_PROMPT_BASE}
 
 CONTEXTO: Lead INBOUND. El cliente escribió primero (web o WhatsApp); ya hay interés.
+
+COHERENCIA DE RUBRO
+- Respetá el rubro y nombre en CONTEXTO DEL NEGOCIO. No inventes que el proyecto es de otra industria.
 
 ESTRATEGIA:
 - Más directo: aprovechá que buscó a APEX.
@@ -84,20 +94,61 @@ MANEJO DE OBJECIONES:
 
 TONO: profesional-cercano, resolutivo, experto accesible.`
 
+/** Datos del lead inyectados en el system prompt para anclar rubro y primer contacto */
+export interface AgenteContextoLead {
+  nombre: string
+  rubro: string
+  zona: string
+  descripcion?: string | null
+  mensajeInicial?: string | null
+}
+
+function bloqueContextoNegocio(ctx: AgenteContextoLead): string {
+  const desc = (ctx.descripcion ?? '').trim()
+  const ini = (ctx.mensajeInicial ?? '').trim()
+  const lineas = [
+    `- Nombre del negocio: ${ctx.nombre || '(sin nombre)'}`,
+    `- Rubro / vertical (respetar en todo el mensaje): ${ctx.rubro || '(sin rubro)'}`,
+    `- Zona: ${ctx.zona || '—'}`,
+  ]
+  if (desc) lineas.push(`- Detalle / búsqueda: ${desc}`)
+  if (ini) {
+    lineas.push(
+      `- Primer mensaje que envió APEX a este contacto (mantené coherencia de rubro y oferta):`,
+      `  ${ini.replace(/\n/g, ' ')}`
+    )
+  }
+  return lineas.join('\n')
+}
+
 export function buildAgentPrompt(
   origen: 'outbound' | 'inbound',
   apexInfo: string,
-  historial: string
+  historial: string,
+  contextoLead: AgenteContextoLead
 ): string {
   const basePrompt = origen === 'outbound' ? SYSTEM_PROMPT_OUTBOUND : SYSTEM_PROMPT_INBOUND
 
   return `${basePrompt}
+
+CONTEXTO DEL NEGOCIO (OBLIGATORIO — no contradecir ni cambiar de rubro):
+${bloqueContextoNegocio(contextoLead)}
 
 INFORMACIÓN DE APEX:
 ${apexInfo}
 
 HISTORIAL DE ESTA CONVERSACIÓN:
 ${historial}`
+}
+
+/** Ancla el rubro en el mensaje de usuario (refuerzo; el system prompt ya trae el contexto). */
+export function buildUserMessageWithLeadContext(
+  mensajeCliente: string,
+  contextoLead: AgenteContextoLead
+): string {
+  const rubro = (contextoLead.rubro ?? '').trim() || 'negocio (rubro a confirmar)'
+  const nombre = (contextoLead.nombre ?? '').trim() || 'este cliente'
+  return `[Respondés en la vertical "${rubro}" para ${nombre}. No mezcles con otros rubros.]\n\n${mensajeCliente}`
 }
 
 /** Mensaje de follow-up automático (cron): valor + tono personal rioplatense, sin “recordatorio” */

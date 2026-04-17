@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
     )
   }
 
-  const leads = leadsRaw.filter(l => !ESTADOS_EXCLUIDOS.has(l.estado))
+  const leads = leadsRaw.filter(l => !ESTADOS_EXCLUIDOS.has(l.estado) && !l.conversacion_cerrada)
   const resultados: Array<{ lead_id: string; ok: boolean; detalle?: string }> = []
 
   for (const lead of leads) {
@@ -76,6 +76,7 @@ export async function GET(req: NextRequest) {
         es_followup: m.es_followup,
       })),
       followupsEnviados,
+      conversacionCerrada: !!lead.conversacion_cerrada,
     })
 
     if (!evaluacion.elegible) {

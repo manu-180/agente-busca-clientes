@@ -26,6 +26,8 @@ export interface Lead {
   created_at: string
   updated_at: string
   notas: string | null
+  conversacion_cerrada?: boolean
+  conversacion_cerrada_at?: string | null
 }
 
 export interface Conversacion {

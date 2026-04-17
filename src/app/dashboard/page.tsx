@@ -10,6 +10,11 @@ interface Metricas {
   interesados: number
   cerrados_mes: number
   leads_recientes: any[]
+  conversational_metrics_available: boolean
+  no_reply_emoji_7d: number
+  no_reply_low_signal_7d: number
+  handoff_human_7d: number
+  guardrail_block_7d: number
 }
 
 export default function DashboardPage() {
@@ -32,12 +37,58 @@ export default function DashboardPage() {
     { label: 'Cerrados (mes)', value: metricas?.cerrados_mes ?? 0, icon: Trophy, color: 'text-emerald-400' },
   ]
 
+  const qualityCards = [
+    {
+      label: 'No reply emoji (7d)',
+      value: metricas?.no_reply_emoji_7d ?? 0,
+      color: 'text-orange-300',
+    },
+    {
+      label: 'No reply baja señal (7d)',
+      value: metricas?.no_reply_low_signal_7d ?? 0,
+      color: 'text-amber-300',
+    },
+    {
+      label: 'Handoff humano (7d)',
+      value: metricas?.handoff_human_7d ?? 0,
+      color: 'text-sky-300',
+    },
+    {
+      label: 'Bloqueos guardrail (7d)',
+      value: metricas?.guardrail_block_7d ?? 0,
+      color: 'text-rose-300',
+    },
+  ]
+
   return (
     <div className="space-y-8">
       {/* Header */}
       <div>
         <h1 className="font-syne font-bold text-3xl tracking-tight">Dashboard</h1>
         <p className="text-apex-muted text-sm mt-1 font-mono">Resumen de tu operación</p>
+      </div>
+
+      {/* Calidad conversacional */}
+      <div className="bg-apex-card border border-apex-border rounded-xl p-5 space-y-4">
+        <div>
+          <h2 className="font-syne font-semibold text-lg">Inteligencia conversacional</h2>
+          <p className="text-xs text-apex-muted mt-1">
+            Últimos 7 días. Si ves todo en 0, aplicá la migración de eventos conversacionales.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {qualityCards.map(card => (
+            <div key={card.label} className="bg-apex-black border border-apex-border rounded-lg p-4">
+              <p className={`font-syne font-bold text-2xl ${card.color}`}>{loading ? '—' : card.value}</p>
+              <p className="text-xs text-apex-muted mt-1">{card.label}</p>
+            </div>
+          ))}
+        </div>
+        {metricas && !metricas.conversational_metrics_available ? (
+          <p className="text-xs text-amber-300">
+            No se pudieron leer métricas conversacionales (tabla no disponible o sin permisos).
+          </p>
+        ) : null}
       </div>
 
       {/* Metric Cards */}

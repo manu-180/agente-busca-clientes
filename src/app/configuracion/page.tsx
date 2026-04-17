@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Save, Eye, EyeOff, CheckCircle, Copy } from 'lucide-react'
+import { CheckCircle, Copy } from 'lucide-react'
 
 export default function ConfiguracionPage() {
   const [config, setConfig] = useState<Record<string, string>>({})
@@ -141,6 +141,46 @@ export default function ConfiguracionPage() {
               />
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* Inteligencia del agente */}
+      <div className="bg-apex-card border border-apex-border rounded-xl p-6 space-y-4">
+        <h2 className="font-syne font-semibold text-lg">Inteligencia premium</h2>
+        <p className="text-sm text-apex-muted">
+          Ajustes del motor de criterio conversacional para evitar respuestas innecesarias.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {[
+            {
+              clave: 'decision_engine_enabled',
+              label: 'Motor de decisión',
+            },
+            {
+              clave: 'emoji_no_reply_enabled',
+              label: 'Silencio en emoji-only',
+            },
+            {
+              clave: 'conversation_auto_close_enabled',
+              label: 'Cierre automático suave',
+            },
+          ].map(item => {
+            const activo = (config[item.clave] ?? 'true') === 'true'
+            return (
+              <button
+                key={item.clave}
+                onClick={() => guardar(item.clave, activo ? 'false' : 'true')}
+                className={`rounded-lg border px-4 py-3 text-left transition-colors ${
+                  activo
+                    ? 'border-emerald-400/50 bg-emerald-500/10'
+                    : 'border-apex-border bg-apex-black'
+                }`}
+              >
+                <p className="text-sm font-medium">{item.label}</p>
+                <p className="text-xs text-apex-muted mt-1">{activo ? 'Activo' : 'Desactivado'}</p>
+              </button>
+            )
+          })}
         </div>
       </div>
     </div>

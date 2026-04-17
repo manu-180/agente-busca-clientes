@@ -51,7 +51,9 @@ CREATE TABLE IF NOT EXISTS leads_apex_next (
   agente_activo BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  notas TEXT
+  notas TEXT,
+  conversacion_cerrada BOOLEAN NOT NULL DEFAULT false,
+  conversacion_cerrada_at TIMESTAMPTZ
 );
 
 -- Tabla conversaciones
@@ -65,6 +67,19 @@ CREATE TABLE IF NOT EXISTS conversaciones (
   timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
   leido BOOLEAN NOT NULL DEFAULT false,
   manual BOOLEAN NOT NULL DEFAULT false
+);
+
+-- Tabla de telemetría conversacional
+CREATE TABLE IF NOT EXISTS conversational_events (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  lead_id UUID,
+  telefono TEXT NOT NULL,
+  event_name TEXT NOT NULL,
+  decision_action TEXT,
+  decision_reason TEXT,
+  confidence NUMERIC(5,4),
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Tabla apex_info (conocimiento del agente)
@@ -99,6 +114,8 @@ ALTER TABLE leads_apex_next ADD COLUMN IF NOT EXISTS agente_activo BOOLEAN DEFAU
 ALTER TABLE leads_apex_next ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now();
 ALTER TABLE leads_apex_next ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
 ALTER TABLE leads_apex_next ADD COLUMN IF NOT EXISTS notas TEXT;
+ALTER TABLE leads_apex_next ADD COLUMN IF NOT EXISTS conversacion_cerrada BOOLEAN DEFAULT false;
+ALTER TABLE leads_apex_next ADD COLUMN IF NOT EXISTS conversacion_cerrada_at TIMESTAMPTZ;
 
 ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS id UUID DEFAULT gen_random_uuid();
 ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS lead_id UUID;
@@ -122,6 +139,17 @@ ALTER TABLE configuracion ADD COLUMN IF NOT EXISTS id UUID DEFAULT gen_random_uu
 ALTER TABLE configuracion ADD COLUMN IF NOT EXISTS clave TEXT;
 ALTER TABLE configuracion ADD COLUMN IF NOT EXISTS valor TEXT;
 
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'leads'
+  ) THEN
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS conversacion_cerrada BOOLEAN DEFAULT false;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS conversacion_cerrada_at TIMESTAMPTZ;
+  END IF;
+END $$;
+
 -- Endurecer defaults y restricciones para columnas clave
 ALTER TABLE leads_apex_next ALTER COLUMN estado SET DEFAULT 'pendiente';
 ALTER TABLE leads_apex_next ALTER COLUMN origen SET DEFAULT 'outbound';
@@ -140,6 +168,8 @@ CREATE INDEX IF NOT EXISTS idx_leads_apex_next_origen ON leads_apex_next(origen)
 CREATE INDEX IF NOT EXISTS idx_conversaciones_lead_id ON conversaciones(lead_id);
 CREATE INDEX IF NOT EXISTS idx_conversaciones_telefono ON conversaciones(telefono);
 CREATE INDEX IF NOT EXISTS idx_conversaciones_timestamp ON conversaciones(timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_conversational_events_created_at ON conversational_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversational_events_event_name ON conversational_events(event_name);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_configuracion_clave_unique ON configuracion(clave);
 
 -- Trigger para updated_at automático
@@ -169,6 +199,7 @@ ALTER TABLE leads_apex_next ENABLE ROW LEVEL SECURITY;
 ALTER TABLE conversaciones ENABLE ROW LEVEL SECURITY;
 ALTER TABLE apex_info ENABLE ROW LEVEL SECURITY;
 ALTER TABLE configuracion ENABLE ROW LEVEL SECURITY;
+ALTER TABLE conversational_events ENABLE ROW LEVEL SECURITY;
 
 -- Políticas: acceso total con service_role
 DO $$
@@ -180,6 +211,19 @@ BEGIN
       AND policyname = 'service_role_all_leads_apex_next'
   ) THEN
     CREATE POLICY "service_role_all_leads_apex_next" ON leads_apex_next
+      FOR ALL USING (auth.role() = 'service_role');
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'conversational_events'
+      AND policyname = 'service_role_all_conversational_events'
+  ) THEN
+    CREATE POLICY "service_role_all_conversational_events" ON conversational_events
       FOR ALL USING (auth.role() = 'service_role');
   END IF;
 END $$;
@@ -242,7 +286,10 @@ INSERT INTO configuracion (clave, valor) VALUES
   ('agente_activo', 'true'),
   ('max_mensajes_dia', '20'),
   ('horario_inicio', '09:00'),
-  ('horario_fin', '21:00')
+  ('horario_fin', '21:00'),
+  ('decision_engine_enabled', 'true'),
+  ('emoji_no_reply_enabled', 'true'),
+  ('conversation_auto_close_enabled', 'true')
 ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor;
 
 -- Info pre-cargada de APEX (ejemplos para editar)

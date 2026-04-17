@@ -16,12 +16,18 @@ function parseTs(ts: string): number {
 export function evaluarFollowup({
   mensajes,
   followupsEnviados,
+  conversacionCerrada = false,
   ahora = Date.now(),
 }: {
   mensajes: MensajeCron[]
   followupsEnviados: number
+  conversacionCerrada?: boolean
   ahora?: number
 }): { elegible: boolean; motivo: string; referenciaTs?: number } {
+  if (conversacionCerrada) {
+    return { elegible: false, motivo: 'conversacion_cerrada' }
+  }
+
   if (followupsEnviados >= 2) {
     return { elegible: false, motivo: 'max_followups' }
   }

@@ -1,11 +1,15 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { createSupabaseServer } from '@/lib/supabase-server'
-import { buildAgentPrompt } from '@/lib/prompts'
+import { buildAgentPrompt, buildUserMessageWithLeadContext } from '@/lib/prompts'
 import {
   pareceMensajeAutomaticoNegocio,
   RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
 } from '@/lib/outbound-auto-reply'
 import { enviarMensajeWassenger } from '@/lib/wassenger'
+import { obtenerConfigConversacional } from '@/lib/conversation-config'
+import { decidirRespuestaConversacional } from '@/lib/response-decision'
+import { registrarEventoConversacional } from '@/lib/conversation-events'
+import { sanitizarYCoherenciaRubro } from '@/lib/response-guardrails'
 
 export async function generarRespuestaAgente({
   telefono,
@@ -84,6 +88,69 @@ export async function generarRespuestaAgente({
 
     const filasHistorial = historial ?? []
 
+    const configConversacional = await obtenerConfigConversacional()
+    const decision = decidirRespuestaConversacional({
+      message: mensaje_nuevo,
+      history: filasHistorial.map(h => ({
+        rol: h.rol as 'agente' | 'cliente',
+        mensaje: h.mensaje,
+      })),
+      config: configConversacional,
+    })
+
+    await registrarEventoConversacional({
+      leadId: lead.id,
+      telefono: lead.telefono,
+      eventName: decision.eventName,
+      decisionAction: decision.action,
+      decisionReason: decision.reason,
+      confidence: decision.confidence,
+      metadata: { source: 'agente.ts' },
+    })
+
+    if (decision.disableAgent) {
+      await supabase
+        .from('leads')
+        .update({
+          estado: 'no_interesado',
+          agente_activo: false,
+          conversacion_cerrada: true,
+          conversacion_cerrada_at: new Date().toISOString(),
+        })
+        .eq('id', lead.id)
+      return { respuesta: null }
+    }
+
+    if (decision.closeConversation) {
+      await supabase
+        .from('leads')
+        .update({
+          conversacion_cerrada: true,
+          conversacion_cerrada_at: new Date().toISOString(),
+        })
+        .eq('id', lead.id)
+    } else if (lead.conversacion_cerrada) {
+      await supabase
+        .from('leads')
+        .update({ conversacion_cerrada: false, conversacion_cerrada_at: null })
+        .eq('id', lead.id)
+    }
+
+    if (decision.action === 'no_reply' || decision.action === 'close_conversation') {
+      return { respuesta: null }
+    }
+
+    if (decision.action === 'micro_ack') {
+      return { respuesta: 'Gracias por el mensaje. Si querés, te paso el siguiente paso en 1 línea.' }
+    }
+
+    if (decision.action === 'handoff_human') {
+      return {
+        respuesta:
+          'Perfecto. Te deriva una persona del equipo de APEX para seguir esto con vos. Si querés, te toman el caso por acá.',
+      }
+    }
+
     const cantidadMensajesAgente = filasHistorial.filter(h => h.rol === 'agente').length
     if (
       lead.origen === 'outbound' &&
@@ -91,6 +158,15 @@ export async function generarRespuestaAgente({
       pareceMensajeAutomaticoNegocio(mensaje_nuevo)
     ) {
       console.log('[AGENTE] Outbound: mensaje del cliente parece respuesta automática del negocio')
+      await registrarEventoConversacional({
+        leadId: lead.id,
+        telefono: lead.telefono,
+        eventName: 'outbound_auto_business_reply',
+        decisionAction: 'full_reply',
+        decisionReason: decision.reason,
+        confidence: decision.confidence,
+        metadata: { source: 'agente.ts' },
+      })
       return { respuesta: RESPUESTA_OUTBOUND_TRAS_AUTOMATICO }
     }
 
@@ -98,13 +174,24 @@ export async function generarRespuestaAgente({
       .map(h => `[${h.rol === 'agente' ? 'APEX' : 'CLIENTE'}] ${h.mensaje}`)
       .join('\n')
 
+    const contextoLead = {
+      nombre: String(lead.nombre ?? ''),
+      rubro: String(lead.rubro ?? ''),
+      zona: String(lead.zona ?? ''),
+      descripcion: lead.descripcion as string | null | undefined,
+      mensajeInicial: lead.mensaje_inicial as string | null | undefined,
+    }
+
     // 6. Construir prompt según origen
     console.log('[AGENTE] Construyendo prompt del sistema...')
     const systemPrompt = buildAgentPrompt(
       lead.origen as 'outbound' | 'inbound',
       apexInfoTexto,
-      historialTexto
+      historialTexto,
+      contextoLead
     )
+
+    const userContent = buildUserMessageWithLeadContext(mensaje_nuevo, contextoLead)
 
     // 7. Llamar a Claude
     console.log('[AGENTE] Llamando a Claude Sonnet...')
@@ -113,13 +200,40 @@ export async function generarRespuestaAgente({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 300,
       system: systemPrompt,
-      messages: [{ role: 'user', content: mensaje_nuevo }],
+      messages: [{ role: 'user', content: userContent }],
     })
 
-    const respuesta = response.content[0].type === 'text' ? response.content[0].text : ''
+    const respuestaRaw = response.content[0].type === 'text' ? response.content[0].text : ''
+    const respuesta = sanitizarYCoherenciaRubro(
+      respuestaRaw,
+      String(lead.rubro ?? ''),
+      lead.descripcion as string | null | undefined
+    )
+    if (!respuesta) {
+      await registrarEventoConversacional({
+        leadId: lead.id,
+        telefono: lead.telefono,
+        eventName: 'llm_blocked_guardrail',
+        decisionAction: 'full_reply',
+        decisionReason: decision.reason,
+        confidence: decision.confidence,
+        metadata: { source: 'agente.ts' },
+      })
+      return { respuesta: null }
+    }
     console.log('[AGENTE] Respuesta generada exitosamente')
 
-    return { respuesta: respuesta.trim() }
+    await registrarEventoConversacional({
+      leadId: lead.id,
+      telefono: lead.telefono,
+      eventName: 'full_reply_generated',
+      decisionAction: 'full_reply',
+      decisionReason: decision.reason,
+      confidence: decision.confidence,
+      metadata: { source: 'agente.ts', length: respuesta.length },
+    })
+
+    return { respuesta }
   } catch (error: any) {
     console.error('[AGENTE] Error generando respuesta:', error.message)
     return { respuesta: null }

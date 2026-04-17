@@ -43,11 +43,12 @@ export async function POST(req: NextRequest) {
 Generá UN solo mensaje para este negocio: tono semiformal rioplatense (vos), breve y humano.
 
 REGLAS (alineadas al asistente APEX):
-- Entre 80 y 250 caracteres. Nunca más de 300. Como WhatsApp real, no email.
+- Entre 80 y 350 caracteres. Nunca más de 420. Como WhatsApp real, no email.
 - No uses emojis en este primer mensaje.
 - Podés usar *negrita* de WhatsApp solo para 1-2 palabras clave (ej. *APEX*, *boceto gratis*).
 - Mencioná algo ESPECÍFICO del negocio (rubro, zona, lo que venga en el contexto).
 - Si el contexto indica que hay una demo disponible para el rubro, incluí UNA frase corta mencionando esa demo y su URL, de forma natural.
+- Siempre agregá una frase breve invitando a visitar www.theapexweb.com para ver más trabajos o conocer mejor a APEX (no reemplaza la demo; va como complemento).
 - Ofrecé un boceto gratuito de cómo podría verse su web, sin ser agresivo.
 - Devolvé SOLO el texto del mensaje, sin comillas ni explicaciones.`,
       messages: [

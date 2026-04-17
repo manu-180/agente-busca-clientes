@@ -37,6 +37,20 @@ export async function POST(req: NextRequest) {
   )
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  const leadRow = data as { id: string } | null
+  const mensajeInicial = typeof body.mensaje_inicial === 'string' ? body.mensaje_inicial.trim() : ''
+  if (leadRow?.id && mensajeInicial && body.telefono) {
+    await supabase.from('conversaciones').insert({
+      lead_id: leadRow.id,
+      telefono: String(body.telefono),
+      mensaje: mensajeInicial,
+      rol: 'agente',
+      tipo_mensaje: 'texto',
+      manual: false,
+    })
+  }
+
   return NextResponse.json({ lead: data })
 }
 
