@@ -9,7 +9,13 @@ import {
 import { decidirRespuestaConversacional } from '@/lib/response-decision'
 import { obtenerConfigConversacional } from '@/lib/conversation-config'
 import { registrarEventoConversacional } from '@/lib/conversation-events'
-import { sanitizarYCoherenciaRubro } from '@/lib/response-guardrails'
+import {
+  auditarCoherenciaRubro,
+  fallbackSeguroPorVertical,
+  instruccionRegeneracion,
+  sanitizarRespuestaModelo,
+} from '@/lib/response-guardrails'
+import { detectarVertical, sanitizarApexInfoPorVertical } from '@/lib/verticales'
 
 export const maxDuration = 30
 
@@ -349,9 +355,24 @@ export async function POST(req: NextRequest) {
       .select('categoria, titulo, contenido')
       .eq('activo', true)
 
-    const apexInfoTexto = (apexInfo ?? [])
+    const apexInfoTextoRaw = (apexInfo ?? [])
       .map(info => `[${info.categoria.toUpperCase()}] ${info.titulo}\n${info.contenido}`)
       .join('\n\n')
+
+    const verticalLead = detectarVertical(
+      String(lead.rubro ?? ''),
+      lead.descripcion as string | null | undefined
+    )
+    const apexInfoSanitizado = sanitizarApexInfoPorVertical(apexInfoTextoRaw, verticalLead)
+    const apexInfoTexto = apexInfoSanitizado.texto
+    if (apexInfoSanitizado.removidas.length) {
+      console.log(
+        '[Wassenger] apex_info filtrado por vertical',
+        verticalLead,
+        '→ removidas:',
+        apexInfoSanitizado.removidas
+      )
+    }
 
     const { data: historial } = await supabase
       .from('conversaciones')
@@ -413,11 +434,94 @@ export async function POST(req: NextRequest) {
     })
 
     const respuestaRaw = response.content[0].type === 'text' ? response.content[0].text : ''
-    const respuesta = sanitizarYCoherenciaRubro(
+    let chequeo = auditarCoherenciaRubro(
       respuestaRaw,
       String(lead.rubro ?? ''),
       lead.descripcion as string | null | undefined
     )
+
+    if (chequeo.texto && chequeo.intrusa) {
+      console.warn(
+        '[Wassenger] Mezcla de vertical detectada → regenerando.',
+        'lead:',
+        chequeo.verticalLead,
+        'intrusa:',
+        chequeo.intrusa
+      )
+      await registrarEventoConversacional({
+        leadId: lead.id,
+        telefono,
+        eventName: 'rubro_mismatch_detected',
+        decisionAction: 'full_reply',
+        decisionReason: decision.reason,
+        confidence: decision.confidence,
+        metadata: {
+          source: 'webhook',
+          verticalLead: chequeo.verticalLead,
+          intrusa: chequeo.intrusa,
+        },
+      })
+
+      const regenInstruccion = instruccionRegeneracion({
+        verticalLead: chequeo.verticalLead,
+        intrusa: chequeo.intrusa,
+        textoAnterior: chequeo.texto,
+        rubroLiteral: String(lead.rubro ?? ''),
+        nombre: String(lead.nombre ?? ''),
+      })
+
+      try {
+        const retry = await client.messages.create({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 300,
+          system: systemPrompt,
+          messages: [
+            { role: 'user', content: userContent },
+            { role: 'assistant', content: chequeo.texto },
+            { role: 'user', content: regenInstruccion },
+          ],
+        })
+        const retryRaw = retry.content[0].type === 'text' ? retry.content[0].text : ''
+        const retryChequeo = auditarCoherenciaRubro(
+          retryRaw,
+          String(lead.rubro ?? ''),
+          lead.descripcion as string | null | undefined
+        )
+        if (retryChequeo.texto && retryChequeo.ok) {
+          chequeo = retryChequeo
+        } else {
+          await registrarEventoConversacional({
+            leadId: lead.id,
+            telefono,
+            eventName: 'rubro_regen_failed_fallback',
+            decisionAction: 'full_reply',
+            decisionReason: decision.reason,
+            confidence: decision.confidence,
+            metadata: {
+              source: 'webhook',
+              verticalLead: chequeo.verticalLead,
+              intrusaOriginal: retryChequeo.intrusa,
+            },
+          })
+          chequeo = {
+            texto: fallbackSeguroPorVertical(chequeo.verticalLead, String(lead.nombre ?? '')),
+            verticalLead: chequeo.verticalLead,
+            intrusa: null,
+            ok: true,
+          }
+        }
+      } catch (e) {
+        console.error('[Wassenger] Error regenerando:', e)
+        chequeo = {
+          texto: fallbackSeguroPorVertical(chequeo.verticalLead, String(lead.nombre ?? '')),
+          verticalLead: chequeo.verticalLead,
+          intrusa: null,
+          ok: true,
+        }
+      }
+    }
+
+    const respuesta = sanitizarRespuestaModelo(chequeo.texto)
 
     if (!respuesta) {
       await registrarEventoConversacional({

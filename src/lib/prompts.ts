@@ -1,6 +1,12 @@
 // Prompts del agente de ventas APEX — canal WhatsApp Business (directivas de tono y formato)
 // Dos personalidades según el origen del lead
 
+import {
+  bloqueLexicoVertical,
+  detectarVertical,
+  labelVertical,
+} from '@/lib/verticales'
+
 export const SYSTEM_PROMPT_BASE = `Sos parte del equipo de APEX, agencia de desarrollo web y apps en Buenos Aires. Presentate como alguien del equipo de APEX, sin mencionar que sos un sistema automatizado ni usar palabras como "asistente virtual" o "bot".
 
 IDIOMA Y TONO
@@ -106,9 +112,11 @@ export interface AgenteContextoLead {
 function bloqueContextoNegocio(ctx: AgenteContextoLead): string {
   const desc = (ctx.descripcion ?? '').trim()
   const ini = (ctx.mensajeInicial ?? '').trim()
+  const vertical = detectarVertical(ctx.rubro ?? '', ctx.descripcion)
   const lineas = [
     `- Nombre del negocio: ${ctx.nombre || '(sin nombre)'}`,
-    `- Rubro / vertical (respetar en todo el mensaje): ${ctx.rubro || '(sin rubro)'}`,
+    `- Rubro literal (respetar en todo el mensaje): ${ctx.rubro || '(sin rubro)'}`,
+    `- Vertical detectada: ${labelVertical(vertical)}`,
     `- Zona: ${ctx.zona || '—'}`,
   ]
   if (desc) lineas.push(`- Detalle / búsqueda: ${desc}`)
@@ -128,11 +136,15 @@ export function buildAgentPrompt(
   contextoLead: AgenteContextoLead
 ): string {
   const basePrompt = origen === 'outbound' ? SYSTEM_PROMPT_OUTBOUND : SYSTEM_PROMPT_INBOUND
+  const vertical = detectarVertical(contextoLead.rubro ?? '', contextoLead.descripcion)
+  const lexico = bloqueLexicoVertical(vertical)
 
   return `${basePrompt}
 
 CONTEXTO DEL NEGOCIO (OBLIGATORIO — no contradecir ni cambiar de rubro):
 ${bloqueContextoNegocio(contextoLead)}
+
+${lexico}
 
 INFORMACIÓN DE APEX:
 ${apexInfo}
@@ -148,7 +160,8 @@ export function buildUserMessageWithLeadContext(
 ): string {
   const rubro = (contextoLead.rubro ?? '').trim() || 'negocio (rubro a confirmar)'
   const nombre = (contextoLead.nombre ?? '').trim() || 'este cliente'
-  return `[Respondés en la vertical "${rubro}" para ${nombre}. No mezcles con otros rubros.]\n\n${mensajeCliente}`
+  const vertical = detectarVertical(contextoLead.rubro ?? '', contextoLead.descripcion)
+  return `[Respondés para ${nombre} — rubro "${rubro}" (vertical: ${labelVertical(vertical)}). No mezcles con otros rubros bajo ninguna circunstancia.]\n\n${mensajeCliente}`
 }
 
 /** Mensaje de follow-up automático (cron): valor + tono personal rioplatense, sin “recordatorio” */
