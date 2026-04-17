@@ -16,12 +16,16 @@ import {
   sanitizarRespuestaModelo,
 } from '@/lib/response-guardrails'
 import { detectarVertical, sanitizarApexInfoPorVertical } from '@/lib/verticales'
+import { extraerContenidoNuevo } from '@/lib/echo-detection'
 
 export const maxDuration = 30
 
 const OWNER_PHONE = '5491124842720'
 const VENTANA_RESPUESTA_MANUAL_MS = 5 * 60 * 1000
-const DEBOUNCE_MS = 3500
+// Fix B: debounce subido de 3.5s → 6s para dar más margen a mensajes rápidos consecutivos
+const DEBOUNCE_MS = 6000
+// Fix A: el lock expira en 25s (margen sobre maxDuration=30s)
+const LOCK_TTL_MS = 25_000
 
 const WASSENGER_MESSAGES_URL = 'https://api.wassenger.com/v1/messages'
 
@@ -62,6 +66,37 @@ async function enviarWassengerYGuardar(
     tipo_mensaje: 'texto',
     manual: false,
   })
+}
+
+/**
+ * Fix A — Adquirir lock por conversación.
+ * Usa un UPDATE condicional en Supabase (atómico a nivel de fila en PostgreSQL).
+ * Si dos webhooks del mismo lead corren en paralelo, solo uno adquiere el lock.
+ * Requiere columna `procesando_hasta TIMESTAMPTZ` en tabla `leads`.
+ */
+async function adquirirLock(
+  supabase: ReturnType<typeof createSupabaseServer>,
+  leadId: string
+): Promise<boolean> {
+  const ahora = new Date().toISOString()
+  const expiracion = new Date(Date.now() + LOCK_TTL_MS).toISOString()
+
+  const { data } = await supabase
+    .from('leads')
+    .update({ procesando_hasta: expiracion })
+    .eq('id', leadId)
+    .or(`procesando_hasta.is.null,procesando_hasta.lt.${ahora}`)
+    .select('id')
+    .maybeSingle()
+
+  return data !== null
+}
+
+async function liberarLock(
+  supabase: ReturnType<typeof createSupabaseServer>,
+  leadId: string
+): Promise<void> {
+  await supabase.from('leads').update({ procesando_hasta: null }).eq('id', leadId)
 }
 
 export async function POST(req: NextRequest) {
@@ -204,9 +239,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, agente: true, tipo: 'audio_fallback' })
   }
 
-  // Debounce: esperar para agrupar mensajes consecutivos del mismo contacto
+  // Fix B: debounce de 6s para agrupar mensajes consecutivos del mismo usuario
   await new Promise<void>(resolve => setTimeout(resolve, DEBOUNCE_MS))
 
+  // Si llegó un mensaje más nuevo durante el debounce, ese webhook se encarga
   if (miMsgTimestamp) {
     const { data: msgPosterior } = await supabase
       .from('conversaciones')
@@ -218,136 +254,143 @@ export async function POST(req: NextRequest) {
       .maybeSingle()
 
     if (msgPosterior) {
-      // Llegó un mensaje más nuevo; ese webhook se encargará de responder
       return NextResponse.json({ ok: true, skipped: true, motivo: 'debounce' })
     }
   }
 
-  // Combinar todos los mensajes de texto sin respuesta en uno solo
-  const { data: ultimoAgenteMensaje } = await supabase
-    .from('conversaciones')
-    .select('timestamp')
-    .eq('lead_id', lead.id)
-    .eq('rol', 'agente')
-    .order('timestamp', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  const desdeUltimoAgente = ultimoAgenteMensaje?.timestamp ?? '1970-01-01T00:00:00.000Z'
-
-  const { data: pendientes } = await supabase
-    .from('conversaciones')
-    .select('mensaje')
-    .eq('lead_id', lead.id)
-    .eq('rol', 'cliente')
-    .eq('tipo_mensaje', 'texto')
-    .gt('timestamp', desdeUltimoAgente)
-    .order('timestamp', { ascending: true })
-
-  const mensajeCombinado =
-    (pendientes ?? [])
-      .map(m => m.mensaje)
-      .filter(Boolean)
-      .join('\n') || mensaje
-
-  const configConversacional = await obtenerConfigConversacional()
-  const decision = decidirRespuestaConversacional({
-    message: mensajeCombinado,
-    history: (pendientes ?? []).map(item => ({ rol: 'cliente', mensaje: item.mensaje })),
-    config: configConversacional,
-  })
-
-  await registrarEventoConversacional({
-    leadId: lead.id,
-    telefono,
-    eventName: decision.eventName,
-    decisionAction: decision.action,
-    decisionReason: decision.reason,
-    confidence: decision.confidence,
-    metadata: {
-      origen: lead.origen,
-      tipo_mensaje: tipoMensaje,
-    },
-  })
-
-  if (decision.disableAgent) {
-    await supabase
-      .from('leads')
-      .update({
-        estado: 'no_interesado',
-        agente_activo: false,
-        conversacion_cerrada: true,
-        conversacion_cerrada_at: new Date().toISOString(),
-      })
-      .eq('id', lead.id)
-    return NextResponse.json({ ok: true, agente: false, motivo: 'no_interesado' })
-  }
-
-  if (decision.closeConversation) {
-    await supabase
-      .from('leads')
-      .update({
-        conversacion_cerrada: true,
-        conversacion_cerrada_at: new Date().toISOString(),
-      })
-      .eq('id', lead.id)
-  } else if (lead.conversacion_cerrada) {
-    await supabase
-      .from('leads')
-      .update({ conversacion_cerrada: false, conversacion_cerrada_at: null })
-      .eq('id', lead.id)
-  }
-
-  if (decision.action === 'no_reply' || decision.action === 'close_conversation') {
-    return NextResponse.json({ ok: true, skipped: true, motivo: decision.reason })
-  }
-
-  if (decision.action === 'micro_ack') {
-    const microAck = 'Gracias por el mensaje. Si querés, te paso el siguiente paso en 1 línea.'
-    try {
-      await enviarWassengerYGuardar(supabase, telefono, lead.id, microAck)
-      await registrarEventoConversacional({
-        leadId: lead.id,
-        telefono,
-        eventName: 'micro_ack_sent',
-        decisionAction: decision.action,
-        decisionReason: decision.reason,
-        confidence: decision.confidence,
-      })
-    } catch (e) {
-      console.error('Wassenger micro ack error:', e)
-      return NextResponse.json({ ok: false, error: 'wassenger_error' }, { status: 500 })
-    }
-    return NextResponse.json({ ok: true, agente: true, tipo: 'micro_ack' })
-  }
-
-  if (decision.action === 'handoff_human') {
-    const handoffMsg =
-      'Perfecto. Te deriva una persona del equipo de APEX para seguir esto con vos. Si querés, te toman el caso por acá.'
-    try {
-      await enviarWassengerYGuardar(supabase, telefono, lead.id, handoffMsg)
-      await registrarEventoConversacional({
-        leadId: lead.id,
-        telefono,
-        eventName: 'handoff_human_sent',
-        decisionAction: decision.action,
-        decisionReason: decision.reason,
-        confidence: decision.confidence,
-      })
-    } catch (e) {
-      console.error('Wassenger handoff error:', e)
-      return NextResponse.json({ ok: false, error: 'wassenger_error' }, { status: 500 })
-    }
-    return NextResponse.json({ ok: true, agente: true, tipo: 'handoff_human' })
-  }
-
-  const anthropicKey = process.env.ANTHROPIC_API_KEY
-  if (!anthropicKey) {
-    console.error('Falta ANTHROPIC_API_KEY')
-    return NextResponse.json({ ok: false, error: 'config' }, { status: 500 })
+  // Fix A: adquirir lock antes de llamar a Claude
+  // Evita que retries de Wassenger o webhooks paralelos generen respuestas duplicadas
+  const lockAdquirido = await adquirirLock(supabase, lead.id)
+  if (!lockAdquirido) {
+    console.log('[Wassenger] Lock no disponible para lead', lead.id, '— skipping')
+    return NextResponse.json({ ok: true, skipped: true, motivo: 'procesando_lock' })
   }
 
   try {
+    // Combinar todos los mensajes de texto sin respuesta en uno solo
+    const { data: ultimoAgenteMensaje } = await supabase
+      .from('conversaciones')
+      .select('timestamp')
+      .eq('lead_id', lead.id)
+      .eq('rol', 'agente')
+      .order('timestamp', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    const desdeUltimoAgente = ultimoAgenteMensaje?.timestamp ?? '1970-01-01T00:00:00.000Z'
+
+    const { data: pendientes } = await supabase
+      .from('conversaciones')
+      .select('mensaje')
+      .eq('lead_id', lead.id)
+      .eq('rol', 'cliente')
+      .eq('tipo_mensaje', 'texto')
+      .gt('timestamp', desdeUltimoAgente)
+      .order('timestamp', { ascending: true })
+
+    const mensajeCombinado =
+      (pendientes ?? [])
+        .map(m => m.mensaje)
+        .filter(Boolean)
+        .join('\n') || mensaje
+
+    const configConversacional = await obtenerConfigConversacional()
+    const decision = decidirRespuestaConversacional({
+      message: mensajeCombinado,
+      history: (pendientes ?? []).map(item => ({ rol: 'cliente', mensaje: item.mensaje })),
+      config: configConversacional,
+    })
+
+    await registrarEventoConversacional({
+      leadId: lead.id,
+      telefono,
+      eventName: decision.eventName,
+      decisionAction: decision.action,
+      decisionReason: decision.reason,
+      confidence: decision.confidence,
+      metadata: {
+        origen: lead.origen,
+        tipo_mensaje: tipoMensaje,
+      },
+    })
+
+    if (decision.disableAgent) {
+      await supabase
+        .from('leads')
+        .update({
+          estado: 'no_interesado',
+          agente_activo: false,
+          conversacion_cerrada: true,
+          conversacion_cerrada_at: new Date().toISOString(),
+        })
+        .eq('id', lead.id)
+      return NextResponse.json({ ok: true, agente: false, motivo: 'no_interesado' })
+    }
+
+    if (decision.closeConversation) {
+      await supabase
+        .from('leads')
+        .update({
+          conversacion_cerrada: true,
+          conversacion_cerrada_at: new Date().toISOString(),
+        })
+        .eq('id', lead.id)
+    } else if (lead.conversacion_cerrada) {
+      await supabase
+        .from('leads')
+        .update({ conversacion_cerrada: false, conversacion_cerrada_at: null })
+        .eq('id', lead.id)
+    }
+
+    if (decision.action === 'no_reply' || decision.action === 'close_conversation') {
+      return NextResponse.json({ ok: true, skipped: true, motivo: decision.reason })
+    }
+
+    if (decision.action === 'micro_ack') {
+      const microAck = 'Gracias por el mensaje. Si querés, te paso el siguiente paso en 1 línea.'
+      try {
+        await enviarWassengerYGuardar(supabase, telefono, lead.id, microAck)
+        await registrarEventoConversacional({
+          leadId: lead.id,
+          telefono,
+          eventName: 'micro_ack_sent',
+          decisionAction: decision.action,
+          decisionReason: decision.reason,
+          confidence: decision.confidence,
+        })
+      } catch (e) {
+        console.error('Wassenger micro ack error:', e)
+        return NextResponse.json({ ok: false, error: 'wassenger_error' }, { status: 500 })
+      }
+      return NextResponse.json({ ok: true, agente: true, tipo: 'micro_ack' })
+    }
+
+    if (decision.action === 'handoff_human') {
+      const handoffMsg =
+        'Perfecto. Te deriva una persona del equipo de APEX para seguir esto con vos. Si querés, te toman el caso por acá.'
+      try {
+        await enviarWassengerYGuardar(supabase, telefono, lead.id, handoffMsg)
+        await registrarEventoConversacional({
+          leadId: lead.id,
+          telefono,
+          eventName: 'handoff_human_sent',
+          decisionAction: decision.action,
+          decisionReason: decision.reason,
+          confidence: decision.confidence,
+        })
+      } catch (e) {
+        console.error('Wassenger handoff error:', e)
+        return NextResponse.json({ ok: false, error: 'wassenger_error' }, { status: 500 })
+      }
+      return NextResponse.json({ ok: true, agente: true, tipo: 'handoff_human' })
+    }
+
+    const anthropicKey = process.env.ANTHROPIC_API_KEY
+    if (!anthropicKey) {
+      console.error('Falta ANTHROPIC_API_KEY')
+      return NextResponse.json({ ok: false, error: 'config' }, { status: 500 })
+    }
+
     console.log('[Wassenger] Generando respuesta del agente...')
 
     const { data: apexInfo } = await supabase
@@ -374,12 +417,13 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // Fix F: cargar historial para construir el array messages[] de la API de Claude
     const { data: historial } = await supabase
       .from('conversaciones')
       .select('rol, mensaje, timestamp')
       .eq('lead_id', lead.id)
       .order('timestamp', { ascending: true })
-      .limit(20)
+      .limit(40)
 
     const filasHistorial = historial ?? []
 
@@ -404,9 +448,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, agente: true, tipo: 'outbound_auto_negocio' })
     }
 
-    const historialTexto = filasHistorial
-      .map(h => `[${h.rol === 'agente' ? 'APEX' : 'CLIENTE'}] ${h.mensaje}`)
-      .join('\n')
+    // Fix C: detectar eco (el cliente pegó texto del bot con algo nuevo al final)
+    const ultimosMensajesAgente = filasHistorial
+      .filter(h => h.rol === 'agente')
+      .slice(-3)
+      .reverse()
+      .map(h => h.mensaje)
+      .filter(Boolean) as string[]
+
+    const resultadoEco = extraerContenidoNuevo(mensajeCombinado, ultimosMensajesAgente)
+    if (resultadoEco.eraEco) {
+      console.log('[Wassenger] Eco detectado. Texto extraído:', resultadoEco.texto || '(vacío)')
+      await registrarEventoConversacional({
+        leadId: lead.id,
+        telefono,
+        eventName: 'echo_detected',
+        decisionAction: 'full_reply',
+        decisionReason: 'echo_stripped',
+        confidence: 0.9,
+        metadata: { textoCrudo: mensajeCombinado.slice(0, 100) },
+      })
+      if (!resultadoEco.texto) {
+        // El cliente solo pegó el texto del bot sin agregar nada — no responder
+        return NextResponse.json({ ok: true, skipped: true, motivo: 'eco_sin_contenido_nuevo' })
+      }
+    }
+    const mensajeEfectivo = resultadoEco.eraEco ? resultadoEco.texto : mensajeCombinado
 
     const contextoLead = {
       nombre: String(lead.nombre ?? ''),
@@ -416,21 +483,52 @@ export async function POST(req: NextRequest) {
       mensajeInicial: lead.mensaje_inicial as string | null | undefined,
     }
 
+    // Fix F: system prompt SIN historial en texto — el historial va como messages[]
     const systemPrompt = buildAgentPrompt(
       lead.origen as 'outbound' | 'inbound',
       apexInfoTexto,
-      historialTexto,
+      '', // historial vacío → no se inyecta en el system prompt
       contextoLead
     )
 
-    const userContent = buildUserMessageWithLeadContext(mensajeCombinado, contextoLead)
+    const userContent = buildUserMessageWithLeadContext(mensajeEfectivo, contextoLead)
+
+    // Fix F: construir array messages[] con el historial real de la conversación
+    // Excluir los mensajes pendientes del turno actual (ya están en userContent)
+    const historialPrevio = filasHistorial.filter(h => {
+      if (h.rol === 'cliente' && h.timestamp > desdeUltimoAgente) return false
+      return true
+    })
+
+    // Convertir a formato Anthropic, fusionando mensajes consecutivos del mismo rol
+    const mensajesHistorial: Anthropic.MessageParam[] = []
+    for (const h of historialPrevio) {
+      const role: 'user' | 'assistant' = h.rol === 'agente' ? 'assistant' : 'user'
+      const last = mensajesHistorial[mensajesHistorial.length - 1]
+      if (last && last.role === role) {
+        last.content = (last.content as string) + '\n' + h.mensaje
+      } else {
+        mensajesHistorial.push({ role, content: h.mensaje as string })
+      }
+    }
+
+    // La API de Claude requiere que el primer mensaje sea 'user'
+    while (mensajesHistorial.length > 0 && mensajesHistorial[0].role === 'assistant') {
+      mensajesHistorial.shift()
+    }
+
+    // Agregar el mensaje actual del cliente como último turno
+    const mensajesCompletos: Anthropic.MessageParam[] = [
+      ...mensajesHistorial,
+      { role: 'user', content: userContent },
+    ]
 
     const client = new Anthropic({ apiKey: anthropicKey })
     const response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 300,
+      max_tokens: 500,
       system: systemPrompt,
-      messages: [{ role: 'user', content: userContent }],
+      messages: mensajesCompletos,
     })
 
     const respuestaRaw = response.content[0].type === 'text' ? response.content[0].text : ''
@@ -473,10 +571,10 @@ export async function POST(req: NextRequest) {
       try {
         const retry = await client.messages.create({
           model: 'claude-sonnet-4-20250514',
-          max_tokens: 300,
+          max_tokens: 500,
           system: systemPrompt,
           messages: [
-            { role: 'user', content: userContent },
+            ...mensajesCompletos,
             { role: 'assistant', content: chequeo.texto },
             { role: 'user', content: regenInstruccion },
           ],
@@ -553,6 +651,9 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error('[Wassenger] Error en agente / Wassenger:', error)
     return NextResponse.json({ ok: true, agente: false, error: 'agente_error' })
+  } finally {
+    // Fix A: liberar el lock siempre, haya habido error o no
+    await liberarLock(supabase, lead.id)
   }
 }
 

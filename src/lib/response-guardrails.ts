@@ -7,7 +7,7 @@ import {
   type VerticalId,
 } from '@/lib/verticales'
 
-const MAX_CHARS = 300
+const MAX_CHARS = 600
 
 function compactWhitespace(text: string): string {
   return text
@@ -34,12 +34,27 @@ function removeRepeatedLines(text: string): string {
   return filtered.join('\n')
 }
 
+function truncarEnOracion(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text
+  const fragmento = text.slice(0, maxChars)
+  // Buscar el último fin de oración antes del límite
+  const ultimoFin = Math.max(
+    fragmento.lastIndexOf('.'),
+    fragmento.lastIndexOf('!'),
+    fragmento.lastIndexOf('?')
+  )
+  if (ultimoFin > maxChars * 0.5) return text.slice(0, ultimoFin + 1).trimEnd()
+  // Si no hay fin de oración, cortar en el último espacio
+  const ultimoEspacio = fragmento.lastIndexOf(' ')
+  if (ultimoEspacio > 0) return text.slice(0, ultimoEspacio).trimEnd()
+  return fragmento.trimEnd()
+}
+
 export function sanitizarRespuestaModelo(raw: string): string {
   const compact = compactWhitespace(raw)
   if (!compact) return ''
   const noRepeats = removeRepeatedLines(compact)
-  if (noRepeats.length <= MAX_CHARS) return noRepeats
-  return noRepeats.slice(0, MAX_CHARS).trimEnd()
+  return truncarEnOracion(noRepeats, MAX_CHARS)
 }
 
 export interface ChequeoCoherenciaRubro {
@@ -101,7 +116,7 @@ export function instruccionRegeneracion(params: {
   }
   lineas.push(
     '- Si el cliente respondió algo corto o ambiguo, preguntá algo específico al rubro correcto.',
-    '- Respetá el mismo tono, longitud y formato WhatsApp (máx 300 caracteres, sin emojis, sin Markdown).'
+    '- Respetá el mismo tono, longitud y formato WhatsApp (máx 600 caracteres, sin emojis, sin Markdown).'
   )
   return lineas.join('\n')
 }
@@ -114,26 +129,26 @@ export function fallbackSeguroPorVertical(verticalLead: VerticalId, nombre: stri
   const safeNombre = (nombre || '').trim() || 'tu negocio'
   switch (verticalLead) {
     case 'moda':
-      return `¡Genial! Para ${safeNombre}, ¿preferís que el boceto priorice catálogo, talles o cómo mostrar envíos? Te lo armo alineado a la marca, sin compromiso.`
+      return `Para ${safeNombre}, ¿preferís que el boceto priorice catálogo, talles o cómo mostrar envíos? Te lo armo alineado a la marca, sin compromiso.`
     case 'gastronomia':
-      return `¡Dale! Para ${safeNombre}, ¿el foco va por carta online, reservas o pedidos delivery? Con eso te armo el boceto sin compromiso.`
+      return `Para ${safeNombre}, ¿el foco va por carta online, reservas o pedidos delivery? Con eso te armo el boceto sin compromiso.`
     case 'fitness':
-      return `¡Buenísimo! Para ${safeNombre}, ¿priorizamos clases, planes o reservas en el boceto? Te lo preparo a medida, sin compromiso.`
+      return `Para ${safeNombre}, ¿priorizamos clases, planes o reservas en el boceto? Te lo preparo a medida, sin compromiso.`
     case 'salud':
-      return `¡Perfecto! Para ${safeNombre}, ¿querés que el boceto muestre turnos, especialidades o ambos? Te lo armo sin compromiso.`
+      return `Para ${safeNombre}, ¿querés que el boceto muestre turnos, especialidades o ambos? Te lo armo sin compromiso.`
     case 'estetica':
-      return `¡Dale! Para ${safeNombre}, ¿el boceto apunta a turnos online, catálogo de servicios o ambos? Te lo preparo sin compromiso.`
+      return `Para ${safeNombre}, ¿el boceto apunta a turnos online, catálogo de servicios o ambos? Te lo preparo sin compromiso.`
     case 'inmobiliaria':
-      return `¡Buenísimo! Para ${safeNombre}, ¿el boceto arranca por fichas de propiedades y filtros? Te lo armo sin compromiso.`
+      return `Para ${safeNombre}, ¿el boceto arranca por fichas de propiedades y filtros de búsqueda? Te lo armo sin compromiso.`
     case 'educacion':
-      return `¡Genial! Para ${safeNombre}, ¿priorizamos cursos con inscripción online o info institucional? Te lo preparo sin compromiso.`
+      return `Para ${safeNombre}, ¿priorizamos cursos con inscripción online o info institucional? Te lo preparo sin compromiso.`
     case 'servicios_pro':
-      return `¡Dale! Para ${safeNombre}, ¿el boceto muestra áreas de trabajo y contacto? Te lo armo sin compromiso.`
+      return `Para ${safeNombre}, ¿el boceto muestra áreas de trabajo y formulario de contacto? Te lo armo sin compromiso.`
     case 'eventos':
-      return `¡Buenísimo! Para ${safeNombre}, ¿el boceto va por galería de eventos y cotizaciones online? Te lo preparo sin compromiso.`
+      return `Para ${safeNombre}, ¿el boceto va por galería de eventos y cotizaciones online? Te lo preparo sin compromiso.`
     case 'generico':
     default:
-      return `¡Dale! Contame un poco más de ${safeNombre}: ¿qué tipo de negocio es y qué te gustaría que la web priorice? Con eso te armo el boceto.`
+      return `Contame un poco más de ${safeNombre}: ¿qué tipo de negocio es y qué te gustaría que la web priorice? Con eso te armo el boceto.`
   }
 }
 
