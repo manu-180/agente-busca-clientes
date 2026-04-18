@@ -2,20 +2,21 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { 
-  LayoutDashboard, Users, UserPlus, MessageSquare, 
-  Bot, Settings, Menu, X, Zap, Sparkles
+import {
+  LayoutDashboard, Users, UserPlus, MessageSquare,
+  Bot, Settings, Menu, X, Zap, Sparkles, Instagram
 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/leads', label: 'Leads', icon: Users },
+  { href: '/leads', label: 'Leads WA', icon: Users },
   { href: '/leads/nuevo', label: 'Nuevo Lead', icon: UserPlus },
-  { href: '/conversaciones', label: 'Inbox', icon: MessageSquare },
+  { href: '/conversaciones', label: 'Inbox WA', icon: MessageSquare },
   { href: '/agente', label: 'Agente IA', icon: Bot },
   { href: '/demos', label: 'Demos', icon: Sparkles },
+  { href: '/admin/ig', label: 'Instagram', icon: Instagram },
   { href: '/configuracion', label: 'Config', icon: Settings },
 ]
 
