@@ -168,6 +168,10 @@ export async function POST(req: NextRequest) {
     .single()
 
   if (!lead) {
+    // Si el primer mensaje que llega parece un auto-reply de negocio, es porque
+    // Manuel inició la conversación desde su programa de leads y esto es la respuesta
+    // automática del contacto. Marcarlo como outbound para que el agente lo trate correctamente.
+    const origenDetectado = pareceMensajeAutomaticoNegocio(mensaje) ? 'outbound' : 'inbound'
     const { data: nuevoLead } = await supabase
       .from('leads')
       .insert({
@@ -175,10 +179,12 @@ export async function POST(req: NextRequest) {
         rubro: 'Por definir',
         zona: 'Por definir',
         telefono,
-        descripcion: 'Lead entrante desde WhatsApp',
+        descripcion: origenDetectado === 'outbound'
+          ? 'Lead outbound — auto-reply de negocio detectado'
+          : 'Lead entrante desde WhatsApp',
         mensaje_inicial: '',
         estado: 'respondio',
-        origen: 'inbound',
+        origen: origenDetectado,
         agente_activo: true,
       })
       .select()
