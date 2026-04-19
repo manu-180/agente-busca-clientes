@@ -28,6 +28,11 @@ export interface Lead {
   notas: string | null
   conversacion_cerrada?: boolean
   conversacion_cerrada_at?: string | null
+  mensaje_enviado?: boolean
+  video_enviado?: boolean
+  primer_envio_intentos?: number
+  primer_envio_error?: string | null
+  primer_envio_completado_at?: string | null
 }
 
 export interface Conversacion {

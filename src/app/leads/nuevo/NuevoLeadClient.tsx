@@ -1,7 +1,7 @@
 'use client'
 
 import { FormEvent, useEffect, useMemo, useState } from 'react'
-import { Loader2, MapPin, Phone, Sparkles, Send, Star, Globe, ExternalLink } from 'lucide-react'
+import { Loader2, MapPin, Phone, Sparkles, Star, Globe, ExternalLink, CheckCircle2, Clock } from 'lucide-react'
 import { ResultadoBusquedaLead } from '@/types'
 import { getDefaultPais, PAISES_HISPANOHABLANTES } from '@/lib/locations-ar'
 
@@ -9,23 +9,25 @@ const TODAS_LOCALIDADES = '__TODAS__'
 
 interface LeadCardState extends ResultadoBusquedaLead {
   zona: string
-  mensaje_sugerido: string
-  generando_mensaje: boolean
-  guardando: boolean
-  guardado: boolean
 }
 
 interface ApiErrorResponse {
   error?: string
 }
 
-function getEnviadosKey() {
-  return `apex_enviados_${new Date().toDateString()}`
+interface QueueStats {
+  pendientes: number
+  enviados_hoy: number
+  limite_diario: number
+  ventana_horaria: { inicio: number; fin: number }
+  intervalo_min: { min: number; max: number }
+  next_slot_at: string | null
+  activo: boolean
 }
 
-function getEnviadosHoy() {
-  if (typeof window === 'undefined') return 0
-  return parseInt(localStorage.getItem(getEnviadosKey()) || '0', 10)
+interface QueueResult {
+  agregados: number
+  duplicados: number
 }
 
 function buildDescripcion(lead: ResultadoBusquedaLead) {
@@ -44,10 +46,11 @@ export default function NuevoLeadClient() {
   )
   const [resultados, setResultados] = useState<LeadCardState[]>([])
   const [buscando, setBuscando] = useState(false)
+  const [encolando, setEncolando] = useState(false)
   const [errorBusqueda, setErrorBusqueda] = useState<string | null>(null)
-  const [enviadosHoy, setEnviadosHoy] = useState<number>(0)
+  const [queueStats, setQueueStats] = useState<QueueStats | null>(null)
+  const [ultimoResultadoCola, setUltimoResultadoCola] = useState<QueueResult | null>(null)
 
-  // Estado de progreso para búsqueda por provincia
   const [progresoActual, setProgresoActual] = useState(0)
   const [progresoTotal, setProgresoTotal] = useState(0)
   const [progresoLocalidad, setProgresoLocalidad] = useState('')
@@ -65,8 +68,8 @@ export default function NuevoLeadClient() {
   const esModoProvincia = localidadNombre === TODAS_LOCALIDADES
 
   const puedeBuscar = useMemo(
-    () => rubro.trim().length > 0 && localidadNombre.trim().length > 0 && !buscando,
-    [rubro, localidadNombre, buscando]
+    () => rubro.trim().length > 0 && localidadNombre.trim().length > 0 && !buscando && !encolando,
+    [rubro, localidadNombre, buscando, encolando]
   )
 
   const zona = useMemo(
@@ -77,8 +80,22 @@ export default function NuevoLeadClient() {
     [localidadNombre, provinciaSeleccionada?.nombre, paisSeleccionado.nombre, esModoProvincia]
   )
 
+  async function cargarStats() {
+    try {
+      const res = await fetch('/api/leads/queue-stats', { cache: 'no-store' })
+      if (res.ok) {
+        const data = (await res.json()) as QueueStats
+        setQueueStats(data)
+      }
+    } catch {
+      // silencioso, no es crítico
+    }
+  }
+
   useEffect(() => {
-    setEnviadosHoy(getEnviadosHoy())
+    cargarStats()
+    const intervalo = setInterval(cargarStats, 30_000)
+    return () => clearInterval(intervalo)
   }, [])
 
   async function parseApiError(res: Response, fallback: string) {
@@ -101,22 +118,55 @@ export default function NuevoLeadClient() {
     return Array.isArray(data?.resultados) ? data.resultados : []
   }
 
+  async function encolarLeads(leads: LeadCardState[]): Promise<QueueResult | null> {
+    if (leads.length === 0) return { agregados: 0, duplicados: 0 }
+
+    const payload = {
+      leads: leads.map(l => ({
+        nombre: l.nombre,
+        rubro: l.rubro,
+        zona: l.zona,
+        telefono: l.telefono,
+        descripcion: buildDescripcion(l),
+      })),
+    }
+
+    const res = await fetch('/api/leads/bulk-queue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+    if (!res.ok) {
+      const msg = await parseApiError(res, 'No se pudo encolar leads.')
+      throw new Error(msg)
+    }
+
+    const data = await res.json()
+    return {
+      agregados: data?.agregados ?? 0,
+      duplicados: data?.duplicados ?? 0,
+    }
+  }
+
   async function buscarNegocios(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setBuscando(true)
     setErrorBusqueda(null)
     setResultados([])
+    setUltimoResultadoCola(null)
     setProgresoActual(0)
     setProgresoTotal(0)
     setProgresoLocalidad('')
 
     try {
+      let acumulados: LeadCardState[] = []
+
       if (esModoProvincia) {
         const localidades = provinciaSeleccionada?.localidades || []
         setProgresoTotal(localidades.length)
 
         const telefonosVistos = new Set<string>()
-        const acumulados: LeadCardState[] = []
 
         for (let i = 0; i < localidades.length; i++) {
           const loc = localidades[i]
@@ -129,19 +179,12 @@ export default function NuevoLeadClient() {
             for (const lead of lista) {
               if (lead.telefono && !telefonosVistos.has(lead.telefono)) {
                 telefonosVistos.add(lead.telefono)
-                acumulados.push({
-                  ...lead,
-                  zona: zonaLocal,
-                  mensaje_sugerido: '',
-                  generando_mensaje: false,
-                  guardando: false,
-                  guardado: false,
-                })
+                acumulados.push({ ...lead, zona: zonaLocal })
               }
             }
             setResultados([...acumulados])
           } catch {
-            // Continuar con la siguiente localidad si una falla
+            // seguir
           }
         }
       } else {
@@ -159,16 +202,25 @@ export default function NuevoLeadClient() {
         const data = await response.json()
         const lista: ResultadoBusquedaLead[] = Array.isArray(data?.resultados) ? data.resultados : []
 
-        setResultados(
-          lista.map((lead) => ({
-            ...lead,
-            zona,
-            mensaje_sugerido: '',
-            generando_mensaje: false,
-            guardando: false,
-            guardado: false,
-          }))
-        )
+        acumulados = lista.map((lead) => ({ ...lead, zona }))
+        setResultados(acumulados)
+      }
+
+      // Encolar automáticamente
+      if (acumulados.length > 0) {
+        setEncolando(true)
+        try {
+          const resultado = await encolarLeads(acumulados)
+          setUltimoResultadoCola(resultado)
+          await cargarStats()
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : 'Error encolando leads'
+          setErrorBusqueda(msg)
+        } finally {
+          setEncolando(false)
+        }
+      } else {
+        setUltimoResultadoCola({ agregados: 0, duplicados: 0 })
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'No se pudieron buscar negocios.'
@@ -179,101 +231,6 @@ export default function NuevoLeadClient() {
     }
   }
 
-  async function generarMensaje(index: number) {
-    const lead = resultados[index]
-    if (!lead || lead.ya_registrado) return
-
-    setResultados((prev) =>
-      prev.map((item, i) => (i === index ? { ...item, generando_mensaje: true } : item))
-    )
-
-    try {
-      const descripcion = buildDescripcion(lead)
-      const response = await fetch('/api/leads/generar-mensaje', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          nombre: lead.nombre,
-          rubro: lead.rubro,
-          zona: lead.zona,
-          descripcion,
-          instagram: null,
-        }),
-      })
-
-      if (!response.ok) {
-        const msg = await parseApiError(response, 'No se pudo generar el mensaje.')
-        throw new Error(msg)
-      }
-
-      const data = await response.json()
-      const mensaje = typeof data?.mensaje === 'string' ? data.mensaje : ''
-
-      setResultados((prev) =>
-        prev.map((item, i) =>
-          i === index ? { ...item, mensaje_sugerido: mensaje, generando_mensaje: false } : item
-        )
-      )
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'No se pudo generar el mensaje.'
-      setErrorBusqueda(msg)
-      setResultados((prev) =>
-        prev.map((item, i) => (i === index ? { ...item, generando_mensaje: false } : item))
-      )
-    }
-  }
-
-  async function guardarLead(index: number, abrirWhatsapp: boolean) {
-    const lead = resultados[index]
-    if (!lead || lead.ya_registrado || lead.guardando || !lead.mensaje_sugerido) return
-
-    setResultados((prev) =>
-      prev.map((item, i) => (i === index ? { ...item, guardando: true } : item))
-    )
-
-    try {
-      const descripcion = buildDescripcion(lead)
-      const response = await fetch('/api/leads', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          nombre: lead.nombre,
-          rubro: lead.rubro,
-          zona: lead.zona,
-          telefono: lead.telefono,
-          instagram: null,
-          descripcion,
-          mensaje_inicial: lead.mensaje_sugerido,
-          estado: 'pendiente',
-          origen: 'outbound',
-        }),
-      })
-
-      if (!response.ok) {
-        const msg = await parseApiError(response, 'No se pudo guardar el lead.')
-        throw new Error(msg)
-      }
-
-      setResultados((prev) =>
-        prev.map((item, i) => (i === index ? { ...item, guardando: false, guardado: true } : item))
-      )
-
-      if (abrirWhatsapp) {
-        const mensaje = encodeURIComponent(lead.mensaje_sugerido)
-        window.open(`https://wa.me/${lead.telefono}?text=${mensaje}`, '_blank')
-        const enviados = getEnviadosHoy() + 1
-        localStorage.setItem(getEnviadosKey(), enviados.toString())
-        setEnviadosHoy(enviados)
-      }
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'No se pudo guardar el lead.'
-      setErrorBusqueda(msg)
-      setResultados((prev) =>
-        prev.map((item, i) => (i === index ? { ...item, guardando: false } : item))
-      )
-    }
-  }
-
   const porcentajeProgreso = progresoTotal > 0 ? Math.round((progresoActual / progresoTotal) * 100) : 0
 
   return (
@@ -281,12 +238,41 @@ export default function NuevoLeadClient() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-syne font-bold text-3xl tracking-tight">Nuevo Lead</h1>
-          <p className="text-apex-muted text-sm mt-1">Buscador automático con Google Places</p>
-        </div>
-        <div className="bg-apex-card border border-apex-border rounded-lg px-4 py-2 font-mono text-sm">
-          Enviados hoy: <span className="text-apex-lime font-bold">{enviadosHoy}</span>/20
+          <p className="text-apex-muted text-sm mt-1">
+            Cola automática de primer contacto — el cron envía cada {queueStats?.intervalo_min.min ?? 10}-{queueStats?.intervalo_min.max ?? 15} min
+          </p>
         </div>
       </div>
+
+      {/* Stats bar */}
+      {queueStats && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="bg-apex-card border border-apex-border rounded-lg p-3">
+            <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">En cola</div>
+            <div className="text-2xl font-bold text-apex-lime mt-1">{queueStats.pendientes}</div>
+          </div>
+          <div className="bg-apex-card border border-apex-border rounded-lg p-3">
+            <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Enviados hoy</div>
+            <div className="text-2xl font-bold mt-1">
+              {queueStats.enviados_hoy}
+              <span className="text-sm text-apex-muted font-mono">/{queueStats.limite_diario}</span>
+            </div>
+          </div>
+          <div className="bg-apex-card border border-apex-border rounded-lg p-3">
+            <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Ventana AR</div>
+            <div className="text-2xl font-bold mt-1">
+              {queueStats.ventana_horaria.inicio}-{queueStats.ventana_horaria.fin}
+              <span className="text-sm text-apex-muted font-mono">hs</span>
+            </div>
+          </div>
+          <div className="bg-apex-card border border-apex-border rounded-lg p-3">
+            <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Sistema</div>
+            <div className={`text-2xl font-bold mt-1 ${queueStats.activo ? 'text-apex-lime' : 'text-red-400'}`}>
+              {queueStats.activo ? 'ACTIVO' : 'PAUSADO'}
+            </div>
+          </div>
+        </div>
+      )}
 
       <form onSubmit={buscarNegocios} className="bg-apex-card border border-apex-border rounded-xl p-6 space-y-4">
         <h2 className="font-syne font-semibold text-lg">Buscar negocios</h2>
@@ -382,12 +368,17 @@ export default function NuevoLeadClient() {
               <Loader2 size={16} className="animate-spin" />
               {esModoProvincia ? 'Buscando en la provincia...' : 'Buscando negocios...'}
             </>
+          ) : encolando ? (
+            <>
+              <Loader2 size={16} className="animate-spin" />
+              Agregando a la cola...
+            </>
           ) : (
             <>
               <Sparkles size={16} />
               {esModoProvincia
-                ? `Buscar en toda ${provinciaSeleccionada?.nombre}`
-                : 'Buscar negocios'}
+                ? `Buscar y encolar (toda ${provinciaSeleccionada?.nombre})`
+                : 'Buscar y encolar'}
             </>
           )}
         </button>
@@ -395,9 +386,28 @@ export default function NuevoLeadClient() {
         {errorBusqueda && (
           <p className="text-sm text-red-400 border border-red-500/30 bg-red-500/10 rounded-lg px-3 py-2">{errorBusqueda}</p>
         )}
+
+        {ultimoResultadoCola && !buscando && !encolando && (
+          <div className="text-sm flex items-start gap-2 border border-apex-lime/30 bg-apex-lime/5 rounded-lg px-3 py-2.5">
+            <CheckCircle2 size={16} className="text-apex-lime shrink-0 mt-0.5" />
+            <div>
+              <p className="text-apex-lime font-semibold">
+                {ultimoResultadoCola.agregados} {ultimoResultadoCola.agregados === 1 ? 'lead agregado' : 'leads agregados'} a la cola
+              </p>
+              {ultimoResultadoCola.duplicados > 0 && (
+                <p className="text-apex-muted text-xs mt-0.5">
+                  {ultimoResultadoCola.duplicados} {ultimoResultadoCola.duplicados === 1 ? 'estaba' : 'estaban'} duplicados (omitidos)
+                </p>
+              )}
+              <p className="text-apex-muted text-xs mt-0.5">
+                El bot empezará a enviar en el próximo slot (cada {queueStats?.intervalo_min.min ?? 10}-{queueStats?.intervalo_min.max ?? 15} min).
+              </p>
+            </div>
+          </div>
+        )}
       </form>
 
-      {/* Barra de progreso para búsqueda provincial */}
+      {/* Barra de progreso búsqueda provincial */}
       {buscando && esModoProvincia && progresoTotal > 0 && (
         <div className="bg-apex-card border border-apex-border rounded-xl p-5 space-y-3">
           <div className="flex items-center justify-between text-sm">
@@ -422,7 +432,7 @@ export default function NuevoLeadClient() {
         </div>
       )}
 
-      {/* Skeletons solo cuando no hay resultados aún */}
+      {/* Skeletons iniciales */}
       {buscando && resultados.length === 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {[0, 1, 2, 3].map((item) => (
@@ -440,7 +450,7 @@ export default function NuevoLeadClient() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="font-syne font-semibold text-lg">
-              Resultados ({resultados.length}
+              Encontrados ({resultados.length}
               {buscando && esModoProvincia ? ' y contando...' : ''})
             </h2>
             {esModoProvincia && !buscando && (
@@ -451,32 +461,31 @@ export default function NuevoLeadClient() {
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {resultados.map((lead, index) => {
-              const deshabilitado = lead.ya_registrado
+              const yaRegistrado = lead.ya_registrado
               const sinWeb = !lead.tiene_web
 
               return (
                 <div
                   key={`${lead.telefono}-${lead.nombre}-${index}`}
                   className={`bg-apex-card border border-apex-border rounded-xl p-5 space-y-3 animate-fade-in ${
-                    deshabilitado ? 'opacity-55' : ''
+                    yaRegistrado ? 'opacity-55' : ''
                   }`}
                 >
                   <div className="flex flex-wrap items-center gap-2">
                     {sinWeb && (
                       <span className="text-[11px] px-2 py-1 rounded-full bg-apex-lime/20 text-apex-lime font-mono uppercase tracking-wide">
-                        SIN WEB - Potencial lead
+                        SIN WEB
                       </span>
                     )}
-                    {lead.ya_registrado && (
+                    {yaRegistrado ? (
                       <span className="text-[11px] px-2 py-1 rounded-full bg-apex-border text-apex-muted font-mono uppercase tracking-wide">
                         Ya registrado
                       </span>
-                    )}
-                    {lead.guardado && !lead.ya_registrado && (
-                      <span className="text-[11px] px-2 py-1 rounded-full bg-emerald-500/20 text-emerald-300 font-mono uppercase tracking-wide">
-                        Guardado
+                    ) : !encolando && ultimoResultadoCola ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full bg-emerald-500/20 text-emerald-300 font-mono uppercase tracking-wide">
+                        <Clock size={10} /> En cola
                       </span>
-                    )}
+                    ) : null}
                   </div>
 
                   <div>
@@ -512,56 +521,6 @@ export default function NuevoLeadClient() {
                         <ExternalLink size={12} />
                         Ver en Google Maps
                       </a>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <button
-                      type="button"
-                      onClick={() => generarMensaje(index)}
-                      disabled={deshabilitado || lead.generando_mensaje}
-                      className="w-full flex items-center justify-center gap-2 bg-apex-lime text-apex-black px-4 py-2 rounded-lg text-sm font-semibold hover:bg-apex-lime-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                    >
-                      {lead.generando_mensaje ? (
-                        <>
-                          <Loader2 size={15} className="animate-spin" />
-                          Generando mensaje...
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles size={15} />
-                          Generar mensaje
-                        </>
-                      )}
-                    </button>
-
-                    {lead.mensaje_sugerido && (
-                      <div className="space-y-2">
-                        <textarea
-                          value={lead.mensaje_sugerido}
-                          onChange={(event) =>
-                            setResultados((prev) =>
-                              prev.map((item, i) =>
-                                i === index ? { ...item, mensaje_sugerido: event.target.value } : item
-                              )
-                            )
-                          }
-                          rows={4}
-                          className="w-full bg-apex-black border border-apex-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-apex-lime/50 resize-none"
-                        />
-
-                        <div className="grid grid-cols-1 gap-2">
-                          <button
-                            type="button"
-                            onClick={() => guardarLead(index, true)}
-                            disabled={deshabilitado || lead.guardando}
-                            className="flex items-center justify-center gap-2 bg-green-600 text-white px-3 py-2 rounded-lg text-xs font-medium hover:bg-green-500 transition-colors disabled:opacity-40"
-                          >
-                            {lead.guardando ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-                            Guardar y abrir WhatsApp
-                          </button>
-                        </div>
-                      </div>
                     )}
                   </div>
                 </div>

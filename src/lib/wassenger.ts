@@ -7,6 +7,10 @@ function getHeaders() {
   }
 }
 
+function sleep(ms: number) {
+  return new Promise<void>(resolve => setTimeout(resolve, ms))
+}
+
 export async function enviarMensajeWassenger(telefono: string, mensaje: string) {
   const response = await fetch(`${WASSENGER_BASE}/messages`, {
     method: 'POST',
@@ -46,6 +50,41 @@ export async function enviarVideoWassenger(telefono: string, videoUrl: string, c
   }
 
   return response.json()
+}
+
+export interface ResultadoEnvioVideo {
+  ok: boolean
+  intentos: number
+  error?: string
+}
+
+// El video a veces falla porque Wassenger tiene que descargar la URL;
+// reintenta con backoff exponencial (2s, 4s, 8s).
+export async function enviarVideoWassengerConReintentos(
+  telefono: string,
+  videoUrl: string,
+  maxIntentos = 3,
+  caption?: string
+): Promise<ResultadoEnvioVideo> {
+  let ultimoError: string | null = null
+
+  for (let intento = 1; intento <= maxIntentos; intento++) {
+    try {
+      await enviarVideoWassenger(telefono, videoUrl, caption)
+      return { ok: true, intentos: intento }
+    } catch (e) {
+      ultimoError = e instanceof Error ? e.message : String(e)
+      console.warn(
+        `[Wassenger] Envío de video falló (intento ${intento}/${maxIntentos}):`,
+        ultimoError
+      )
+      if (intento < maxIntentos) {
+        await sleep(Math.pow(2, intento) * 1000)
+      }
+    }
+  }
+
+  return { ok: false, intentos: maxIntentos, error: ultimoError ?? 'desconocido' }
 }
 
 export async function verificarConexionWassenger() {
