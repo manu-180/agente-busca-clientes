@@ -1,11 +1,5 @@
 {
   "framework": "nextjs",
   "buildCommand": "next build",
-  "installCommand": "npm install",
-  "crons": [
-    {
-      "path": "/api/cron/followup",
-      "schedule": "0 14 * * *"
-    }
-  ]
+  "installCommand": "npm install"
 }
