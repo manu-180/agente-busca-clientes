@@ -23,7 +23,14 @@ export async function POST(req: NextRequest) {
 
     const videoUrl = process.env.VIDEO_PAGINA_URL
     if (videoUrl) {
-      await enviarVideoWassenger(telefono, videoUrl)
+      try {
+        await enviarVideoWassenger(telefono, videoUrl)
+        console.log('[API] Video enviado a:', telefono)
+      } catch (videoError: any) {
+        console.error('[API] Error enviando video:', videoError.message)
+      }
+    } else {
+      console.warn('[API] VIDEO_PAGINA_URL no configurada, omitiendo video')
     }
 
     return NextResponse.json({ ok: true })
