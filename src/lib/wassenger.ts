@@ -26,6 +26,28 @@ export async function enviarMensajeWassenger(telefono: string, mensaje: string) 
   return response.json()
 }
 
+export async function enviarVideoWassenger(telefono: string, videoUrl: string, caption?: string) {
+  const response = await fetch(`${WASSENGER_BASE}/messages`, {
+    method: 'POST',
+    headers: getHeaders(),
+    body: JSON.stringify({
+      phone: telefono,
+      device: process.env.WASSENGER_DEVICE_ID,
+      media: {
+        url: videoUrl,
+        ...(caption ? { caption } : {}),
+      },
+    }),
+  })
+
+  if (!response.ok) {
+    const error = await response.text()
+    throw new Error(`Wassenger media error: ${response.status} - ${error}`)
+  }
+
+  return response.json()
+}
+
 export async function verificarConexionWassenger() {
   try {
     const response = await fetch(`${WASSENGER_BASE}/devices`, {

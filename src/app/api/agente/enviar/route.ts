@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { enviarMensajeAgente } from '@/lib/agente'
+import { enviarVideoWassenger } from '@/lib/wassenger'
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
@@ -18,6 +19,11 @@ export async function POST(req: NextRequest) {
 
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: 500 })
+    }
+
+    const videoUrl = process.env.VIDEO_PAGINA_URL
+    if (videoUrl) {
+      await enviarVideoWassenger(telefono, videoUrl)
     }
 
     return NextResponse.json({ ok: true })
