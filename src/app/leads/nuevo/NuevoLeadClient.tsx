@@ -1,11 +1,14 @@
 'use client'
 
 import { FormEvent, useEffect, useMemo, useState } from 'react'
-import { Loader2, MapPin, Phone, Sparkles, Save, Send, Star, Globe, ExternalLink } from 'lucide-react'
+import { Loader2, MapPin, Phone, Sparkles, Send, Star, Globe, ExternalLink } from 'lucide-react'
 import { ResultadoBusquedaLead } from '@/types'
 import { getDefaultPais, PAISES_HISPANOHABLANTES } from '@/lib/locations-ar'
 
+const TODAS_LOCALIDADES = '__TODAS__'
+
 interface LeadCardState extends ResultadoBusquedaLead {
+  zona: string
   mensaje_sugerido: string
   generando_mensaje: boolean
   guardando: boolean
@@ -44,6 +47,11 @@ export default function NuevoLeadClient() {
   const [errorBusqueda, setErrorBusqueda] = useState<string | null>(null)
   const [enviadosHoy, setEnviadosHoy] = useState<number>(0)
 
+  // Estado de progreso para búsqueda por provincia
+  const [progresoActual, setProgresoActual] = useState(0)
+  const [progresoTotal, setProgresoTotal] = useState(0)
+  const [progresoLocalidad, setProgresoLocalidad] = useState('')
+
   const paisSeleccionado = useMemo(
     () => PAISES_HISPANOHABLANTES.find((p) => p.codigo === paisCodigo) || getDefaultPais(),
     [paisCodigo]
@@ -54,14 +62,19 @@ export default function NuevoLeadClient() {
     [paisSeleccionado, provinciaNombre]
   )
 
+  const esModoProvincia = localidadNombre === TODAS_LOCALIDADES
+
   const puedeBuscar = useMemo(
     () => rubro.trim().length > 0 && localidadNombre.trim().length > 0 && !buscando,
     [rubro, localidadNombre, buscando]
   )
 
   const zona = useMemo(
-    () => `${localidadNombre}, ${provinciaSeleccionada?.nombre}, ${paisSeleccionado.nombre}`,
-    [localidadNombre, provinciaSeleccionada?.nombre, paisSeleccionado.nombre]
+    () =>
+      esModoProvincia
+        ? `${provinciaSeleccionada?.nombre}, ${paisSeleccionado.nombre}`
+        : `${localidadNombre}, ${provinciaSeleccionada?.nombre}, ${paisSeleccionado.nombre}`,
+    [localidadNombre, provinciaSeleccionada?.nombre, paisSeleccionado.nombre, esModoProvincia]
   )
 
   useEffect(() => {
@@ -77,40 +90,92 @@ export default function NuevoLeadClient() {
     }
   }
 
+  async function buscarEnLocalidad(zonaLocal: string): Promise<ResultadoBusquedaLead[]> {
+    const response = await fetch('/api/leads/buscar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rubro, zona: zonaLocal }),
+    })
+    if (!response.ok) return []
+    const data = await response.json()
+    return Array.isArray(data?.resultados) ? data.resultados : []
+  }
+
   async function buscarNegocios(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setBuscando(true)
     setErrorBusqueda(null)
+    setResultados([])
+    setProgresoActual(0)
+    setProgresoTotal(0)
+    setProgresoLocalidad('')
 
     try {
-      const response = await fetch('/api/leads/buscar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rubro, zona }),
-      })
+      if (esModoProvincia) {
+        const localidades = provinciaSeleccionada?.localidades || []
+        setProgresoTotal(localidades.length)
 
-      if (!response.ok) {
-        const msg = await parseApiError(response, 'No se pudieron obtener resultados.')
-        throw new Error(msg)
+        const telefonosVistos = new Set<string>()
+        const acumulados: LeadCardState[] = []
+
+        for (let i = 0; i < localidades.length; i++) {
+          const loc = localidades[i]
+          setProgresoActual(i + 1)
+          setProgresoLocalidad(loc.nombre)
+
+          const zonaLocal = `${loc.nombre}, ${provinciaSeleccionada.nombre}, ${paisSeleccionado.nombre}`
+          try {
+            const lista = await buscarEnLocalidad(zonaLocal)
+            for (const lead of lista) {
+              if (lead.telefono && !telefonosVistos.has(lead.telefono)) {
+                telefonosVistos.add(lead.telefono)
+                acumulados.push({
+                  ...lead,
+                  zona: zonaLocal,
+                  mensaje_sugerido: '',
+                  generando_mensaje: false,
+                  guardando: false,
+                  guardado: false,
+                })
+              }
+            }
+            setResultados([...acumulados])
+          } catch {
+            // Continuar con la siguiente localidad si una falla
+          }
+        }
+      } else {
+        const response = await fetch('/api/leads/buscar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ rubro, zona }),
+        })
+
+        if (!response.ok) {
+          const msg = await parseApiError(response, 'No se pudieron obtener resultados.')
+          throw new Error(msg)
+        }
+
+        const data = await response.json()
+        const lista: ResultadoBusquedaLead[] = Array.isArray(data?.resultados) ? data.resultados : []
+
+        setResultados(
+          lista.map((lead) => ({
+            ...lead,
+            zona,
+            mensaje_sugerido: '',
+            generando_mensaje: false,
+            guardando: false,
+            guardado: false,
+          }))
+        )
       }
-
-      const data = await response.json()
-      const lista: ResultadoBusquedaLead[] = Array.isArray(data?.resultados) ? data.resultados : []
-
-      setResultados(
-        lista.map((lead) => ({
-          ...lead,
-          mensaje_sugerido: '',
-          generando_mensaje: false,
-          guardando: false,
-          guardado: false,
-        }))
-      )
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'No se pudieron buscar negocios.'
       setErrorBusqueda(msg)
     } finally {
       setBuscando(false)
+      setProgresoLocalidad('')
     }
   }
 
@@ -130,7 +195,7 @@ export default function NuevoLeadClient() {
         body: JSON.stringify({
           nombre: lead.nombre,
           rubro: lead.rubro,
-          zona,
+          zona: lead.zona,
           descripcion,
           instagram: null,
         }),
@@ -174,7 +239,7 @@ export default function NuevoLeadClient() {
         body: JSON.stringify({
           nombre: lead.nombre,
           rubro: lead.rubro,
-          zona,
+          zona: lead.zona,
           telefono: lead.telefono,
           instagram: null,
           descripcion,
@@ -208,6 +273,8 @@ export default function NuevoLeadClient() {
       )
     }
   }
+
+  const porcentajeProgreso = progresoTotal > 0 ? Math.round((progresoActual / progresoTotal) * 100) : 0
 
   return (
     <div className="space-y-6">
@@ -291,6 +358,9 @@ export default function NuevoLeadClient() {
                   onChange={(event) => setLocalidadNombre(event.target.value)}
                   className="w-full bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
                 >
+                  <option value={TODAS_LOCALIDADES}>
+                    ★ Toda la provincia ({provinciaSeleccionada?.localidades.length} localidades)
+                  </option>
                   {provinciaSeleccionada?.localidades.map((loc) => (
                     <option key={loc.nombre} value={loc.nombre}>
                       {loc.nombre}
@@ -310,12 +380,14 @@ export default function NuevoLeadClient() {
           {buscando ? (
             <>
               <Loader2 size={16} className="animate-spin" />
-              Buscando negocios...
+              {esModoProvincia ? 'Buscando en la provincia...' : 'Buscando negocios...'}
             </>
           ) : (
             <>
               <Sparkles size={16} />
-              Buscar negocios
+              {esModoProvincia
+                ? `Buscar en toda ${provinciaSeleccionada?.nombre}`
+                : 'Buscar negocios'}
             </>
           )}
         </button>
@@ -325,7 +397,33 @@ export default function NuevoLeadClient() {
         )}
       </form>
 
-      {buscando && (
+      {/* Barra de progreso para búsqueda provincial */}
+      {buscando && esModoProvincia && progresoTotal > 0 && (
+        <div className="bg-apex-card border border-apex-border rounded-xl p-5 space-y-3">
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-apex-muted font-mono">
+              Buscando en <span className="text-white">{progresoLocalidad}</span>
+            </span>
+            <span className="text-apex-lime font-mono font-bold">
+              {progresoActual}/{progresoTotal} localidades
+            </span>
+          </div>
+          <div className="w-full bg-apex-black rounded-full h-2 overflow-hidden">
+            <div
+              className="h-2 bg-apex-lime rounded-full transition-all duration-300"
+              style={{ width: `${porcentajeProgreso}%` }}
+            />
+          </div>
+          {resultados.length > 0 && (
+            <p className="text-xs text-apex-muted font-mono">
+              {resultados.length} leads encontrados hasta ahora
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Skeletons solo cuando no hay resultados aún */}
+      {buscando && resultados.length === 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {[0, 1, 2, 3].map((item) => (
             <div key={item} className="bg-apex-card border border-apex-border rounded-xl p-5 space-y-3 animate-pulse">
@@ -338,9 +436,19 @@ export default function NuevoLeadClient() {
         </div>
       )}
 
-      {!buscando && resultados.length > 0 && (
+      {resultados.length > 0 && (
         <div className="space-y-4">
-          <h2 className="font-syne font-semibold text-lg">Resultados ({resultados.length})</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="font-syne font-semibold text-lg">
+              Resultados ({resultados.length}
+              {buscando && esModoProvincia ? ' y contando...' : ''})
+            </h2>
+            {esModoProvincia && !buscando && (
+              <span className="text-xs text-apex-muted font-mono">
+                {provinciaSeleccionada?.localidades.length} localidades escaneadas
+              </span>
+            )}
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {resultados.map((lead, index) => {
               const deshabilitado = lead.ya_registrado
