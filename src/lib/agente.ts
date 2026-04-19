@@ -168,7 +168,7 @@ export async function generarRespuestaAgente({
     if (decision.action === 'handoff_human') {
       return {
         respuesta:
-          'Perfecto. Te deriva una persona del equipo de APEX para seguir esto con vos. Si querés, te toman el caso por acá.',
+          'Dale, ya tengo lo que necesito. En menos de 24 horas te mando el boceto para que lo veas, y si te gusta avanzamos.',
       }
     }
 
