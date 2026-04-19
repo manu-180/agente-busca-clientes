@@ -13,8 +13,10 @@ const ESTADOS_EXCLUIDOS = new Set(['no_interesado', 'cliente'])
 
 function authCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
-  if (!secret) return false
   const auth = req.headers.get('authorization')
+  console.log('[cron/followup] secret defined:', !!secret, '| secret length:', secret?.length ?? 0)
+  console.log('[cron/followup] auth header:', auth)
+  if (!secret) return false
   return auth === `Bearer ${secret}`
 }
 
