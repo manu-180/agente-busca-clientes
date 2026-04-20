@@ -1,0 +1,83 @@
+name: Trigger Cron After Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  trigger-leads-cron:
+    name: Trigger leads-pendientes after Vercel deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Wait for Vercel production deployment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          PROJECT_ID="prj_h6gFiShNAp9Ja5foPk98zqOdBbm7"
+          TEAM_ID="team_howttfzs3Q44mOpVn93EkrUm"
+          COMMIT_SHA="${{ github.sha }}"
+
+          echo "Waiting for Vercel deployment of commit $COMMIT_SHA..."
+
+          for attempt in $(seq 1 24); do
+            RESPONSE=$(curl -sf \
+              -H "Authorization: Bearer $VERCEL_TOKEN" \
+              "https://api.vercel.com/v6/deployments?projectId=${PROJECT_ID}&teamId=${TEAM_ID}&limit=5&target=production" \
+              2>/dev/null || echo '{"deployments":[]}')
+
+            STATE=$(echo "$RESPONSE" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    for d in data.get('deployments', []):
+        sha = d.get('meta', {}).get('githubCommitSha', '')
+        if sha == '$COMMIT_SHA':
+            print(d.get('state', 'UNKNOWN'))
+            sys.exit(0)
+    print('NOT_FOUND')
+except Exception as e:
+    print('PARSE_ERROR')
+" 2>/dev/null || echo "ERROR")
+
+            echo "Attempt $attempt/24 — state: $STATE"
+
+            if [ "$STATE" = "READY" ]; then
+              echo "✓ Production deployment ready"
+              break
+            fi
+            if [ "$STATE" = "ERROR" ] || [ "$STATE" = "CANCELED" ]; then
+              echo "✗ Deployment failed: $STATE"
+              exit 1
+            fi
+
+            sleep 15
+          done
+
+      - name: Trigger leads-pendientes cron (force=true)
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          echo "Triggering cron with force=true..."
+
+          for attempt in 1 2 3; do
+            RESPONSE=$(curl -s -w "\n%{http_code}" \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              "https://apex-leads-six.vercel.app/api/cron/leads-pendientes?force=true")
+
+            HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+            BODY=$(echo "$RESPONSE" | head -1)
+
+            echo "Attempt $attempt — HTTP $HTTP_CODE"
+            echo "$BODY" | python3 -m json.tool 2>/dev/null || echo "$BODY"
+
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✓ Cron triggered successfully"
+              exit 0
+            fi
+
+            [ $attempt -lt 3 ] && sleep 20
+          done
+
+          echo "⚠ Cron trigger failed after 3 attempts (non-blocking)"
+          exit 0

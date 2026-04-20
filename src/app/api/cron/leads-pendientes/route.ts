@@ -104,17 +104,46 @@ async function actualizarLead(
   }
 }
 
+async function logCronRun(
+  supabase: SupabaseClient,
+  startedAt: string,
+  startMs: number,
+  forced: boolean,
+  status: string,
+  result: Record<string, unknown>
+) {
+  try {
+    await supabase.from('cron_runs').insert({
+      cron_name: 'leads-pendientes',
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+      status,
+      result,
+      duration_ms: Date.now() - startMs,
+      forced,
+    })
+  } catch (e) {
+    console.error('[cron] Error logging run:', e)
+  }
+}
+
 export async function GET(req: NextRequest) {
   if (!authCron(req)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  const startMs = Date.now()
+  const startedAt = new Date().toISOString()
+  const forced = req.nextUrl.searchParams.get('force') === 'true'
 
   const supabase = createSupabaseServer()
 
   // 1. ¿Está activado el sistema?
   const activo = await leerConfig(supabase, 'first_contact_activo', 'true')
   if (activo !== 'true') {
-    return NextResponse.json({ ok: true, skipped: 'first_contact_inactivo' })
+    const r = { ok: true, skipped: 'first_contact_inactivo' }
+    await logCronRun(supabase, startedAt, startMs, forced, 'skipped', r)
+    return NextResponse.json(r)
   }
 
   // 2. Ventana horaria (hora AR) — TEMPORALMENTE DESACTIVADA
@@ -141,29 +170,33 @@ export async function GET(req: NextRequest) {
 
   const yaEnviados = enviadosHoy ?? 0
   if (yaEnviados >= limiteDiario) {
-    return NextResponse.json({
+    const r = {
       ok: true,
       skipped: 'limite_diario_alcanzado',
       enviados_hoy: yaEnviados,
       limite: limiteDiario,
-    })
+    }
+    await logCronRun(supabase, startedAt, startMs, forced, 'skipped', r)
+    return NextResponse.json(r)
   }
 
-  // 4. Slot de cadencia (próximo envío)
+  // 4. Slot de cadencia (próximo envío) — salteable con ?force=true
   const nextSlotStr = await leerConfig(
     supabase,
     'first_contact_next_slot_at',
     '1970-01-01T00:00:00.000Z'
   )
   const nextSlotMs = new Date(nextSlotStr).getTime()
-  if (Number.isFinite(nextSlotMs) && nextSlotMs > Date.now()) {
+  if (!forced && Number.isFinite(nextSlotMs) && nextSlotMs > Date.now()) {
     const faltanMin = Math.ceil((nextSlotMs - Date.now()) / 60000)
-    return NextResponse.json({
+    const r = {
       ok: true,
       skipped: 'slot_no_alcanzado',
       next_slot_at: nextSlotStr,
       faltan_min: faltanMin,
-    })
+    }
+    await logCronRun(supabase, startedAt, startMs, forced, 'skipped', r)
+    return NextResponse.json(r)
   }
 
   // 5. Tomar lead pendiente más antiguo
@@ -181,12 +214,16 @@ export async function GET(req: NextRequest) {
     .maybeSingle()
 
   if (errLead) {
-    return NextResponse.json({ error: `db: ${errLead.message}` }, { status: 500 })
+    const r = { error: `db: ${errLead.message}` }
+    await logCronRun(supabase, startedAt, startMs, forced, 'error', r)
+    return NextResponse.json(r, { status: 500 })
   }
 
   const lead = leadData as LeadColaRow | null
   if (!lead) {
-    return NextResponse.json({ ok: true, skipped: 'sin_pendientes' })
+    const r = { ok: true, skipped: 'sin_pendientes' }
+    await logCronRun(supabase, startedAt, startMs, forced, 'skipped', r)
+    return NextResponse.json(r)
   }
 
   const telefono = String(lead.telefono).replace(/\D/g, '')
@@ -195,7 +232,9 @@ export async function GET(req: NextRequest) {
       estado: 'descartado',
       primer_envio_error: 'telefono_invalido',
     })
-    return NextResponse.json({ ok: false, skipped: 'telefono_invalido', lead_id: lead.id })
+    const r = { ok: false, skipped: 'telefono_invalido', lead_id: lead.id }
+    await logCronRun(supabase, startedAt, startMs, forced, 'error', r)
+    return NextResponse.json(r)
   }
 
   // 6. Generar mensaje si todavía no hay
@@ -214,11 +253,9 @@ export async function GET(req: NextRequest) {
         primer_envio_intentos: (lead.primer_envio_intentos ?? 0) + 1,
         primer_envio_error: 'generar_mensaje_fallo',
       })
-      return NextResponse.json({
-        ok: false,
-        lead_id: lead.id,
-        error: 'no_se_generó_mensaje',
-      })
+      const r = { ok: false, lead_id: lead.id, error: 'no_se_generó_mensaje' }
+      await logCronRun(supabase, startedAt, startMs, forced, 'error', r)
+      return NextResponse.json(r)
     }
 
     mensaje = generado
@@ -248,12 +285,9 @@ export async function GET(req: NextRequest) {
       primer_envio_error: `texto: ${msg}`.slice(0, 500),
     })
     // NO avanzamos el slot: el próximo tick reintenta
-    return NextResponse.json({
-      ok: false,
-      lead_id: lead.id,
-      error: 'texto_fallo',
-      detalle: msg,
-    })
+    const r = { ok: false, lead_id: lead.id, error: 'texto_fallo', detalle: msg }
+    await logCronRun(supabase, startedAt, startMs, forced, 'error', r)
+    return NextResponse.json(r)
   }
 
   // 8. Pausa humana antes del video (2-4s)
@@ -305,7 +339,7 @@ export async function GET(req: NextRequest) {
   const proximoSlot = new Date(Date.now() + proximoMin * 60 * 1000)
   await escribirConfig(supabase, 'first_contact_next_slot_at', proximoSlot.toISOString())
 
-  return NextResponse.json({
+  const r = {
     ok: true,
     lead_id: lead.id,
     nombre: lead.nombre,
@@ -317,7 +351,9 @@ export async function GET(req: NextRequest) {
     proximo_min: proximoMin,
     enviados_hoy: yaEnviados + 1,
     limite_diario: limiteDiario,
-  })
+  }
+  await logCronRun(supabase, startedAt, startMs, forced, 'success', r)
+  return NextResponse.json(r)
 }
 
 export async function POST(req: NextRequest) {
