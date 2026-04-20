@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 
+export const dynamic = 'force-dynamic'
+
 const LEADS_TABLE = 'leads_apex_next'
 const TZ_OFFSET_HOURS_AR = -3
 
@@ -17,17 +19,20 @@ export async function GET() {
 
   const inicioDiaUtc = inicioDelDiaArUtc().toISOString()
 
+  // Use limit(0) instead of head:true to avoid Vercel stripping Content-Range headers
   const [pendientesRes, enviadosHoyRes, configRes] = await Promise.all([
     supabase
       .from(LEADS_TABLE)
-      .select('*', { count: 'exact', head: true })
+      .select('id', { count: 'exact' })
       .eq('origen', 'outbound')
       .eq('mensaje_enviado', false)
-      .eq('estado', 'pendiente'),
+      .eq('estado', 'pendiente')
+      .limit(0),
     supabase
       .from(LEADS_TABLE)
-      .select('*', { count: 'exact', head: true })
-      .gte('primer_envio_completado_at', inicioDiaUtc),
+      .select('id', { count: 'exact' })
+      .gte('primer_envio_completado_at', inicioDiaUtc)
+      .limit(0),
     supabase
       .from('configuracion')
       .select('clave, valor')
@@ -47,7 +52,7 @@ export async function GET() {
     cfg[row.clave] = row.valor
   }
 
-  return NextResponse.json({
+  const res = NextResponse.json({
     pendientes: pendientesRes.count ?? 0,
     enviados_hoy: enviadosHoyRes.count ?? 0,
     limite_diario: parseInt(cfg.first_contact_limite_diario ?? '30', 10),
@@ -62,4 +67,7 @@ export async function GET() {
     next_slot_at: cfg.first_contact_next_slot_at ?? null,
     activo: (cfg.first_contact_activo ?? 'true') === 'true',
   })
+
+  res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate')
+  return res
 }

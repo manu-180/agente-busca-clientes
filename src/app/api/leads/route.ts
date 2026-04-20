@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { ejecutarConTablaLeads } from '@/lib/leads-table'
 
+export const dynamic = 'force-dynamic'
+
 // GET - listar leads
 export async function GET() {
   const supabase = createSupabaseServer()
