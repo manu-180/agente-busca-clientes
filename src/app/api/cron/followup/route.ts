@@ -12,12 +12,10 @@ export const maxDuration = 300
 const ESTADOS_EXCLUIDOS = new Set(['no_interesado', 'cliente'])
 
 function authCron(req: NextRequest): boolean {
-  const secret = process.env.CRON_SECRET?.trim()
-  const auth = req.headers.get('authorization')?.trim()
-  const expected = `Bearer ${secret}`
-  console.log(`[auth] secretLen=${secret?.length ?? 'UNDEF'} authLen=${auth?.length ?? 'NULL'} match=${auth === expected} auth="${auth}" expected="${expected}"`)
+  const secret = process.env.CRON_SECRET
   if (!secret) return false
-  return auth === expected
+  const auth = req.headers.get('authorization')
+  return auth === `Bearer ${secret}`
 }
 
 export async function GET(req: NextRequest) {

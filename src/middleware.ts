@@ -8,6 +8,11 @@ export function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
+  // Los crons tienen su propio token Bearer, no necesitan cookie
+  if (pathname.startsWith('/api/cron/')) {
+    return NextResponse.next()
+  }
+
   // El endpoint de login debe quedar público
   if (pathname === '/api/auth') {
     return NextResponse.next()
