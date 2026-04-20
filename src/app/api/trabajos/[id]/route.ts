@@ -52,14 +52,12 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
       }
     }
 
-    // Update valor of all cuotas if valor_cuota changed
-    if (current.valor_cuota !== valor_cuota) {
-      await supabase
-        .from('cuotas')
-        .update({ valor: valor_cuota })
-        .eq('trabajo_id', params.id)
-        .eq('pagado', false)
-    }
+    // Always sync valor on pending cuotas
+    await supabase
+      .from('cuotas')
+      .update({ valor: valor_cuota })
+      .eq('trabajo_id', params.id)
+      .eq('pagado', false)
   }
 
   return NextResponse.json({ trabajo: data })
