@@ -138,8 +138,30 @@ export async function GET(req: NextRequest) {
 
   const supabase = createSupabaseServer()
 
+  // 1-4. Leer toda la config en UNA sola query (evita 6 roundtrips secuenciales)
+  const CONFIG_KEYS = [
+    'first_contact_activo',
+    'first_contact_limite_diario',
+    'first_contact_next_slot_at',
+    'first_contact_max_reintentos',
+    'first_contact_intervalo_min_min',
+    'first_contact_intervalo_max_min',
+  ]
+  const { data: configRows } = await supabase
+    .from('configuracion')
+    .select('clave, valor')
+    .in('clave', CONFIG_KEYS)
+
+  const cfg = Object.fromEntries((configRows ?? []).map(c => [c.clave, c.valor as string]))
+
+  const activo        = cfg['first_contact_activo']        ?? 'true'
+  const limiteDiario  = parseInt(cfg['first_contact_limite_diario']      ?? '30', 10) || 30
+  const nextSlotStr   = cfg['first_contact_next_slot_at']  ?? '1970-01-01T00:00:00.000Z'
+  const maxReintentos = parseInt(cfg['first_contact_max_reintentos']     ?? '3',  10) || 3
+  const intMin        = parseInt(cfg['first_contact_intervalo_min_min']  ?? '10', 10) || 10
+  const intMax        = parseInt(cfg['first_contact_intervalo_max_min']  ?? '15', 10) || 15
+
   // 1. ¿Está activado el sistema?
-  const activo = await leerConfig(supabase, 'first_contact_activo', 'true')
   if (activo !== 'true') {
     const r = { ok: true, skipped: 'first_contact_inactivo' }
     await logCronRun(supabase, startedAt, startMs, forced, 'skipped', r)
@@ -148,21 +170,10 @@ export async function GET(req: NextRequest) {
 
   // 2. Ventana horaria (hora AR) — TEMPORALMENTE DESACTIVADA
   // const hora = horaArActual()
-  // const horaInicio = await leerConfigInt(supabase, 'first_contact_hora_inicio', 9)
-  // const horaFin = await leerConfigInt(supabase, 'first_contact_hora_fin', 21)
-  // if (hora < horaInicio || hora >= horaFin) {
-  //   return NextResponse.json({
-  //     ok: true,
-  //     skipped: 'fuera_de_horario',
-  //     hora_ar: hora,
-  //     ventana: `${horaInicio}-${horaFin}`,
-  //   })
-  // }
+  // ...
 
-  // 3. Límite diario
-  const limiteDiario = await leerConfigInt(supabase, 'first_contact_limite_diario', 30)
+  // 3. Límite diario + slot — en paralelo con la config ya leída
   const inicioDiaUtc = inicioDelDiaArUtc().toISOString()
-
   const { count: enviadosHoy } = await supabase
     .from(LEADS_TABLE)
     .select('*', { count: 'exact', head: true })
@@ -180,12 +191,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(r)
   }
 
-  // 4. Slot de cadencia (próximo envío) — salteable con ?force=true
-  const nextSlotStr = await leerConfig(
-    supabase,
-    'first_contact_next_slot_at',
-    '1970-01-01T00:00:00.000Z'
-  )
+  // 4. Slot de cadencia — salteable con ?force=true
   const nextSlotMs = new Date(nextSlotStr).getTime()
   if (!forced && Number.isFinite(nextSlotMs) && nextSlotMs > Date.now()) {
     const faltanMin = Math.ceil((nextSlotMs - Date.now()) / 60000)
@@ -200,7 +206,6 @@ export async function GET(req: NextRequest) {
   }
 
   // 5. Tomar lead pendiente más antiguo
-  const maxReintentos = await leerConfigInt(supabase, 'first_contact_max_reintentos', 3)
   const { data: leadData, error: errLead } = await supabase
     .from(LEADS_TABLE)
     .select('*')
@@ -290,40 +295,46 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(r)
   }
 
-  // 8. Pausa humana antes del video (2-4s)
-  await sleep(2000 + Math.floor(Math.random() * 2000))
+  // 8. Pausa humana antes del video (2-4s) — skip en modo force para evitar timeout
+  if (!forced) {
+    await sleep(2000 + Math.floor(Math.random() * 2000))
+  }
 
-  // 9. Enviar video (con reintentos internos). No bloquea si falla.
-  const videoUrl = process.env.VIDEO_PAGINA_URL
+  // 9. Enviar video — skip en modo force (el cron regular lo completará en próximo tick)
   let videoOk = false
   let videoError: string | null = null
 
-  if (videoUrl) {
-    const resultadoVideo = await enviarVideoWassengerConReintentos(telefono, videoUrl, 3)
-    videoOk = resultadoVideo.ok
-    videoError = resultadoVideo.error ?? null
+  if (!forced) {
+    const videoUrl = process.env.VIDEO_PAGINA_URL
+    if (videoUrl) {
+      const resultadoVideo = await enviarVideoWassengerConReintentos(telefono, videoUrl, 3)
+      videoOk = resultadoVideo.ok
+      videoError = resultadoVideo.error ?? null
 
-    if (videoOk) {
-      await actualizarLead(supabase, lead.id, { video_enviado: true })
-      await supabase.from('conversaciones').insert({
-        lead_id: lead.id,
-        telefono,
-        mensaje: '[VIDEO] Demo de landing — enviado automáticamente',
-        rol: 'agente',
-        tipo_mensaje: 'otro',
-        manual: false,
-      })
+      if (videoOk) {
+        await actualizarLead(supabase, lead.id, { video_enviado: true })
+        await supabase.from('conversaciones').insert({
+          lead_id: lead.id,
+          telefono,
+          mensaje: '[VIDEO] Demo de landing — enviado automáticamente',
+          rol: 'agente',
+          tipo_mensaje: 'otro',
+          manual: false,
+        })
+      } else {
+        console.error(
+          `[cron leads-pendientes] Video falló tras ${resultadoVideo.intentos} intentos:`,
+          videoError
+        )
+        await actualizarLead(supabase, lead.id, {
+          primer_envio_error: `video: ${videoError}`.slice(0, 500),
+        })
+      }
     } else {
-      console.error(
-        `[cron leads-pendientes] Video falló tras ${resultadoVideo.intentos} intentos:`,
-        videoError
-      )
-      await actualizarLead(supabase, lead.id, {
-        primer_envio_error: `video: ${videoError}`.slice(0, 500),
-      })
+      console.warn('[cron leads-pendientes] VIDEO_PAGINA_URL no configurada, salteando video')
     }
   } else {
-    console.warn('[cron leads-pendientes] VIDEO_PAGINA_URL no configurada, salteando video')
+    videoError = 'skipped_force_mode'
   }
 
   // 10. Primer contacto completado (texto enviado = contactado, aunque el video falle)
@@ -332,9 +343,7 @@ export async function GET(req: NextRequest) {
     primer_envio_completado_at: new Date().toISOString(),
   })
 
-  // 11. Avanzar slot para próximo envío (10-15 min por defecto)
-  const intMin = await leerConfigInt(supabase, 'first_contact_intervalo_min_min', 10)
-  const intMax = await leerConfigInt(supabase, 'first_contact_intervalo_max_min', 15)
+  // 11. Avanzar slot para próximo envío (10-15 min — ya leídos del batch inicial)
   const proximoMin = minAleatorio(intMin, intMax)
   const proximoSlot = new Date(Date.now() + proximoMin * 60 * 1000)
   await escribirConfig(supabase, 'first_contact_next_slot_at', proximoSlot.toISOString())
