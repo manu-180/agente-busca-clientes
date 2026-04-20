@@ -43,7 +43,7 @@ const EMPTY_FORM: TrabajoForm = {
   tipo: 'cuotas',
   valor_cuota: 0,
   moneda: 'ARS',
-  total_cuotas: 6,
+  total_cuotas: 3,
   fecha_inicio: new Date().toISOString().split('T')[0],
 }
 
@@ -141,12 +141,12 @@ function TrabajoFormModal({
           </div>
           <div>
             <label className={label}>Valor cuota</label>
-            <input className={input} type="number" min="0" value={form.valor_cuota} onChange={e => set('valor_cuota', parseFloat(e.target.value) || 0)} />
+            <input className={input} type="number" min="0" value={form.valor_cuota} onFocus={e => e.target.select()} onChange={e => set('valor_cuota', parseFloat(e.target.value) || 0)} />
           </div>
           {form.tipo === 'cuotas' && (
             <div>
               <label className={label}>Cantidad cuotas</label>
-              <input className={input} type="number" min="1" value={form.total_cuotas ?? ''} onChange={e => set('total_cuotas', parseInt(e.target.value) || null)} />
+              <input className={input} type="number" min="1" value={form.total_cuotas ?? ''} onFocus={e => e.target.select()} onChange={e => set('total_cuotas', parseInt(e.target.value) || null)} />
             </div>
           )}
           <div className={form.tipo === 'cuotas' ? '' : 'col-span-2'}>
@@ -274,7 +274,7 @@ function EditCuotaModal({
       <div className="space-y-4">
         <div>
           <label className={label}>Valor ({moneda})</label>
-          <input className={input} type="number" min="0" value={valor} onChange={e => setValor(e.target.value)} />
+          <input className={input} type="number" min="0" value={valor} onFocus={e => e.target.select()} onChange={e => setValor(e.target.value)} />
         </div>
         <div>
           <label className={label}>Fecha vencimiento</label>
@@ -485,7 +485,7 @@ function AddCuotaModal({
           </div>
           <div>
             <label className={label}>Valor ({trabajo.moneda})</label>
-            <input className={input} type="number" min="0" value={valor} onChange={e => setValor(e.target.value)} />
+            <input className={input} type="number" min="0" value={valor} onFocus={e => e.target.select()} onChange={e => setValor(e.target.value)} />
           </div>
           <div className="col-span-2">
             <label className={label}>Fecha vencimiento</label>
