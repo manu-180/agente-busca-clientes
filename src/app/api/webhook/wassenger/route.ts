@@ -52,8 +52,7 @@ const OWNER_PHONE = '5491124843094'
 const VENTANA_RESPUESTA_MANUAL_MS = 5 * 60 * 1000
 // Fix B: debounce subido de 3.5s → 6s para dar más margen a mensajes rápidos consecutivos
 const DEBOUNCE_MS = 6000
-// Fix A: el lock expira en 25s (margen sobre maxDuration=30s)
-const LOCK_TTL_MS = 25_000
+const LOCK_TTL_MS = 35_000
 
 const WASSENGER_MESSAGES_URL = 'https://api.wassenger.com/v1/messages'
 
@@ -130,6 +129,17 @@ async function liberarLock(
 }
 
 export async function POST(req: NextRequest) {
+  const webhookSecret = process.env.WASSENGER_WEBHOOK_SECRET
+  if (webhookSecret) {
+    const providedToken =
+      req.headers.get('x-webhook-token')
+      ?? req.headers.get('x-api-key')
+      ?? req.headers.get('authorization')?.replace('Bearer ', '')
+    if (providedToken !== webhookSecret) {
+      return NextResponse.json({ ok: true })
+    }
+  }
+
   let body: Record<string, unknown>
   try {
     body = await req.json()

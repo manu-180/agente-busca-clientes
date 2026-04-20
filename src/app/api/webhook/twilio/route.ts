@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { createHmac, timingSafeEqual } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { buildAgentPrompt, buildUserMessageWithLeadContext } from '@/lib/prompts'
@@ -58,7 +59,7 @@ const END_CONVERSATION_TOOL: Anthropic.Tool = {
 const OWNER_PHONE = '5491124843094'
 const VENTANA_RESPUESTA_MANUAL_MS = 5 * 60 * 1000
 const DEBOUNCE_MS = 6000
-const LOCK_TTL_MS = 25_000
+const LOCK_TTL_MS = 35_000
 
 async function enviarTwilioYGuardar(
   supabase: ReturnType<typeof createSupabaseServer>,
@@ -106,6 +107,22 @@ async function liberarLock(
   await supabase.from('leads').update({ procesando_hasta: null }).eq('id', leadId)
 }
 
+function verifyTwilioSignature(
+  authToken: string,
+  signature: string,
+  url: string,
+  params: Record<string, string>
+): boolean {
+  const sortedKeys = Object.keys(params).sort()
+  const paramString = sortedKeys.map(k => k + params[k]).join('')
+  const hmac = createHmac('sha1', authToken).update(url + paramString).digest('base64')
+  try {
+    return timingSafeEqual(Buffer.from(hmac), Buffer.from(signature))
+  } catch {
+    return false
+  }
+}
+
 export async function POST(req: NextRequest) {
   let form: FormData
   try {
@@ -113,6 +130,17 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     console.error('[Twilio Webhook] Error parsing form data:', error)
     return twimlOk()
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    const twilioSignature = req.headers.get('x-twilio-signature') ?? ''
+    const authToken = process.env.TWILIO_AUTH_TOKEN ?? ''
+    const url = req.url
+    const params: Record<string, string> = {}
+    form.forEach((value, key) => { params[key] = String(value) })
+    if (!twilioSignature || !verifyTwilioSignature(authToken, twilioSignature, url, params)) {
+      return new Response('<Response/>', { status: 403, headers: { 'Content-Type': 'text/xml' } })
+    }
   }
 
   const rawFrom = form.get('From') as string | null

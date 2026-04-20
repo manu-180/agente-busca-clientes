@@ -65,7 +65,7 @@ export async function GET(req: NextRequest) {
   // ── Send follow-up (contacted + 48h no reply) ──────────────────────
   const { data: toFollowUp } = await supabase
     .from('instagram_leads')
-    .select('id, ig_username, ig_thread_id, full_name, biography, business_category')
+    .select('id, ig_username, ig_thread_id, full_name, biography, business_category, dm_sent_count')
     .eq('status', 'contacted')
     .lt('last_dm_sent_at', threshold48h)
     .eq('reply_count', 0)
@@ -118,7 +118,7 @@ Devolvé ÚNICAMENTE el texto, sin comillas.`,
           status: 'follow_up_sent',
           follow_up_sent_at: now.toISOString(),
           last_dm_sent_at: now.toISOString(),
-          dm_sent_count: supabase.rpc as unknown as number, // updated via DB
+          dm_sent_count: (lead.dm_sent_count ?? 0) + 1,
         }).eq('id', lead.id),
 
         supabase.from('instagram_conversations').insert({

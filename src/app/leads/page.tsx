@@ -5,7 +5,7 @@ import { Search, Filter, ExternalLink, MessageSquare, Plus } from 'lucide-react'
 import Link from 'next/link'
 import type { Lead, EstadoLead } from '@/types'
 
-const ESTADOS: EstadoLead[] = ['pendiente', 'contactado', 'respondio', 'interesado', 'cerrado', 'descartado', 'no_interesado']
+const ESTADOS: EstadoLead[] = ['pendiente', 'contactado', 'respondio', 'interesado', 'presupuesto_enviado', 'cerrado', 'cliente', 'descartado', 'no_interesado']
 
 export default function LeadsPage() {
   const [leads, setLeads] = useState<Lead[]>([])

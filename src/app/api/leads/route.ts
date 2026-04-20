@@ -77,8 +77,17 @@ export async function PATCH(req: NextRequest) {
 
   if (!id) return NextResponse.json({ error: 'Falta id' }, { status: 400 })
 
+  const ALLOWED_PATCH_FIELDS = new Set([
+    'nombre', 'rubro', 'zona', 'telefono', 'instagram', 'descripcion',
+    'mensaje_inicial', 'estado', 'origen', 'agente_activo', 'conversacion_cerrada',
+    'conversacion_cerrada_at', 'notas',
+  ])
+  const safeUpdates = Object.fromEntries(
+    Object.entries(updates).filter(([k]) => ALLOWED_PATCH_FIELDS.has(k))
+  )
+
   const { data, error } = await ejecutarConTablaLeads((tabla) =>
-    supabase.from(tabla).update(updates).eq('id', id).select().single()
+    supabase.from(tabla).update(safeUpdates).eq('id', id).select().single()
   )
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

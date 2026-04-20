@@ -223,9 +223,7 @@ function CuotaRow({
           </span>
         )}
       </td>
-      {cuota.notas && (
-        <td className="px-4 py-3 text-xs text-apex-muted max-w-[160px] truncate">{cuota.notas}</td>
-      )}
+      <td className="px-4 py-3 text-xs text-apex-muted max-w-[160px] truncate">{cuota.notas ?? ''}</td>
       <td className="px-4 py-3">
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <button

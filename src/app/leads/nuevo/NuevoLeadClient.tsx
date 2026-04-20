@@ -504,7 +504,7 @@ export default function NuevoLeadClient() {
                     <p className="flex items-center gap-2">
                       <Star size={14} className="shrink-0" />
                       <span>
-                        {lead.rating.toFixed(1)} ({lead.cantidad_reviews} reviews)
+                        {(lead.rating ?? 0).toFixed(1)} ({lead.cantidad_reviews ?? 0} reviews)
                       </span>
                     </p>
                     <p className="flex items-center gap-2">

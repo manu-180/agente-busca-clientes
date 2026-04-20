@@ -50,7 +50,7 @@ export async function GET(req: NextRequest) {
     .is('sent_at', null)
     .order('scheduled_at', { ascending: true })
     .limit(1)
-    .single()
+    .maybeSingle()
 
   if (qErr || !queueItem) {
     return NextResponse.json({ ok: true, sent: 0, reason: 'no pending items' })
@@ -133,6 +133,14 @@ export async function GET(req: NextRequest) {
   const now = new Date().toISOString()
   const today = now.split('T')[0]
 
+  const { data: quotaRow } = await supabase
+    .from('dm_daily_quota')
+    .select('dms_sent')
+    .eq('sender_ig_username', IG_SENDER)
+    .eq('day', today)
+    .maybeSingle()
+  const dmsSentSoFar = quotaRow?.dms_sent ?? 0
+
   // Record everything in parallel
   await Promise.all([
     // Mark queue item sent
@@ -162,7 +170,7 @@ export async function GET(req: NextRequest) {
     supabase.from('dm_daily_quota').upsert({
       sender_ig_username: IG_SENDER,
       day: today,
-      dms_sent: 1,
+      dms_sent: dmsSentSoFar + 1,
       last_sent_at: now,
     }, { onConflict: 'sender_ig_username,day' }),
   ])

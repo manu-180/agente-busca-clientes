@@ -37,8 +37,6 @@ interface IgStats {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const ADMIN_KEY = process.env.NEXT_PUBLIC_ADMIN_KEY ?? ''
-
 const STATUS_COLORS: Record<string, string> = {
   discovered:        'bg-zinc-800 text-zinc-400',
   qualified:         'bg-blue-950 text-blue-400',
@@ -114,9 +112,7 @@ export default function IgDashboardPage() {
 
   const fetchStats = useCallback(async () => {
     try {
-      const res = await fetch('/api/ig/stats', {
-        headers: { 'x-admin-key': ADMIN_KEY },
-      })
+      const res = await fetch('/api/ig/stats')
       if (res.ok) setStats(await res.json())
     } catch { /* silent */ }
     finally {
@@ -136,7 +132,7 @@ export default function IgDashboardPage() {
     try {
       await fetch('/api/ig/pause', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-admin-key': ADMIN_KEY },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(resume ? { resume: true } : { hours: 24 }),
       })
       await fetchStats()

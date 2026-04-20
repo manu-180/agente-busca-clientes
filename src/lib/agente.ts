@@ -100,14 +100,14 @@ export async function generarRespuestaAgente({
 
     // 5. Traer historial
     console.log('[AGENTE] Cargando historial de conversación...')
-    const { data: historial } = await supabase
+    const { data: historialDesc } = await supabase
       .from('conversaciones')
       .select('rol, mensaje, timestamp')
       .eq('lead_id', lead.id)
-      .order('timestamp', { ascending: true })
+      .order('timestamp', { ascending: false })
       .limit(20)
 
-    const filasHistorial = historial ?? []
+    const filasHistorial = (historialDesc ?? []).reverse()
 
     const configConversacional = await obtenerConfigConversacional()
     const decision = decidirRespuestaConversacional({

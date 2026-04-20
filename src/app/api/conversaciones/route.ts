@@ -14,6 +14,7 @@ export async function GET() {
       sender:sender_id (id, alias, color, provider, phone_number)
     `)
     .order('timestamp', { ascending: true })
+    .limit(500)
 
   if (convError) return NextResponse.json({ error: convError.message }, { status: 500 })
 

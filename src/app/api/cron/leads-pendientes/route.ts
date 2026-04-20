@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 const TZ_OFFSET_HOURS_AR = -3
-const LEADS_TABLE = 'leads_apex_next'
+const LEADS_TABLE = 'leads'
 const MAX_REINTENTOS = 3
 
 // ─── Configuración de senders outbound ────────────────────────────────────────

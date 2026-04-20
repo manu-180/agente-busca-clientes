@@ -1,19 +1,9 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 
 export const dynamic = 'force-dynamic'
 
-function authAdmin(req: NextRequest): boolean {
-  const secret = process.env.ADMIN_PASSWORD
-  if (!secret) return false
-  return req.headers.get('x-admin-key') === secret
-}
-
-export async function GET(req: NextRequest) {
-  if (!authAdmin(req)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
+export async function GET() {
   const supabase = createSupabaseServer()
   const IG_SENDER = process.env.IG_SENDER_USERNAME ?? ''
   const DAILY_LIMIT = parseInt(process.env.DAILY_DM_LIMIT ?? '10', 10)
@@ -29,7 +19,6 @@ export async function GET(req: NextRequest) {
     replyRate7d,
     queuePending,
   ] = await Promise.all([
-    // Leads by status
     supabase
       .from('instagram_leads')
       .select('status')
@@ -41,7 +30,6 @@ export async function GET(req: NextRequest) {
         return counts
       }),
 
-    // Today's DM quota
     supabase
       .from('dm_daily_quota')
       .select('dms_sent')
@@ -50,7 +38,6 @@ export async function GET(req: NextRequest) {
       .maybeSingle()
       .then(({ data }) => data?.dms_sent ?? 0),
 
-    // Health log last 24h
     supabase
       .from('account_health_log')
       .select('event, payload, occurred_at, cooldown_until')
@@ -60,7 +47,6 @@ export async function GET(req: NextRequest) {
       .limit(20)
       .then(({ data }) => data ?? []),
 
-    // Recent leads (last 10 contacted/replied)
     supabase
       .from('instagram_leads')
       .select('id, ig_username, status, lead_score, contacted_at, reply_count, last_reply_at, business_category')
@@ -69,7 +55,6 @@ export async function GET(req: NextRequest) {
       .limit(10)
       .then(({ data }) => data ?? []),
 
-    // Reply rate last 7 days
     supabase
       .from('instagram_leads')
       .select('reply_count, contacted_at')
@@ -81,7 +66,6 @@ export async function GET(req: NextRequest) {
         return total > 0 ? { total, replied, rate: (replied / total) * 100 } : { total: 0, replied: 0, rate: 0 }
       }),
 
-    // Pending in queue
     supabase
       .from('dm_queue')
       .select('id', { count: 'exact', head: true })
@@ -89,7 +73,6 @@ export async function GET(req: NextRequest) {
       .then(({ count }) => count ?? 0),
   ])
 
-  // Active circuit breaker?
   const circuitOpen = healthLogs.some(
     (log) => log.cooldown_until && new Date(log.cooldown_until) > new Date(),
   )
@@ -97,7 +80,6 @@ export async function GET(req: NextRequest) {
     ? healthLogs.find((log) => log.cooldown_until && new Date(log.cooldown_until) > new Date())
     : null
 
-  // Shadowban suspicion: reply rate < 5% with ≥10 DMs sent in 7d
   const shadowbanSuspected = replyRate7d.total >= 10 && replyRate7d.rate < 5
 
   return NextResponse.json({

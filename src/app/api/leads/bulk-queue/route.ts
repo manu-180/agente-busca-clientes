@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 
-const LEADS_TABLE = 'leads_apex_next'
+const LEADS_TABLE = 'leads'
 
 interface LeadInput {
   nombre: string
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Ningún teléfono válido' }, { status: 400 })
     }
 
-    // Chequear contra leads_apex_next Y contra conversaciones (protege leads borrados que ya fueron contactados)
+    // Chequear contra leads Y contra conversaciones (protege leads borrados que ya fueron contactados)
     const [resLeads, resConvs] = await Promise.all([
       supabase.from(LEADS_TABLE).select('telefono').in('telefono', telefonos),
       supabase.from('conversaciones').select('telefono').in('telefono', telefonos),

@@ -15,7 +15,10 @@ function verifyApifySignature(req: NextRequest, rawBody: string): boolean {
     .createHmac('sha256', APIFY_WEBHOOK_SECRET)
     .update(rawBody)
     .digest('hex')
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+  const sigBuf = Buffer.from(signature)
+  const expBuf = Buffer.from(expected)
+  if (sigBuf.length !== expBuf.length) return false
+  return crypto.timingSafeEqual(sigBuf, expBuf)
 }
 
 export async function POST(req: NextRequest) {
