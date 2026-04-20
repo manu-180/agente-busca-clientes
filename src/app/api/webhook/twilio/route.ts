@@ -25,6 +25,15 @@ import { enviarMensajeTwilio } from '@/lib/twilio'
 
 export const maxDuration = 30
 
+// Twilio espera TwiML (XML) como respuesta, no JSON.
+// Devolvemos <Response/> vacío — el mensaje real se envía por la REST API.
+function twimlOk() {
+  return new Response('<Response/>', {
+    status: 200,
+    headers: { 'Content-Type': 'text/xml' },
+  })
+}
+
 const END_CONVERSATION_TOOL: Anthropic.Tool = {
   name: 'end_conversation',
   description:
@@ -100,7 +109,7 @@ export async function POST(req: NextRequest) {
     form = await req.formData()
   } catch (error) {
     console.error('[Twilio Webhook] Error parsing form data:', error)
-    return NextResponse.json({ ok: true, skipped: true })
+    return twimlOk()
   }
 
   const rawFrom = form.get('From') as string | null
@@ -114,11 +123,11 @@ export async function POST(req: NextRequest) {
   console.log('[Twilio Webhook] From:', telefono, 'Body:', mensaje.slice(0, 80))
 
   if (!telefono) {
-    return NextResponse.json({ ok: true, skipped: true })
+    return twimlOk()
   }
 
   if (telefono.includes(OWNER_PHONE)) {
-    return NextResponse.json({ ok: true, skipped: true, motivo: 'mensaje_propio' })
+    return twimlOk()
   }
 
   // Detectar tipo de mensaje
@@ -165,7 +174,8 @@ export async function POST(req: NextRequest) {
   }
 
   if (!lead) {
-    return NextResponse.json({ error: 'No se pudo crear/encontrar lead' }, { status: 500 })
+    console.error('[Twilio] No se pudo crear/encontrar lead')
+    return twimlOk()
   }
 
   const { data: insertadoMsg } = await supabase
@@ -197,7 +207,7 @@ export async function POST(req: NextRequest) {
   const agenteLeadOn = !!lead.agente_activo
 
   if (!agenteGlobalOn || !agenteLeadOn) {
-    return NextResponse.json({ ok: true, agente: false })
+    return twimlOk()
   }
 
   const desdeManual = new Date(Date.now() - VENTANA_RESPUESTA_MANUAL_MS).toISOString()
@@ -212,7 +222,7 @@ export async function POST(req: NextRequest) {
     .maybeSingle()
 
   if (recienteManual) {
-    return NextResponse.json({ ok: true, skipped: true, motivo: 'dueño_respondió_reciente' })
+    return twimlOk()
   }
 
   if (tipoMensaje !== 'texto') {
@@ -230,9 +240,8 @@ export async function POST(req: NextRequest) {
       })
     } catch (e) {
       console.error('[Twilio] Audio fallback error:', e)
-      return NextResponse.json({ ok: false, error: 'twilio_error' }, { status: 500 })
     }
-    return NextResponse.json({ ok: true, agente: true, tipo: 'audio_fallback' })
+    return twimlOk()
   }
 
   // Debounce 6s para agrupar mensajes consecutivos
@@ -249,14 +258,14 @@ export async function POST(req: NextRequest) {
       .maybeSingle()
 
     if (msgPosterior) {
-      return NextResponse.json({ ok: true, skipped: true, motivo: 'debounce' })
+      return twimlOk()
     }
   }
 
   const lockAdquirido = await adquirirLock(supabase, lead.id)
   if (!lockAdquirido) {
     console.log('[Twilio] Lock no disponible para lead', lead.id, '— skipping')
-    return NextResponse.json({ ok: true, skipped: true, motivo: 'procesando_lock' })
+    return twimlOk()
   }
 
   try {
@@ -313,7 +322,7 @@ export async function POST(req: NextRequest) {
           conversacion_cerrada_at: new Date().toISOString(),
         })
         .eq('id', lead.id)
-      return NextResponse.json({ ok: true, agente: false, motivo: 'no_interesado' })
+      return twimlOk()
     }
 
     if (decision.closeConversation) {
@@ -332,7 +341,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (decision.action === 'no_reply' || decision.action === 'close_conversation') {
-      return NextResponse.json({ ok: true, skipped: true, motivo: decision.reason })
+      return twimlOk()
     }
 
     if (decision.action === 'micro_ack') {
@@ -341,9 +350,8 @@ export async function POST(req: NextRequest) {
         await enviarTwilioYGuardar(supabase, telefono, lead.id, microAck)
       } catch (e) {
         console.error('[Twilio] micro_ack error:', e)
-        return NextResponse.json({ ok: false, error: 'twilio_error' }, { status: 500 })
       }
-      return NextResponse.json({ ok: true, agente: true, tipo: 'micro_ack' })
+      return twimlOk()
     }
 
     if (decision.action === 'handoff_human') {
@@ -353,9 +361,8 @@ export async function POST(req: NextRequest) {
         await enviarTwilioYGuardar(supabase, telefono, lead.id, handoffMsg)
       } catch (e) {
         console.error('[Twilio] handoff error:', e)
-        return NextResponse.json({ ok: false, error: 'twilio_error' }, { status: 500 })
       }
-      return NextResponse.json({ ok: true, agente: true, tipo: 'handoff_human' })
+      return twimlOk()
     }
 
     if (decision.action === 'confirm_close') {
@@ -372,14 +379,14 @@ export async function POST(req: NextRequest) {
           .eq('id', lead.id)
       } catch (e) {
         console.error('[Twilio] confirm_close error:', e)
-        return NextResponse.json({ ok: false, error: 'twilio_error' }, { status: 500 })
       }
-      return NextResponse.json({ ok: true, agente: true, tipo: 'confirm_close' })
+      return twimlOk()
     }
 
     const anthropicKey = process.env.ANTHROPIC_API_KEY
     if (!anthropicKey) {
-      return NextResponse.json({ ok: false, error: 'config' }, { status: 500 })
+      console.error('[Twilio] Falta ANTHROPIC_API_KEY')
+      return twimlOk()
     }
 
     const { data: apexInfo } = await supabase
@@ -415,7 +422,7 @@ export async function POST(req: NextRequest) {
 
     if (esAutoMensajeNegocio) {
       await enviarTwilioYGuardar(supabase, telefono, lead.id, RESPUESTA_OUTBOUND_TRAS_AUTOMATICO)
-      return NextResponse.json({ ok: true, agente: true, tipo: 'outbound_auto_negocio' })
+      return twimlOk()
     }
 
     const ultimosMensajesAgente = filasHistorial
@@ -427,7 +434,7 @@ export async function POST(req: NextRequest) {
 
     const resultadoEco = extraerContenidoNuevo(mensajeCombinado, ultimosMensajesAgente)
     if (resultadoEco.eraEco && !resultadoEco.texto) {
-      return NextResponse.json({ ok: true, skipped: true, motivo: 'eco_sin_contenido_nuevo' })
+      return twimlOk()
     }
     const mensajeEfectivo = resultadoEco.eraEco ? resultadoEco.texto : mensajeCombinado
 
@@ -584,7 +591,7 @@ export async function POST(req: NextRequest) {
     let respuesta = sanitizarRespuestaModelo(chequeo.texto)
 
     if (!respuesta) {
-      return NextResponse.json({ ok: true, agente: true, vacio: true })
+      return twimlOk()
     }
 
     if (!dealClosedByTool) {
@@ -609,10 +616,10 @@ export async function POST(req: NextRequest) {
       metadata: { length: respuesta.length },
     })
 
-    return NextResponse.json({ ok: true, agente: true })
+    return twimlOk()
   } catch (error) {
     console.error('[Twilio] Error en agente:', error)
-    return NextResponse.json({ ok: true, agente: false, error: 'agente_error' })
+    return twimlOk()
   } finally {
     await liberarLock(supabase, lead.id)
   }
