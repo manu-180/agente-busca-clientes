@@ -35,13 +35,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Ningún teléfono válido' }, { status: 400 })
     }
 
-    const { data: existentes } = await supabase
-      .from(LEADS_TABLE)
-      .select('telefono')
-      .in('telefono', telefonos)
+    // Chequear contra leads_apex_next Y contra conversaciones (protege leads borrados que ya fueron contactados)
+    const [resLeads, resConvs] = await Promise.all([
+      supabase.from(LEADS_TABLE).select('telefono').in('telefono', telefonos),
+      supabase.from('conversaciones').select('telefono').in('telefono', telefonos),
+    ])
 
     const telefonosExistentes = new Set(
-      (existentes ?? [])
+      [
+        ...(resLeads.data ?? []),
+        ...(resConvs.data ?? []),
+      ]
         .map(e => normalizarTelefono(String(e.telefono ?? '')))
         .filter(Boolean)
     )

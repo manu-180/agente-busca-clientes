@@ -51,3 +51,6 @@ export function pareceMensajeAutomaticoNegocio(texto: string): boolean {
 export const RESPUESTA_OUTBOUND_TRAS_AUTOMATICO = `Gracias por la info. Te escribimos nosotros con una propuesta que quedó en el mensaje de arriba.
 
 Cuando quieras charlamos. Para conocer el trabajo de APEX entrá a *www.theapexweb.com*`
+
+/** Respuesta cuando un intermediario/portero dice que va a reenviar el mensaje al decisor */
+export const RESPUESTA_GATEKEEPER = `Perfecto, gracias. Si le podés comentar que dejamos una propuesta arriba, genial. Cuando quieran charlar, por acá estamos.`

@@ -20,6 +20,19 @@ export async function POST(req: NextRequest) {
   const supabase = createSupabaseServer()
   const body = await req.json()
 
+  const telefonoNorm = body.telefono ? body.telefono.replace(/\D/g, '') : ''
+
+  // Dedup: no reinsertar si ya existe en leads o en conversaciones
+  if (telefonoNorm) {
+    const [{ data: leadExist }, { data: convExist }] = await Promise.all([
+      supabase.from('leads_apex_next').select('id').eq('telefono', telefonoNorm).maybeSingle(),
+      supabase.from('conversaciones').select('id').eq('telefono', telefonoNorm).limit(1).maybeSingle(),
+    ])
+    if (leadExist || convExist) {
+      return NextResponse.json({ error: 'Lead ya existente', duplicado: true }, { status: 409 })
+    }
+  }
+
   const { data, error } = await ejecutarConTablaLeads((tabla) =>
     supabase
       .from(tabla)
@@ -27,7 +40,7 @@ export async function POST(req: NextRequest) {
         nombre: body.nombre,
         rubro: body.rubro,
         zona: body.zona || 'Buenos Aires',
-        telefono: body.telefono,
+        telefono: telefonoNorm || body.telefono,
         instagram: body.instagram || null,
         descripcion: body.descripcion || '',
         mensaje_inicial: body.mensaje_inicial || '',

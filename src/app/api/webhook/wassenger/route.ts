@@ -5,6 +5,7 @@ import { buildAgentPrompt, buildUserMessageWithLeadContext } from '@/lib/prompts
 import {
   pareceMensajeAutomaticoNegocio,
   RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
+  RESPUESTA_GATEKEEPER,
 } from '@/lib/outbound-auto-reply'
 import { decidirRespuestaConversacional } from '@/lib/response-decision'
 import { obtenerConfigConversacional } from '@/lib/conversation-config'
@@ -456,6 +457,24 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: 'wassenger_error' }, { status: 500 })
       }
       return NextResponse.json({ ok: true, agente: true, tipo: 'confirm_close' })
+    }
+
+    if (decision.action === 'gatekeeper_relay') {
+      try {
+        await enviarWassengerYGuardar(supabase, telefono, lead.id, RESPUESTA_GATEKEEPER, senderId)
+        await registrarEventoConversacional({
+          leadId: lead.id,
+          telefono,
+          eventName: 'gatekeeper_relay_sent',
+          decisionAction: decision.action,
+          decisionReason: decision.reason,
+          confidence: decision.confidence,
+        })
+      } catch (e) {
+        console.error('Wassenger gatekeeper_relay error:', e)
+        return NextResponse.json({ ok: false, error: 'wassenger_error' }, { status: 500 })
+      }
+      return NextResponse.json({ ok: true, agente: true, tipo: 'gatekeeper_relay' })
     }
 
     const anthropicKey = process.env.ANTHROPIC_API_KEY

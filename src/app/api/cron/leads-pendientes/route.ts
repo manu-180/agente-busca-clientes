@@ -140,7 +140,12 @@ async function enviarTemplateTwilio(
   }
 }
 
+// Cuántos leads intentar por tick antes de rendirse
+const MAX_LEADS_POR_TICK = 10
+
 // ─── Procesar un sender ────────────────────────────────────────────────────────
+// Itera leads hasta enviar uno exitosamente (o agotar MAX_LEADS_POR_TICK).
+// Si falla 10 veces consecutivas entre ticks, pausa el sender automáticamente.
 async function procesarSender(
   sup: SupabaseClient,
   sender: SenderDef,
@@ -157,7 +162,6 @@ async function procesarSender(
     .eq('phone_number', phoneNumber)
     .maybeSingle()
 
-  // Si el sender existe en la tabla y está marcado inactivo, saltar
   if (senderRow && !senderRow.activo) return { status: 'inactivo' }
 
   const senderId = senderRow?.id ?? null
@@ -175,153 +179,172 @@ async function procesarSender(
     return { status: 'slot_no_alcanzado', next_slot_at: nextSlotStr, faltan_min: faltanMin }
   }
 
-  // 5. Elegir lead: el más antiguo pendiente que no haya tomado el otro sender en este tick
-  const { data: candidatos } = await sup
-    .from(LEADS_TABLE)
-    .select('*')
-    .eq('origen', 'outbound')
-    .eq('mensaje_enviado', false)
-    .eq('estado', 'pendiente')
-    .lt('primer_envio_intentos', MAX_REINTENTOS)
-    .not('telefono', 'is', null)
-    .order('created_at', { ascending: true })
-    .limit(20)
+  // 4. Loop: intentar leads hasta mandar uno o agotar MAX_LEADS_POR_TICK
+  const erroresTick: Array<{ lead_id: string; error: string }> = []
 
-  const lead = (candidatos ?? []).find(
-    (l: LeadColaRow) => !yaProcesoIds.includes(l.id)
-  ) as LeadColaRow | undefined
+  for (let i = 0; i < MAX_LEADS_POR_TICK; i++) {
+    // Elegir lead: el más antiguo pendiente que no haya tomado el otro sender en este tick
+    const { data: candidatos } = await sup
+      .from(LEADS_TABLE)
+      .select('*')
+      .eq('origen', 'outbound')
+      .eq('mensaje_enviado', false)
+      .eq('estado', 'pendiente')
+      .lt('primer_envio_intentos', MAX_REINTENTOS)
+      .not('telefono', 'is', null)
+      .order('created_at', { ascending: true })
+      .limit(20)
 
-  if (!lead) return { status: 'sin_pendientes' }
+    const lead = (candidatos ?? []).find(
+      (l: LeadColaRow) => !yaProcesoIds.includes(l.id)
+    ) as LeadColaRow | undefined
 
-  // Reservar este lead para que el otro sender no lo tome en el mismo tick
-  yaProcesoIds.push(lead.id)
-
-  const telefono = String(lead.telefono).replace(/\D/g, '')
-  if (!telefono) {
-    await actualizarLead(sup, lead.id, { estado: 'descartado', primer_envio_error: 'telefono_invalido' })
-    return { status: 'error', lead_id: lead.id, error: 'telefono_invalido' }
-  }
-
-  // 6. Enviar según provider
-  try {
-    let mensajeGuardado: string
-
-    if (provider === 'twilio' && contentSid) {
-      await enviarTemplateTwilio(telefono, lead.nombre, lead.zona, lead.rubro, phoneNumber, contentSid)
-      // Representación legible del template para guardar en conversaciones
-      mensajeGuardado = `Hola ${lead.nombre} 👋\n\nTrabajo con negocios de ${lead.zona} haciendo páginas web para ${lead.rubro}. ¿Qué decís?`
-    } else {
-      // Wassenger: generar mensaje dinámico
-      let mensaje = (lead.mensaje_inicial ?? '').trim()
-      if (!mensaje) {
-        const generado = await generarPrimerMensaje({
-          nombre: lead.nombre,
-          rubro: lead.rubro,
-          zona: lead.zona,
-          descripcion: lead.descripcion,
-          instagram: lead.instagram,
-        })
-        if (!generado) {
-          await actualizarLead(sup, lead.id, {
-            primer_envio_intentos: (lead.primer_envio_intentos ?? 0) + 1,
-            primer_envio_error: 'generar_mensaje_fallo',
-          })
-          yaProcesoIds.pop() // devolver el lead — el otro sender no puede arreglar esto
-          return { status: 'error', lead_id: lead.id, error: 'generar_mensaje_fallo' }
-        }
-        mensaje = generado
-        await actualizarLead(sup, lead.id, { mensaje_inicial: mensaje })
-      }
-      await enviarMensajeWassenger(telefono, mensaje)
-      mensajeGuardado = mensaje
-    }
-
-    // 7. Guardar conversación con sender_id
-    await sup.from('conversaciones').insert({
-      lead_id: lead.id,
-      telefono,
-      mensaje: mensajeGuardado,
-      rol: 'agente',
-      tipo_mensaje: 'texto',
-      manual: false,
-      sender_id: senderId,
-    })
-
-    // 8. Marcar lead como contactado
-    await actualizarLead(sup, lead.id, {
-      mensaje_enviado: true,
-      estado: 'contactado',
-      primer_envio_completado_at: new Date().toISOString(),
-      primer_envio_error: null,
-    })
-
-    // 9. Video solo para Wassenger (Twilio no lo soporta en primer contacto template)
-    let videoOk = false
-    let videoError: string | null = null
-    if (provider === 'wassenger' && !forced) {
-      const videoUrl = process.env.VIDEO_PAGINA_URL
-      if (videoUrl) {
-        await sleep(2000 + Math.floor(Math.random() * 2000))
-        const rv = await enviarVideoWassengerConReintentos(telefono, videoUrl, 3)
-        videoOk = rv.ok
-        videoError = rv.error ?? null
-        if (videoOk) {
-          await actualizarLead(sup, lead.id, { video_enviado: true })
-          await sup.from('conversaciones').insert({
-            lead_id: lead.id,
-            telefono,
-            mensaje: '[VIDEO] Demo de landing — enviado automáticamente',
-            rol: 'agente',
-            tipo_mensaje: 'otro',
-            manual: false,
-            sender_id: senderId,
-          })
-        }
+    if (!lead) {
+      return {
+        status: erroresTick.length > 0 ? 'error_sin_mas_candidatos' : 'sin_pendientes',
+        errores: erroresTick,
       }
     }
 
-    // 10. Avanzar slot y contador
-    await incrementarDailyCount(sup, key, enviados)
-    await escribirConfig(sup, `${key}_primer_fallos`, '0')
-    const proximoMin = minAleatorio(intMin, intMax)
-    const proximoSlot = new Date(Date.now() + proximoMin * 60_000)
-    await escribirConfig(sup, `${key}_primer_next_slot_at`, proximoSlot.toISOString())
+    // Reservar para que el otro sender no lo tome en el mismo tick
+    yaProcesoIds.push(lead.id)
 
-    return {
-      status: 'ok',
-      lead_id: lead.id,
-      nombre: lead.nombre,
-      enviados_hoy: enviados + 1,
-      limite: dailyLimit,
-      proximo_slot_at: proximoSlot.toISOString(),
-      proximo_min: proximoMin,
-      ...(provider === 'wassenger' ? { video_ok: videoOk, video_error: videoError } : {}),
+    const telefono = String(lead.telefono).replace(/\D/g, '')
+    if (!telefono) {
+      await actualizarLead(sup, lead.id, { estado: 'descartado', primer_envio_error: 'telefono_invalido' })
+      continue // teléfono inválido no es fallo del sender
     }
 
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    console.error(`[cron leads-pendientes] [${key}] Error enviando:`, msg)
+    try {
+      let mensajeGuardado: string
 
-    await actualizarLead(sup, lead.id, {
-      primer_envio_intentos: (lead.primer_envio_intentos ?? 0) + 1,
-      primer_envio_error: msg.slice(0, 500),
-    })
+      if (provider === 'twilio' && contentSid) {
+        await enviarTemplateTwilio(telefono, lead.nombre, lead.zona, lead.rubro, phoneNumber, contentSid)
+        mensajeGuardado = `Hola ${lead.nombre} 👋\n\nTrabajo con negocios de ${lead.zona} haciendo páginas web para ${lead.rubro}. ¿Qué decís?`
+      } else {
+        // Wassenger: generar mensaje dinámico
+        let mensaje = (lead.mensaje_inicial ?? '').trim()
+        if (!mensaje) {
+          const generado = await generarPrimerMensaje({
+            nombre: lead.nombre,
+            rubro: lead.rubro,
+            zona: lead.zona,
+            descripcion: lead.descripcion,
+            instagram: lead.instagram,
+          })
+          if (!generado) {
+            await actualizarLead(sup, lead.id, {
+              primer_envio_intentos: (lead.primer_envio_intentos ?? 0) + 1,
+              primer_envio_error: 'generar_mensaje_fallo',
+            })
+            continue // fallo de generación no es fallo del sender
+          }
+          mensaje = generado
+          await actualizarLead(sup, lead.id, { mensaje_inicial: mensaje })
+        }
+        await enviarMensajeWassenger(telefono, mensaje)
+        mensajeGuardado = mensaje
+      }
 
-    const fallosAntes = parseInt(await leerConfig(sup, `${key}_primer_fallos`, '0'), 10) || 0
-    const fallos = fallosAntes + 1
-    await escribirConfig(sup, `${key}_primer_fallos`, String(fallos))
-    // Resetear slot a pasado para reintentar en el próximo tick
-    await escribirConfig(sup, `${key}_primer_next_slot_at`, '1970-01-01T00:00:00.000Z')
-    if (fallos >= 10) {
-      await escribirConfig(sup, `${key}_primer_activo`, 'false')
-      console.error(`[cron leads-pendientes] [${key}] 10 fallos consecutivos — sender pausado`)
+      // Guardar conversación
+      await sup.from('conversaciones').insert({
+        lead_id: lead.id,
+        telefono,
+        mensaje: mensajeGuardado,
+        rol: 'agente',
+        tipo_mensaje: 'texto',
+        manual: false,
+        sender_id: senderId,
+      })
+
+      await actualizarLead(sup, lead.id, {
+        mensaje_enviado: true,
+        estado: 'contactado',
+        primer_envio_completado_at: new Date().toISOString(),
+        primer_envio_error: null,
+      })
+
+      // Video solo para Wassenger
+      let videoOk = false
+      let videoError: string | null = null
+      if (provider === 'wassenger' && !forced) {
+        const videoUrl = process.env.VIDEO_PAGINA_URL
+        if (videoUrl) {
+          await sleep(2000 + Math.floor(Math.random() * 2000))
+          const rv = await enviarVideoWassengerConReintentos(telefono, videoUrl, 3)
+          videoOk = rv.ok
+          videoError = rv.error ?? null
+          if (videoOk) {
+            await actualizarLead(sup, lead.id, { video_enviado: true })
+            await sup.from('conversaciones').insert({
+              lead_id: lead.id,
+              telefono,
+              mensaje: '[VIDEO] Demo de landing — enviado automáticamente',
+              rol: 'agente',
+              tipo_mensaje: 'otro',
+              manual: false,
+              sender_id: senderId,
+            })
+          }
+        }
+      }
+
+      // Éxito: reset fallos, avanzar slot y contador
+      await incrementarDailyCount(sup, key, enviados)
+      await escribirConfig(sup, `${key}_primer_fallos`, '0')
+      const proximoMin = minAleatorio(intMin, intMax)
+      const proximoSlot = new Date(Date.now() + proximoMin * 60_000)
+      await escribirConfig(sup, `${key}_primer_next_slot_at`, proximoSlot.toISOString())
+
+      return {
+        status: 'ok',
+        lead_id: lead.id,
+        nombre: lead.nombre,
+        enviados_hoy: enviados + 1,
+        limite: dailyLimit,
+        proximo_slot_at: proximoSlot.toISOString(),
+        proximo_min: proximoMin,
+        intentos_hasta_envio: i + 1,
+        ...(erroresTick.length > 0 ? { saltados: erroresTick.length } : {}),
+        ...(provider === 'wassenger' ? { video_ok: videoOk, video_error: videoError } : {}),
+      }
+
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      console.error(`[cron leads-pendientes] [${key}] Lead ${lead.id} falló:`, msg)
+
+      erroresTick.push({ lead_id: lead.id, error: msg })
+
+      await actualizarLead(sup, lead.id, {
+        primer_envio_intentos: (lead.primer_envio_intentos ?? 0) + 1,
+        primer_envio_error: msg.slice(0, 500),
+      })
+
+      const fallosAntes = parseInt(await leerConfig(sup, `${key}_primer_fallos`, '0'), 10) || 0
+      const fallos = fallosAntes + 1
+      await escribirConfig(sup, `${key}_primer_fallos`, String(fallos))
+
+      if (fallos >= 10) {
+        // Pausar el sender automáticamente en la tabla senders (visible en UI)
+        if (senderRow?.id) {
+          await sup.from('senders').update({ activo: false }).eq('id', senderRow.id)
+        }
+        console.error(`[cron leads-pendientes] [${key}] 10 fallos consecutivos — sender pausado automáticamente`)
+        return {
+          status: 'pausado_auto',
+          lead_id: lead.id,
+          error: msg,
+          fallos_consecutivos: fallos,
+          errores_tick: erroresTick,
+        }
+      }
+
+      console.warn(`[cron leads-pendientes] [${key}] Fallo ${fallos}/10 — saltando al siguiente lead...`)
+      // Continúa el loop con el siguiente lead
     }
-
-    // Liberar el lead para que el otro sender lo intente si puede
-    yaProcesoIds.pop()
-
-    return { status: 'error', lead_id: lead.id, error: msg, fallos_consecutivos: fallos }
   }
+
+  return { status: 'error_max_intentos_tick', intentos: MAX_LEADS_POR_TICK, errores: erroresTick }
 }
 
 // ─── Handler ──────────────────────────────────────────────────────────────────

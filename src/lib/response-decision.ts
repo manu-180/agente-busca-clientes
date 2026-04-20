@@ -7,6 +7,7 @@ export type DecisionAction =
   | 'handoff_human'
   | 'close_conversation'
   | 'confirm_close'
+  | 'gatekeeper_relay'
 
 export type DecisionReason =
   | 'empty'
@@ -19,6 +20,7 @@ export type DecisionReason =
   | 'simple_greeting'
   | 'default_full_reply'
   | 'commit_signal'
+  | 'gatekeeper_response'
 
 export interface ConversationDecision {
   action: DecisionAction
@@ -97,6 +99,45 @@ const CLOSING_PHRASES = [
 ]
 
 const GREETINGS = new Set(['hola', 'buenas', 'buen dia', 'buen día', 'hello'])
+
+// Respuestas de portero/intermediario: alguien dice que va a pasar el mensaje a otro
+const GATEKEEPER_PHRASES = [
+  'lo envio al sector',
+  'lo envío al sector',
+  'lo envio a quien',
+  'lo envío a quien',
+  'te paso con',
+  'te paso al',
+  'lo paso al',
+  'lo paso a ',
+  'te derivo',
+  'lo derivo',
+  'le aviso',
+  'se lo comento',
+  'se lo hago saber',
+  'se lo digo',
+  'le paso el mensaje',
+  'se lo paso',
+  'lo voy a comentar',
+  'voy a comentar',
+  'te pongo en contacto',
+  'se lo hare saber',
+  'se lo haré saber',
+  'se lo comunicare',
+  'se lo comunicaré',
+  'lo voy a pasar',
+  'lo voy a derivar',
+  'lo derivo',
+  'al sector correspondiente',
+  'quien corresponda',
+  'a quien corresponda',
+  'al encargado',
+  'al responsable',
+  'con el dueno',
+  'con el dueño',
+  'con la duena',
+  'con la dueña',
+]
 
 // Señales de compromiso real — el cliente ya decidió, solo necesita el próximo paso
 const COMMIT_SIGNALS = [
@@ -270,6 +311,15 @@ export function decidirRespuestaConversacional(input: DecisionInput): Conversati
       confidence: 0.92,
       closeConversation: true,
       eventName: 'confirm_close_commit_signal',
+    }
+  }
+
+  if (includesAny(normalized, GATEKEEPER_PHRASES)) {
+    return {
+      action: 'gatekeeper_relay',
+      reason: 'gatekeeper_response',
+      confidence: 0.93,
+      eventName: 'gatekeeper_relay_detected',
     }
   }
 
