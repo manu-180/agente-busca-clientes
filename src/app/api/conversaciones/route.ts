@@ -50,3 +50,21 @@ export async function GET() {
 
   return NextResponse.json({ grupos: gruposArray })
 }
+
+export async function PATCH(request: Request) {
+  const supabase = createSupabaseServer()
+  const { lead_id } = await request.json()
+
+  if (!lead_id) return NextResponse.json({ error: 'lead_id requerido' }, { status: 400 })
+
+  const { error } = await supabase
+    .from('conversaciones')
+    .update({ leido: true })
+    .eq('lead_id', lead_id)
+    .eq('leido', false)
+    .eq('rol', 'cliente')
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  return NextResponse.json({ ok: true })
+}

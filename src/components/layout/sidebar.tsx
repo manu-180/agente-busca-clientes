@@ -6,14 +6,14 @@ import {
   LayoutDashboard, Users, UserPlus, MessageSquare,
   Bot, Settings, Menu, X, Zap, Sparkles, Instagram, FileText
 } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/leads', label: 'Leads WA', icon: Users },
   { href: '/leads/nuevo', label: 'Nuevo Lead', icon: UserPlus },
-  { href: '/conversaciones', label: 'Inbox WA', icon: MessageSquare },
+  { href: '/conversaciones', label: 'Inbox WA', icon: MessageSquare, showBadge: true },
   { href: '/agente', label: 'Agente IA', icon: Bot },
   { href: '/demos', label: 'Demos', icon: Sparkles },
   { href: '/admin/ig', label: 'Instagram', icon: Instagram },
@@ -24,6 +24,20 @@ const navItems = [
 export function Sidebar() {
   const pathname = usePathname()
   const [open, setOpen] = useState(false)
+  const [unreadTotal, setUnreadTotal] = useState(0)
+
+  useEffect(() => {
+    const fetchUnread = async () => {
+      try {
+        const res = await fetch('/api/conversaciones/unread')
+        const data = await res.json()
+        setUnreadTotal(data.total ?? 0)
+      } catch {}
+    }
+    fetchUnread()
+    const interval = setInterval(fetchUnread, 30000)
+    return () => clearInterval(interval)
+  }, [])
 
   return (
     <>
@@ -69,6 +83,7 @@ export function Sidebar() {
         <nav className="flex-1 p-4 space-y-1">
           {navItems.map((item) => {
             const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
+            const badgeCount = item.showBadge ? unreadTotal : 0
             return (
               <Link
                 key={item.href}
@@ -82,7 +97,12 @@ export function Sidebar() {
                 )}
               >
                 <item.icon size={18} />
-                {item.label}
+                <span className="flex-1">{item.label}</span>
+                {badgeCount > 0 && (
+                  <span className="bg-red-500 text-white text-[10px] font-bold min-w-[20px] h-5 px-1 rounded-full flex items-center justify-center">
+                    {badgeCount > 99 ? '99+' : badgeCount}
+                  </span>
+                )}
               </Link>
             )
           })}

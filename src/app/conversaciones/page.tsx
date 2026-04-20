@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useRef } from 'react'
-import { MessageSquare, Send, Bot, BotOff, UserCheck, CheckCircle, ArrowLeft } from 'lucide-react'
+import { MessageSquare, Send, Bot, BotOff, UserCheck, CheckCircle, ArrowLeft, Sparkles, Loader2 } from 'lucide-react'
 import type { Lead, Conversacion } from '@/types'
 
 interface ConversacionGrupo {
@@ -18,6 +18,7 @@ export default function ConversacionesPage() {
   const [nuevoMensaje, setNuevoMensaje] = useState('')
   const [loading, setLoading] = useState(true)
   const [enviando, setEnviando] = useState(false)
+  const [sugiriendo, setSugiriendo] = useState(false)
   const chatRef = useRef<HTMLDivElement>(null)
 
   const cargarConversaciones = async () => {
@@ -34,7 +35,6 @@ export default function ConversacionesPage() {
 
   useEffect(() => {
     cargarConversaciones()
-    // Polling cada 10 segundos
     const interval = setInterval(cargarConversaciones, 10000)
     return () => clearInterval(interval)
   }, [])
@@ -46,6 +46,21 @@ export default function ConversacionesPage() {
   }, [seleccionado, grupos])
 
   const grupoActivo = grupos.find(g => g.lead.id === seleccionado)
+
+  const seleccionarLead = async (leadId: string) => {
+    // Optimistic update: quitar badge inmediatamente
+    setGrupos(prev => prev.map(g =>
+      g.lead.id === leadId ? { ...g, no_leidos: 0 } : g
+    ))
+    setSeleccionado(leadId)
+
+    // Marcar como leído en DB (fire and forget)
+    fetch('/api/conversaciones', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lead_id: leadId }),
+    })
+  }
 
   const enviarMensaje = async () => {
     if (!nuevoMensaje.trim() || !grupoActivo) return
@@ -67,6 +82,24 @@ export default function ConversacionesPage() {
       console.error(err)
     } finally {
       setEnviando(false)
+    }
+  }
+
+  const sugerirRespuesta = async () => {
+    if (!grupoActivo) return
+    setSugiriendo(true)
+    try {
+      const res = await fetch('/api/agente/sugerir', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lead_id: grupoActivo.lead.id }),
+      })
+      const data = await res.json()
+      if (data.sugerencia) setNuevoMensaje(data.sugerencia)
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setSugiriendo(false)
     }
   }
 
@@ -115,7 +148,7 @@ export default function ConversacionesPage() {
               grupos.map(grupo => (
                 <button
                   key={grupo.lead.id}
-                  onClick={() => setSeleccionado(grupo.lead.id)}
+                  onClick={() => seleccionarLead(grupo.lead.id)}
                   className={`w-full text-left p-4 border-b border-apex-border/50 hover:bg-apex-border/20 transition-colors ${
                     seleccionado === grupo.lead.id ? 'bg-apex-lime/5 border-l-2 border-l-apex-lime' : ''
                   }`}
@@ -134,7 +167,7 @@ export default function ConversacionesPage() {
                       {grupo.lead.estado}
                     </span>
                     <span className="text-[10px] text-apex-muted font-mono">
-                      {new Date(grupo.ultimo_timestamp).toLocaleString('es-AR', { 
+                      {new Date(grupo.ultimo_timestamp).toLocaleString('es-AR', {
                         hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit'
                       })}
                     </span>
@@ -235,6 +268,14 @@ export default function ConversacionesPage() {
                     placeholder="Escribí un mensaje manual..."
                     className="flex-1 bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
                   />
+                  <button
+                    onClick={sugerirRespuesta}
+                    disabled={sugiriendo}
+                    title="Sugerir respuesta con IA"
+                    className="bg-apex-border text-apex-muted hover:text-apex-lime hover:bg-apex-lime/10 p-2.5 rounded-lg transition-colors disabled:opacity-40"
+                  >
+                    {sugiriendo ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
+                  </button>
                   <button
                     onClick={enviarMensaje}
                     disabled={!nuevoMensaje.trim() || enviando}
