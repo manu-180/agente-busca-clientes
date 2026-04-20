@@ -146,6 +146,7 @@ export async function GET(req: NextRequest) {
     'first_contact_max_reintentos',
     'first_contact_intervalo_min_min',
     'first_contact_intervalo_max_min',
+    'first_contact_fallos_consecutivos',
   ]
   const { data: configRows } = await supabase
     .from('configuracion')
@@ -154,12 +155,13 @@ export async function GET(req: NextRequest) {
 
   const cfg = Object.fromEntries((configRows ?? []).map(c => [c.clave, c.valor as string]))
 
-  const activo        = cfg['first_contact_activo']        ?? 'true'
-  const limiteDiario  = parseInt(cfg['first_contact_limite_diario']      ?? '30', 10) || 30
-  const nextSlotStr   = cfg['first_contact_next_slot_at']  ?? '1970-01-01T00:00:00.000Z'
-  const maxReintentos = parseInt(cfg['first_contact_max_reintentos']     ?? '3',  10) || 3
-  const intMin        = parseInt(cfg['first_contact_intervalo_min_min']  ?? '10', 10) || 10
-  const intMax        = parseInt(cfg['first_contact_intervalo_max_min']  ?? '15', 10) || 15
+  const activo             = cfg['first_contact_activo']             ?? 'true'
+  const limiteDiario       = parseInt(cfg['first_contact_limite_diario']       ?? '30', 10) || 30
+  const nextSlotStr        = cfg['first_contact_next_slot_at']       ?? '1970-01-01T00:00:00.000Z'
+  const maxReintentos      = parseInt(cfg['first_contact_max_reintentos']      ?? '3',  10) || 3
+  const intMin             = parseInt(cfg['first_contact_intervalo_min_min']   ?? '10', 10) || 10
+  const intMax             = parseInt(cfg['first_contact_intervalo_max_min']   ?? '15', 10) || 15
+  const fallosConsecutivos = parseInt(cfg['first_contact_fallos_consecutivos'] ?? '0',  10) || 0
 
   // 1. ¿Está activado el sistema?
   if (activo !== 'true') {
@@ -285,12 +287,34 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error('[cron leads-pendientes] Error enviando texto:', msg)
+
     await actualizarLead(supabase, lead.id, {
       primer_envio_intentos: (lead.primer_envio_intentos ?? 0) + 1,
       primer_envio_error: `texto: ${msg}`.slice(0, 500),
     })
-    // NO avanzamos el slot: el próximo tick reintenta
-    const r = { ok: false, lead_id: lead.id, error: 'texto_fallo', detalle: msg }
+
+    const nuevosFallos = fallosConsecutivos + 1
+
+    // Resetear slot a pasado → el próximo tick del cron reintenta de inmediato
+    await escribirConfig(supabase, 'first_contact_next_slot_at', '1970-01-01T00:00:00.000Z')
+    await escribirConfig(supabase, 'first_contact_fallos_consecutivos', String(nuevosFallos))
+
+    // 10 fallos consecutivos → pausar SOLO el enviador (agente_activo no se toca)
+    let enviadorPausado = false
+    if (nuevosFallos >= 10) {
+      await escribirConfig(supabase, 'first_contact_activo', 'false')
+      enviadorPausado = true
+      console.error(`[cron leads-pendientes] ${nuevosFallos} fallos consecutivos — enviador pausado automáticamente`)
+    }
+
+    const r = {
+      ok: false,
+      lead_id: lead.id,
+      error: 'texto_fallo',
+      detalle: msg,
+      fallos_consecutivos: nuevosFallos,
+      ...(enviadorPausado ? { enviador_pausado: true } : {}),
+    }
     await logCronRun(supabase, startedAt, startMs, forced, 'error', r)
     return NextResponse.json(r)
   }
@@ -344,6 +368,10 @@ export async function GET(req: NextRequest) {
   })
 
   // 11. Avanzar slot para próximo envío (10-15 min — ya leídos del batch inicial)
+  //     y resetear contador de fallos consecutivos
+  if (fallosConsecutivos > 0) {
+    await escribirConfig(supabase, 'first_contact_fallos_consecutivos', '0')
+  }
   const proximoMin = minAleatorio(intMin, intMax)
   const proximoSlot = new Date(Date.now() + proximoMin * 60 * 1000)
   await escribirConfig(supabase, 'first_contact_next_slot_at', proximoSlot.toISOString())
