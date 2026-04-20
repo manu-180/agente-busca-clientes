@@ -7,6 +7,11 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
+// Parsea "200.000" o "200,000" o "200000" → 200000
+function parseCurrency(v: string): number {
+  return parseFloat(v.replace(/\./g, '').replace(',', '.')) || 0
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Cuota {
@@ -141,7 +146,7 @@ function TrabajoFormModal({
           </div>
           <div>
             <label className={label}>Valor cuota</label>
-            <input className={input} type="number" min="0" value={form.valor_cuota} onFocus={e => e.target.select()} onChange={e => set('valor_cuota', parseFloat(e.target.value) || 0)} />
+            <input className={input} type="text" inputMode="numeric" value={form.valor_cuota === 0 ? '' : String(form.valor_cuota)} onFocus={e => e.target.select()} placeholder="Ej: 200000" onChange={e => set('valor_cuota', parseCurrency(e.target.value))} />
           </div>
           {form.tipo === 'cuotas' && (
             <div>
@@ -274,7 +279,7 @@ function EditCuotaModal({
       <div className="space-y-4">
         <div>
           <label className={label}>Valor ({moneda})</label>
-          <input className={input} type="number" min="0" value={valor} onFocus={e => e.target.select()} onChange={e => setValor(e.target.value)} />
+          <input className={input} type="text" inputMode="numeric" value={valor} onFocus={e => e.target.select()} placeholder="Ej: 200000" onChange={e => setValor(e.target.value)} />
         </div>
         <div>
           <label className={label}>Fecha vencimiento</label>
@@ -289,7 +294,7 @@ function EditCuotaModal({
             Cancelar
           </button>
           <button
-            onClick={() => onSave({ valor: parseFloat(valor), fecha_vencimiento: fecha || null, notas: notas || null })}
+            onClick={() => onSave({ valor: parseCurrency(valor), fecha_vencimiento: fecha || null, notas: notas || null })}
             disabled={loading}
             className="flex-1 px-4 py-2.5 rounded-lg bg-apex-lime text-apex-black font-semibold text-sm hover:bg-apex-lime-hover disabled:opacity-40 transition-colors"
           >
@@ -485,7 +490,7 @@ function AddCuotaModal({
           </div>
           <div>
             <label className={label}>Valor ({trabajo.moneda})</label>
-            <input className={input} type="number" min="0" value={valor} onFocus={e => e.target.select()} onChange={e => setValor(e.target.value)} />
+            <input className={input} type="text" inputMode="numeric" value={valor} onFocus={e => e.target.select()} placeholder="Ej: 200000" onChange={e => setValor(e.target.value)} />
           </div>
           <div className="col-span-2">
             <label className={label}>Fecha vencimiento</label>
@@ -501,7 +506,7 @@ function AddCuotaModal({
             Cancelar
           </button>
           <button
-            onClick={() => onSave({ trabajo_id: trabajo.id, numero_cuota: num, valor: parseFloat(valor), fecha_vencimiento: fecha || null, notas })}
+            onClick={() => onSave({ trabajo_id: trabajo.id, numero_cuota: num, valor: parseCurrency(valor), fecha_vencimiento: fecha || null, notas })}
             disabled={loading}
             className="flex-1 px-4 py-2.5 rounded-lg bg-apex-lime text-apex-black font-semibold text-sm hover:bg-apex-lime-hover disabled:opacity-40 transition-colors"
           >
