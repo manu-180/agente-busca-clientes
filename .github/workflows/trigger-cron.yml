@@ -16,38 +16,25 @@ jobs:
         run: |
           PROJECT_ID="prj_h6gFiShNAp9Ja5foPk98zqOdBbm7"
           TEAM_ID="team_howttfzs3Q44mOpVn93EkrUm"
-          COMMIT_SHA="${{ github.sha }}"
-
-          echo "Waiting for Vercel deployment of commit $COMMIT_SHA..."
+          echo "Waiting for deployment to be READY..."
 
           for attempt in $(seq 1 24); do
-            RESPONSE=$(curl -sf \
+            STATE=$(curl -sf \
               -H "Authorization: Bearer $VERCEL_TOKEN" \
-              "https://api.vercel.com/v6/deployments?projectId=${PROJECT_ID}&teamId=${TEAM_ID}&limit=5&target=production" \
-              2>/dev/null || echo '{"deployments":[]}')
+              "https://api.vercel.com/v6/deployments?projectId=${PROJECT_ID}&teamId=${TEAM_ID}&limit=1&target=production" \
+              2>/dev/null \
+              | grep -o '"state":"[^"]*"' | head -1 \
+              | tr -d '"' | cut -d: -f2)
 
-            STATE=$(echo "$RESPONSE" | python3 -c "
-import sys, json
-try:
-    data = json.load(sys.stdin)
-    for d in data.get('deployments', []):
-        sha = d.get('meta', {}).get('githubCommitSha', '')
-        if sha == '$COMMIT_SHA':
-            print(d.get('state', 'UNKNOWN'))
-            sys.exit(0)
-    print('NOT_FOUND')
-except Exception as e:
-    print('PARSE_ERROR')
-" 2>/dev/null || echo "ERROR")
-
+            [ -z "$STATE" ] && STATE="UNKNOWN"
             echo "Attempt $attempt/24 — state: $STATE"
 
             if [ "$STATE" = "READY" ]; then
-              echo "✓ Production deployment ready"
+              echo "✓ Deployment is READY"
               break
             fi
             if [ "$STATE" = "ERROR" ] || [ "$STATE" = "CANCELED" ]; then
-              echo "✗ Deployment failed: $STATE"
+              echo "✗ Deployment failed with: $STATE"
               exit 1
             fi
 
@@ -58,9 +45,11 @@ except Exception as e:
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          echo "Triggering cron with force=true..."
+          echo "--- Triggering cron with force=true ---"
 
           for attempt in 1 2 3; do
+            echo ""
+            echo "=== Attempt $attempt ==="
             RESPONSE=$(curl -s -w "\n%{http_code}" \
               -H "Authorization: Bearer $CRON_SECRET" \
               "https://apex-leads-six.vercel.app/api/cron/leads-pendientes?force=true")
@@ -68,12 +57,16 @@ except Exception as e:
             HTTP_CODE=$(echo "$RESPONSE" | tail -1)
             BODY=$(echo "$RESPONSE" | head -1)
 
-            echo "Attempt $attempt — HTTP $HTTP_CODE"
-            echo "$BODY" | python3 -m json.tool 2>/dev/null || echo "$BODY"
+            echo "HTTP: $HTTP_CODE"
+            echo "Body: $BODY"
 
             if [ "$HTTP_CODE" = "200" ]; then
               echo "✓ Cron triggered successfully"
               exit 0
+            fi
+
+            if [ "$HTTP_CODE" = "401" ]; then
+              echo "✗ Unauthorized — verificá que CRON_SECRET en GitHub coincida con el de Vercel"
             fi
 
             [ $attempt -lt 3 ] && sleep 20
