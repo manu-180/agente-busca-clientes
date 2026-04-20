@@ -117,18 +117,18 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: 'first_contact_inactivo' })
   }
 
-  // 2. Ventana horaria (hora AR)
-  const hora = horaArActual()
-  const horaInicio = await leerConfigInt(supabase, 'first_contact_hora_inicio', 9)
-  const horaFin = await leerConfigInt(supabase, 'first_contact_hora_fin', 21)
-  if (hora < horaInicio || hora >= horaFin) {
-    return NextResponse.json({
-      ok: true,
-      skipped: 'fuera_de_horario',
-      hora_ar: hora,
-      ventana: `${horaInicio}-${horaFin}`,
-    })
-  }
+  // 2. Ventana horaria (hora AR) — TEMPORALMENTE DESACTIVADA
+  // const hora = horaArActual()
+  // const horaInicio = await leerConfigInt(supabase, 'first_contact_hora_inicio', 9)
+  // const horaFin = await leerConfigInt(supabase, 'first_contact_hora_fin', 21)
+  // if (hora < horaInicio || hora >= horaFin) {
+  //   return NextResponse.json({
+  //     ok: true,
+  //     skipped: 'fuera_de_horario',
+  //     hora_ar: hora,
+  //     ventana: `${horaInicio}-${horaFin}`,
+  //   })
+  // }
 
   // 3. Límite diario
   const limiteDiario = await leerConfigInt(supabase, 'first_contact_limite_diario', 30)
