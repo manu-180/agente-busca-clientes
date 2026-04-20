@@ -149,9 +149,18 @@ async function procesarSender(
 ): Promise<Record<string, unknown>> {
   const { key, provider, phoneNumber, contentSid, dailyLimit, intMin, intMax } = sender
 
-  // 1. ¿Sender activo?
-  const activo = await leerConfig(sup, `${key}_primer_activo`, 'true')
-  if (activo !== 'true') return { status: 'inactivo' }
+  // 1. Verificar sender en tabla senders (activo + id para taggear conversaciones)
+  const { data: senderRow } = await sup
+    .from('senders')
+    .select('id, activo')
+    .eq('provider', provider)
+    .eq('phone_number', phoneNumber)
+    .maybeSingle()
+
+  // Si el sender existe en la tabla y está marcado inactivo, saltar
+  if (senderRow && !senderRow.activo) return { status: 'inactivo' }
+
+  const senderId = senderRow?.id ?? null
 
   // 2. Límite diario
   const enviados = await leerDailyCount(sup, key)
@@ -165,15 +174,6 @@ async function procesarSender(
     const faltanMin = Math.ceil((new Date(nextSlotStr).getTime() - Date.now()) / 60_000)
     return { status: 'slot_no_alcanzado', next_slot_at: nextSlotStr, faltan_min: faltanMin }
   }
-
-  // 4. ID del sender en tabla senders (para taggear conversaciones)
-  const { data: senderRow } = await sup
-    .from('senders')
-    .select('id')
-    .eq('provider', provider)
-    .eq('phone_number', phoneNumber)
-    .maybeSingle()
-  const senderId = senderRow?.id ?? null
 
   // 5. Elegir lead: el más antiguo pendiente que no haya tomado el otro sender en este tick
   const { data: candidatos } = await sup
