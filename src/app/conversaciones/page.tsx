@@ -1,15 +1,24 @@
 'use client'
 
 import { useEffect, useState, useRef } from 'react'
-import { MessageSquare, Send, Bot, BotOff, UserCheck, CheckCircle, ArrowLeft, Sparkles, Loader2 } from 'lucide-react'
+import { MessageSquare, Send, Bot, BotOff, UserCheck, CheckCircle, ArrowLeft, Sparkles, Loader2, CheckCheck } from 'lucide-react'
 import type { Lead, Conversacion } from '@/types'
+
+interface SenderInfo {
+  id: string
+  alias: string
+  color: string
+  provider: 'twilio' | 'wassenger'
+  phone_number: string
+}
 
 interface ConversacionGrupo {
   lead: Lead
-  mensajes: Conversacion[]
+  mensajes: (Conversacion & { sender?: SenderInfo | null })[]
   ultimo_mensaje: string
   ultimo_timestamp: string
   no_leidos: number
+  sender: SenderInfo | null
 }
 
 export default function ConversacionesPage() {
@@ -19,6 +28,7 @@ export default function ConversacionesPage() {
   const [loading, setLoading] = useState(true)
   const [enviando, setEnviando] = useState(false)
   const [sugiriendo, setSugiriendo] = useState(false)
+  const [filtroSender, setFiltroSender] = useState<string | null>(null)
   const chatRef = useRef<HTMLDivElement>(null)
 
   const cargarConversaciones = async () => {
@@ -47,14 +57,22 @@ export default function ConversacionesPage() {
 
   const grupoActivo = grupos.find(g => g.lead.id === seleccionado)
 
+  const leerTodos = async () => {
+    setGrupos(prev => prev.map(g => ({ ...g, no_leidos: 0 })))
+    fetch('/api/conversaciones', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ all: true }),
+    })
+  }
+
+  const totalNoLeidos = grupos.reduce((acc, g) => acc + g.no_leidos, 0)
+
   const seleccionarLead = async (leadId: string) => {
-    // Optimistic update: quitar badge inmediatamente
     setGrupos(prev => prev.map(g =>
       g.lead.id === leadId ? { ...g, no_leidos: 0 } : g
     ))
     setSeleccionado(leadId)
-
-    // Marcar como leído en DB (fire and forget)
     fetch('/api/conversaciones', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -73,6 +91,7 @@ export default function ConversacionesPage() {
           telefono: grupoActivo.lead.telefono,
           mensaje: nuevoMensaje,
           lead_id: grupoActivo.lead.id,
+          sender_id: grupoActivo.sender?.id ?? null,
           manual: true,
         }),
       })
@@ -121,6 +140,19 @@ export default function ConversacionesPage() {
     await cargarConversaciones()
   }
 
+  // Senders únicos para el filtro
+  const sendersUnicos = Array.from(
+    new Map(
+      grupos
+        .filter(g => g.sender)
+        .map(g => [g.sender!.id, g.sender!])
+    ).values()
+  )
+
+  const gruposFiltrados = filtroSender
+    ? grupos.filter(g => g.sender?.id === filtroSender)
+    : grupos
+
   return (
     <div className="space-y-4">
       <div>
@@ -131,21 +163,62 @@ export default function ConversacionesPage() {
       <div className="flex gap-4 h-[calc(100vh-200px)]">
         {/* Lista de conversaciones */}
         <div className={`w-full lg:w-80 flex-shrink-0 bg-apex-card border border-apex-border rounded-xl overflow-hidden flex flex-col ${seleccionado ? 'hidden lg:flex' : 'flex'}`}>
-          <div className="p-4 border-b border-apex-border">
+          <div className="p-4 border-b border-apex-border flex items-center justify-between">
             <p className="text-xs font-mono text-apex-muted uppercase tracking-wider">
-              {grupos.length} conversaciones
+              {gruposFiltrados.length} conversaciones
             </p>
+            {totalNoLeidos > 0 && (
+              <button
+                onClick={leerTodos}
+                title="Marcar todas como leídas"
+                className="flex items-center gap-1 text-[11px] font-mono text-apex-muted hover:text-apex-lime transition-colors group"
+              >
+                <CheckCheck size={13} className="group-hover:text-apex-lime transition-colors" />
+                <span>leer todos</span>
+              </button>
+            )}
           </div>
+
+          {/* Filtro por sender */}
+          {sendersUnicos.length > 1 && (
+            <div className="px-4 py-2 border-b border-apex-border flex gap-2 flex-wrap">
+              <button
+                onClick={() => setFiltroSender(null)}
+                className={`text-[10px] font-mono px-2 py-1 rounded-full border transition-colors ${
+                  !filtroSender
+                    ? 'border-apex-lime text-apex-lime bg-apex-lime/10'
+                    : 'border-apex-border text-apex-muted hover:text-white'
+                }`}
+              >
+                Todos
+              </button>
+              {sendersUnicos.map(s => (
+                <button
+                  key={s.id}
+                  onClick={() => setFiltroSender(filtroSender === s.id ? null : s.id)}
+                  className={`text-[10px] font-mono px-2 py-1 rounded-full border transition-colors ${
+                    filtroSender === s.id
+                      ? 'border-current'
+                      : 'border-apex-border text-apex-muted hover:text-white'
+                  }`}
+                  style={filtroSender === s.id ? { color: s.color, borderColor: s.color, background: s.color + '15' } : {}}
+                >
+                  {s.alias}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="flex-1 overflow-y-auto">
             {loading ? (
               <p className="p-4 text-sm text-apex-muted">Cargando...</p>
-            ) : grupos.length === 0 ? (
+            ) : gruposFiltrados.length === 0 ? (
               <div className="p-6 text-center">
                 <MessageSquare size={32} className="text-apex-muted mx-auto mb-3" />
                 <p className="text-sm text-apex-muted">No hay conversaciones aún</p>
               </div>
             ) : (
-              grupos.map(grupo => (
+              gruposFiltrados.map(grupo => (
                 <button
                   key={grupo.lead.id}
                   onClick={() => seleccionarLead(grupo.lead.id)}
@@ -154,12 +227,22 @@ export default function ConversacionesPage() {
                   }`}
                 >
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium truncate">{grupo.lead.nombre}</span>
-                    {grupo.no_leidos > 0 && (
-                      <span className="bg-red-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center">
-                        {grupo.no_leidos}
-                      </span>
-                    )}
+                    <span className="text-sm font-medium truncate flex-1 mr-2">{grupo.lead.nombre}</span>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {grupo.sender && (
+                        <span
+                          className="text-[9px] font-mono px-1.5 py-0.5 rounded-full border"
+                          style={{ color: grupo.sender.color, borderColor: grupo.sender.color + '60', background: grupo.sender.color + '15' }}
+                        >
+                          {grupo.sender.alias}
+                        </span>
+                      )}
+                      {grupo.no_leidos > 0 && (
+                        <span className="bg-red-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center">
+                          {grupo.no_leidos}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <p className="text-xs text-apex-muted truncate">{grupo.ultimo_mensaje}</p>
                   <div className="flex items-center justify-between mt-1">
@@ -200,7 +283,14 @@ export default function ConversacionesPage() {
                   </button>
                   <div>
                     <h3 className="font-semibold text-sm">{grupoActivo.lead.nombre}</h3>
-                    <p className="text-[11px] text-apex-muted font-mono">{grupoActivo.lead.telefono} · {grupoActivo.lead.rubro}</p>
+                    <p className="text-[11px] text-apex-muted font-mono">
+                      {grupoActivo.lead.telefono} · {grupoActivo.lead.rubro}
+                      {grupoActivo.sender && (
+                        <span className="ml-2" style={{ color: grupoActivo.sender.color }}>
+                          · desde {grupoActivo.sender.alias} ({grupoActivo.sender.phone_number})
+                        </span>
+                      )}
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">

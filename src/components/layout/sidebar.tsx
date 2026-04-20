@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, Users, UserPlus, MessageSquare,
-  Bot, Settings, Menu, X, Zap, Sparkles, Instagram, FileText
+  Bot, Settings, Menu, X, Zap, Sparkles, Instagram, FileText, Smartphone
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { cn } from '@/lib/utils'
@@ -18,6 +18,7 @@ const navItems = [
   { href: '/demos', label: 'Demos', icon: Sparkles },
   { href: '/admin/ig', label: 'Instagram', icon: Instagram },
   { href: '/logs', label: 'Logs', icon: FileText },
+  { href: '/senders', label: 'Senders', icon: Smartphone },
   { href: '/configuracion', label: 'Config', icon: Settings },
 ]
 

@@ -55,7 +55,7 @@ const END_CONVERSATION_TOOL: Anthropic.Tool = {
   },
 }
 
-const OWNER_PHONE = '5491124842720'
+const OWNER_PHONE = '5491124843094'
 const VENTANA_RESPUESTA_MANUAL_MS = 5 * 60 * 1000
 const DEBOUNCE_MS = 6000
 const LOCK_TTL_MS = 25_000
@@ -64,9 +64,11 @@ async function enviarTwilioYGuardar(
   supabase: ReturnType<typeof createSupabaseServer>,
   telefono: string,
   leadId: string,
-  texto: string
+  texto: string,
+  senderPhone?: string,
+  senderId?: string | null
 ) {
-  await enviarMensajeTwilio(telefono, texto)
+  await enviarMensajeTwilio(telefono, texto, senderPhone)
 
   await supabase.from('conversaciones').insert({
     lead_id: leadId,
@@ -75,6 +77,7 @@ async function enviarTwilioYGuardar(
     rol: 'agente',
     tipo_mensaje: 'texto',
     manual: false,
+    sender_id: senderId ?? null,
   })
 }
 
@@ -113,20 +116,38 @@ export async function POST(req: NextRequest) {
   }
 
   const rawFrom = form.get('From') as string | null
+  const rawTo = form.get('To') as string | null
   const mensaje = (form.get('Body') as string | null) ?? ''
   const numMedia = parseInt((form.get('NumMedia') as string | null) ?? '0', 10)
   const mediaContentType = (form.get('MediaContentType0') as string | null) ?? ''
 
   // Twilio format: "whatsapp:+5491124843094" → "5491124843094"
   const telefono = rawFrom?.replace('whatsapp:', '').replace(/^\+/, '') ?? ''
+  const nuestroNumero = rawTo?.replace('whatsapp:', '') ?? process.env.TWILIO_WHATSAPP_NUMBER!
 
-  console.log('[Twilio Webhook] From:', telefono, 'Body:', mensaje.slice(0, 80))
+  console.log('[Twilio Webhook] From:', telefono, 'To:', nuestroNumero, 'Body:', mensaje.slice(0, 80))
 
   if (!telefono) {
     return twimlOk()
   }
 
-  if (telefono.includes(OWNER_PHONE)) {
+  const supabase = createSupabaseServer()
+
+  // Lookup sender — también usamos para filtrar mensajes propios
+  const { data: senderData } = await supabase
+    .from('senders')
+    .select('id, alias, phone_number, activo')
+    .eq('provider', 'twilio')
+    .eq('phone_number', nuestroNumero)
+    .maybeSingle()
+
+  const senderId = senderData?.id ?? null
+  const senderPhone = senderData?.phone_number ?? nuestroNumero
+
+  // Filtrar mensajes propios usando todos los números sender conocidos
+  const { data: ownSenders } = await supabase.from('senders').select('phone_number')
+  const ownNumbers = ownSenders?.map(s => s.phone_number.replace(/^\+/, '').replace(/\D/g, '')) ?? [OWNER_PHONE]
+  if (ownNumbers.some(n => telefono.includes(n))) {
     return twimlOk()
   }
 
@@ -141,8 +162,6 @@ export async function POST(req: NextRequest) {
       tipoMensaje = 'otro'
     }
   }
-
-  const supabase = createSupabaseServer()
 
   let { data: lead } = await supabase
     .from('leads')
@@ -187,6 +206,7 @@ export async function POST(req: NextRequest) {
       rol: 'cliente',
       tipo_mensaje: tipoMensaje,
       leido: false,
+      sender_id: senderId,
     })
     .select('id, timestamp')
     .single()
@@ -229,7 +249,7 @@ export async function POST(req: NextRequest) {
     const respAudio =
       'Disculpá, no puedo escuchar audios ni ver imágenes por acá. ¿Me lo podés escribir en texto?'
     try {
-      await enviarTwilioYGuardar(supabase, telefono, lead.id, respAudio)
+      await enviarTwilioYGuardar(supabase, telefono, lead.id, respAudio, senderPhone, senderId)
       await registrarEventoConversacional({
         leadId: lead.id,
         telefono,
@@ -347,7 +367,7 @@ export async function POST(req: NextRequest) {
     if (decision.action === 'micro_ack') {
       const microAck = 'Gracias por el mensaje. Si querés, te paso el siguiente paso en 1 línea.'
       try {
-        await enviarTwilioYGuardar(supabase, telefono, lead.id, microAck)
+        await enviarTwilioYGuardar(supabase, telefono, lead.id, microAck, senderPhone, senderId)
       } catch (e) {
         console.error('[Twilio] micro_ack error:', e)
       }
@@ -358,7 +378,7 @@ export async function POST(req: NextRequest) {
       const handoffMsg =
         'Perfecto. Te deriva una persona del equipo de APEX para seguir esto con vos. Si querés, te toman el caso por acá.'
       try {
-        await enviarTwilioYGuardar(supabase, telefono, lead.id, handoffMsg)
+        await enviarTwilioYGuardar(supabase, telefono, lead.id, handoffMsg, senderPhone, senderId)
       } catch (e) {
         console.error('[Twilio] handoff error:', e)
       }
@@ -368,7 +388,7 @@ export async function POST(req: NextRequest) {
     if (decision.action === 'confirm_close') {
       const closeMsg = 'Genial. Te escribe alguien del equipo a la brevedad para coordinar los detalles.'
       try {
-        await enviarTwilioYGuardar(supabase, telefono, lead.id, closeMsg)
+        await enviarTwilioYGuardar(supabase, telefono, lead.id, closeMsg, senderPhone, senderId)
         await supabase
           .from('leads')
           .update({
@@ -421,7 +441,7 @@ export async function POST(req: NextRequest) {
       pareceMensajeAutomaticoNegocio(mensajeCombinado)
 
     if (esAutoMensajeNegocio) {
-      await enviarTwilioYGuardar(supabase, telefono, lead.id, RESPUESTA_OUTBOUND_TRAS_AUTOMATICO)
+      await enviarTwilioYGuardar(supabase, telefono, lead.id, RESPUESTA_OUTBOUND_TRAS_AUTOMATICO, senderPhone, senderId)
       return twimlOk()
     }
 
@@ -605,7 +625,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    await enviarTwilioYGuardar(supabase, telefono, lead.id, respuesta)
+    await enviarTwilioYGuardar(supabase, telefono, lead.id, respuesta, senderPhone, senderId)
     await registrarEventoConversacional({
       leadId: lead.id,
       telefono,

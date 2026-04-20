@@ -4,9 +4,9 @@ function getTwilioAuth() {
   return 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64')
 }
 
-export async function enviarMensajeTwilio(telefono: string, mensaje: string) {
+export async function enviarMensajeTwilio(telefono: string, mensaje: string, fromNumber?: string) {
   const accountSid = process.env.TWILIO_ACCOUNT_SID!
-  const from = process.env.TWILIO_WHATSAPP_NUMBER!
+  const from = fromNumber ?? process.env.TWILIO_WHATSAPP_NUMBER!
 
   const res = await fetch(
     `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,

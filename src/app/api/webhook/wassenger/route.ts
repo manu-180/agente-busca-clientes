@@ -47,7 +47,7 @@ const END_CONVERSATION_TOOL: Anthropic.Tool = {
   },
 }
 
-const OWNER_PHONE = '5491124842720'
+const OWNER_PHONE = '5491124843094'
 const VENTANA_RESPUESTA_MANUAL_MS = 5 * 60 * 1000
 // Fix B: debounce subido de 3.5s → 6s para dar más margen a mensajes rápidos consecutivos
 const DEBOUNCE_MS = 6000
@@ -60,7 +60,8 @@ async function enviarWassengerYGuardar(
   supabase: ReturnType<typeof createSupabaseServer>,
   telefono: string,
   leadId: string,
-  texto: string
+  texto: string,
+  senderId?: string | null
 ) {
   const apiKey = process.env.WASSENGER_API_KEY
   if (!apiKey) {
@@ -92,6 +93,7 @@ async function enviarWassengerYGuardar(
     rol: 'agente',
     tipo_mensaje: 'texto',
     manual: false,
+    sender_id: senderId ?? null,
   })
 }
 
@@ -160,6 +162,16 @@ export async function POST(req: NextRequest) {
 
   const supabase = createSupabaseServer()
 
+  const { data: senderWassenger } = await supabase
+    .from('senders')
+    .select('id')
+    .eq('provider', 'wassenger')
+    .eq('activo', true)
+    .limit(1)
+    .maybeSingle()
+
+  const senderId = senderWassenger?.id ?? null
+
   let tipoMensaje: 'texto' | 'audio' | 'imagen' | 'otro' = 'texto'
   if (tipoOriginal === 'ptt' || tipoOriginal === 'audio') tipoMensaje = 'audio'
   else if (tipoOriginal === 'image') tipoMensaje = 'imagen'
@@ -209,6 +221,7 @@ export async function POST(req: NextRequest) {
       rol: 'cliente',
       tipo_mensaje: tipoMensaje,
       leido: false,
+      sender_id: senderId,
     })
     .select('id, timestamp')
     .single()
@@ -256,7 +269,7 @@ export async function POST(req: NextRequest) {
       'Disculpá, no puedo escuchar audios ni ver imágenes por acá. ¿Me lo podés escribir en texto?'
     console.log('[Wassenger] Enviando respuesta por audio/imagen recibido')
     try {
-      await enviarWassengerYGuardar(supabase, telefono, lead.id, respAudio)
+      await enviarWassengerYGuardar(supabase, telefono, lead.id, respAudio, senderId)
       await registrarEventoConversacional({
         leadId: lead.id,
         telefono,
@@ -382,7 +395,7 @@ export async function POST(req: NextRequest) {
     if (decision.action === 'micro_ack') {
       const microAck = 'Gracias por el mensaje. Si querés, te paso el siguiente paso en 1 línea.'
       try {
-        await enviarWassengerYGuardar(supabase, telefono, lead.id, microAck)
+        await enviarWassengerYGuardar(supabase, telefono, lead.id, microAck, senderId)
         await registrarEventoConversacional({
           leadId: lead.id,
           telefono,
@@ -402,7 +415,7 @@ export async function POST(req: NextRequest) {
       const handoffMsg =
         'Perfecto. Te deriva una persona del equipo de APEX para seguir esto con vos. Si querés, te toman el caso por acá.'
       try {
-        await enviarWassengerYGuardar(supabase, telefono, lead.id, handoffMsg)
+        await enviarWassengerYGuardar(supabase, telefono, lead.id, handoffMsg, senderId)
         await registrarEventoConversacional({
           leadId: lead.id,
           telefono,
@@ -421,7 +434,7 @@ export async function POST(req: NextRequest) {
     if (decision.action === 'confirm_close') {
       const closeMsg = 'Genial. Te escribe alguien del equipo a la brevedad para coordinar los detalles.'
       try {
-        await enviarWassengerYGuardar(supabase, telefono, lead.id, closeMsg)
+        await enviarWassengerYGuardar(supabase, telefono, lead.id, closeMsg, senderId)
         await supabase
           .from('leads')
           .update({
@@ -496,7 +509,7 @@ export async function POST(req: NextRequest) {
 
     if (esAutoMensajeNegocio) {
       console.log('[Wassenger] Outbound: mensaje del cliente parece respuesta automática del negocio')
-      await enviarWassengerYGuardar(supabase, telefono, lead.id, RESPUESTA_OUTBOUND_TRAS_AUTOMATICO)
+      await enviarWassengerYGuardar(supabase, telefono, lead.id, RESPUESTA_OUTBOUND_TRAS_AUTOMATICO, senderId)
       await registrarEventoConversacional({
         leadId: lead.id,
         telefono,
@@ -789,7 +802,7 @@ export async function POST(req: NextRequest) {
     }
 
     console.log('[Wassenger] Agente generó respuesta, enviando...')
-    await enviarWassengerYGuardar(supabase, telefono, lead.id, respuesta)
+    await enviarWassengerYGuardar(supabase, telefono, lead.id, respuesta, senderId)
     await registrarEventoConversacional({
       leadId: lead.id,
       telefono,

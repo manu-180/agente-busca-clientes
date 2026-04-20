@@ -4,10 +4,13 @@ import { createSupabaseServer } from '@/lib/supabase-server'
 export async function GET() {
   const supabase = createSupabaseServer()
 
-  // Traer todas las conversaciones con sus leads
   const { data: conversaciones, error: convError } = await supabase
     .from('conversaciones')
-    .select('*')
+    .select(`
+      id, lead_id, telefono, mensaje, rol, tipo_mensaje,
+      timestamp, leido, manual,
+      sender:sender_id (id, alias, color, provider, phone_number)
+    `)
     .order('timestamp', { ascending: true })
 
   if (convError) return NextResponse.json({ error: convError.message }, { status: 500 })
@@ -18,7 +21,6 @@ export async function GET() {
 
   if (leadsError) return NextResponse.json({ error: leadsError.message }, { status: 500 })
 
-  // Agrupar por lead
   const leadsMap = new Map(leads?.map(l => [l.id, l]) ?? [])
   const grupos: Record<string, any> = {}
 
@@ -33,17 +35,21 @@ export async function GET() {
         ultimo_mensaje: '',
         ultimo_timestamp: '',
         no_leidos: 0,
+        sender: null,
       }
     }
     grupos[conv.lead_id].mensajes.push(conv)
     grupos[conv.lead_id].ultimo_mensaje = conv.mensaje
     grupos[conv.lead_id].ultimo_timestamp = conv.timestamp
+    // El sender del grupo es el del último mensaje con sender
+    if (conv.sender) {
+      grupos[conv.lead_id].sender = conv.sender
+    }
     if (!conv.leido && conv.rol === 'cliente') {
       grupos[conv.lead_id].no_leidos++
     }
   }
 
-  // Ordenar por último mensaje (más reciente primero)
   const gruposArray = Object.values(grupos).sort(
     (a: any, b: any) => new Date(b.ultimo_timestamp).getTime() - new Date(a.ultimo_timestamp).getTime()
   )
@@ -53,16 +59,20 @@ export async function GET() {
 
 export async function PATCH(request: Request) {
   const supabase = createSupabaseServer()
-  const { lead_id } = await request.json()
+  const body = await request.json()
 
-  if (!lead_id) return NextResponse.json({ error: 'lead_id requerido' }, { status: 400 })
-
-  const { error } = await supabase
+  let query = supabase
     .from('conversaciones')
     .update({ leido: true })
-    .eq('lead_id', lead_id)
     .eq('leido', false)
     .eq('rol', 'cliente')
+
+  if (!body.all) {
+    if (!body.lead_id) return NextResponse.json({ error: 'lead_id requerido' }, { status: 400 })
+    query = query.eq('lead_id', body.lead_id)
+  }
+
+  const { error } = await query
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
