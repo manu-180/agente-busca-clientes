@@ -12,12 +12,12 @@ export const maxDuration = 300
 const ESTADOS_EXCLUIDOS = new Set(['no_interesado', 'cliente'])
 
 function authCron(req: NextRequest): boolean {
-  const secret = process.env.CRON_SECRET
-  const auth = req.headers.get('authorization')
-  console.log('[cron/followup] secret defined:', !!secret, '| secret length:', secret?.length ?? 0)
-  console.log('[cron/followup] auth header:', auth)
+  const secret = process.env.CRON_SECRET?.trim()
+  const auth = req.headers.get('authorization')?.trim()
+  const expected = `Bearer ${secret}`
+  console.log(`[auth] secretLen=${secret?.length ?? 'UNDEF'} authLen=${auth?.length ?? 'NULL'} match=${auth === expected} auth="${auth}" expected="${expected}"`)
   if (!secret) return false
-  return auth === `Bearer ${secret}`
+  return auth === expected
 }
 
 export async function GET(req: NextRequest) {
