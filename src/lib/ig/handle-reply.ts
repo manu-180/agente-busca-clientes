@@ -153,7 +153,7 @@ export async function handleIncomingReply(
 
   try {
     const completion = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-5',
       max_tokens: 300,
       system: systemWithHint,
       messages,

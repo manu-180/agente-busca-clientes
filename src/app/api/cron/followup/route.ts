@@ -89,7 +89,12 @@ export async function GET(req: NextRequest) {
       .map(m => `[${m.rol === 'agente' ? 'APEX' : 'CLIENTE'}] ${m.mensaje}`)
       .join('\n')
 
-    const texto = await generarMensajeFollowupClaude(lead, historialBreve)
+    const clienteRespondioAlguna = mensajes.some(m => m.rol === 'cliente')
+    const texto = await generarMensajeFollowupClaude(lead, historialBreve, {
+      followupsPrevios: followupsEnviados,
+      clienteRespondioAlguna,
+      mensajeInicialApex: lead.mensaje_inicial ?? null,
+    })
     if (!texto) {
       resultados.push({ lead_id: lead.id, ok: false, detalle: 'claude_null' })
       continue

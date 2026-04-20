@@ -232,7 +232,7 @@ export async function generarRespuestaAgente({
     console.log('[AGENTE] Llamando a Claude Sonnet...')
     const client = new Anthropic({ apiKey })
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-5',
       max_tokens: 500,
       system: systemPrompt,
       messages: [{ role: 'user', content: userContent }],
@@ -278,7 +278,7 @@ export async function generarRespuestaAgente({
 
       try {
         const retry = await client.messages.create({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-5',
           max_tokens: 500,
           system: systemPrompt,
           messages: [

@@ -81,7 +81,7 @@ export async function GET(req: NextRequest) {
   try {
     const template = pickOpeningTemplate(lead)
     const completion = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-5',
       max_tokens: 200,
       system: SYSTEM_PROMPT,
       messages: [

@@ -17,6 +17,10 @@ import {
 } from '@/lib/response-guardrails'
 import { detectarVertical, sanitizarApexInfoPorVertical } from '@/lib/verticales'
 import { extraerContenidoNuevo } from '@/lib/echo-detection'
+import {
+  stripContinuationViolations,
+  validateContinuationMessage,
+} from '@/lib/message-guards'
 
 export const maxDuration = 30
 
@@ -584,7 +588,7 @@ export async function POST(req: NextRequest) {
     // En estado de conversación cerrada: parámetros más restrictivos para evitar over-engagement
     const isClosingState = lead.conversacion_cerrada === true
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-4-5',
       max_tokens: isClosingState ? 60 : 500,
       ...(isClosingState && { temperature: 0.2 }),
       system: systemPrompt,
@@ -680,7 +684,7 @@ export async function POST(req: NextRequest) {
 
       try {
         const retry = await client.messages.create({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-5',
           max_tokens: 500,
           system: systemPrompt,
           messages: [
@@ -730,7 +734,7 @@ export async function POST(req: NextRequest) {
     }
     } // end else (not dealClosedByTool)
 
-    const respuesta = sanitizarRespuestaModelo(chequeo.texto)
+    let respuesta = sanitizarRespuestaModelo(chequeo.texto)
 
     if (!respuesta) {
       await registrarEventoConversacional({
@@ -742,6 +746,46 @@ export async function POST(req: NextRequest) {
         confidence: decision.confidence,
       })
       return NextResponse.json({ ok: true, agente: true, vacio: true })
+    }
+
+    // Continuation guard: si hay mensajes previos del agente, este NO es el primer
+    // contacto; prohibir re-presentación / saludo. Si el modelo dejó pasar uno, intentar
+    // repararlo sacando la primera oración. Si no se puede reparar, loguear y enviar
+    // igual para no romper el flujo (el problema se mitigará con las iteraciones
+    // futuras del prompt).
+    if (!dealClosedByTool) {
+      const huboMensajeAgentePrevio = filasHistorial.some(h => h.rol === 'agente')
+      if (huboMensajeAgentePrevio) {
+        const guard = validateContinuationMessage(respuesta)
+        if (!guard.ok) {
+          const reparado = stripContinuationViolations(respuesta)
+          await registrarEventoConversacional({
+            leadId: lead.id,
+            telefono,
+            eventName: reparado ? 'continuation_guard_stripped' : 'continuation_guard_failed',
+            decisionAction: 'full_reply',
+            decisionReason: decision.reason,
+            confidence: decision.confidence,
+            metadata: {
+              violations: guard.violations.map(v => v.rule),
+              originalLength: respuesta.length,
+              repairedLength: reparado?.length ?? 0,
+            },
+          })
+          if (reparado) {
+            respuesta = reparado
+            console.warn(
+              '[Wassenger] Continuation guard disparó — mensaje reparado:',
+              guard.violations.map(v => v.rule).join(',')
+            )
+          } else {
+            console.error(
+              '[Wassenger] Continuation guard disparó — no se pudo reparar; enviando original:',
+              guard.violations.map(v => v.rule).join(',')
+            )
+          }
+        }
+      }
     }
 
     console.log('[Wassenger] Agente generó respuesta, enviando...')
