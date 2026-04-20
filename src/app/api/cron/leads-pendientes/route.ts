@@ -338,6 +338,20 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: 'first_contact_inactivo' })
   }
 
+  // Verificar ventana horaria AR (solo si no es forced)
+  if (!forced) {
+    const [cfgInicio, cfgFin] = await Promise.all([
+      sup.from('configuracion').select('valor').eq('clave', 'first_contact_hora_inicio').maybeSingle(),
+      sup.from('configuracion').select('valor').eq('clave', 'first_contact_hora_fin').maybeSingle(),
+    ])
+    const horaInicio = parseInt(cfgInicio.data?.valor ?? '8', 10)
+    const horaFin = parseInt(cfgFin.data?.valor ?? '20', 10)
+    const horaAr = new Date(Date.now() + TZ_OFFSET_HOURS_AR * 3600_000).getUTCHours()
+    if (horaAr < horaInicio || horaAr >= horaFin) {
+      return NextResponse.json({ ok: true, skipped: 'fuera_ventana_horaria', hora_ar: horaAr, ventana: `${horaInicio}-${horaFin}` })
+    }
+  }
+
   // Cada sender corre de forma independiente y secuencial.
   // yaProcesoIds previene que ambos tomen el mismo lead en el mismo tick.
   const yaProcesoIds: string[] = []
