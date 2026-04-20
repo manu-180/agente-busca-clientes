@@ -6,9 +6,42 @@ import { generarPrimerMensaje } from '@/lib/generar-primer-mensaje'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
-// Argentina = UTC-3 (no DST). Si cambia, ajustar.
 const TZ_OFFSET_HOURS_AR = -3
 const LEADS_TABLE = 'leads_apex_next'
+const MAX_REINTENTOS = 3
+
+// ─── Configuración de senders outbound ────────────────────────────────────────
+// Para cambiar límites o intervalo, editar aquí (o migrar a tabla configuracion).
+interface SenderDef {
+  key: string
+  provider: 'twilio' | 'wassenger'
+  phoneNumber: string
+  contentSid?: string  // solo Twilio — template pre-aprobado por Meta
+  dailyLimit: number
+  intMin: number       // minutos mínimo entre envíos
+  intMax: number       // minutos máximo entre envíos
+}
+
+const SENDERS: SenderDef[] = [
+  {
+    key: 'twilio',
+    provider: 'twilio',
+    phoneNumber: '+5491124843094',
+    contentSid: 'HXeab2f108288fe221bce43ebe6565912a',
+    dailyLimit: 30,
+    intMin: 10,
+    intMax: 15,
+  },
+  {
+    key: 'wassenger',
+    provider: 'wassenger',
+    phoneNumber: '+5491124842720',
+    dailyLimit: 30,
+    intMin: 10,
+    intMax: 15,
+  },
+]
+// ──────────────────────────────────────────────────────────────────────────────
 
 type SupabaseClient = ReturnType<typeof createSupabaseServer>
 
@@ -33,364 +66,288 @@ interface LeadColaRow {
 function authCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
   if (!secret) return false
-  const auth = req.headers.get('authorization')
-  return auth === `Bearer ${secret}`
+  return req.headers.get('authorization') === `Bearer ${secret}`
 }
 
-function horaArActual(): number {
-  let hora = new Date().getUTCHours() + TZ_OFFSET_HOURS_AR
-  if (hora < 0) hora += 24
-  if (hora >= 24) hora -= 24
-  return hora
+function fechaArHoy(): string {
+  const ar = new Date(Date.now() + TZ_OFFSET_HOURS_AR * 3600_000)
+  return ar.toISOString().slice(0, 10) // YYYY-MM-DD
 }
 
-// 00:00 hora AR del día actual, como Date UTC
-function inicioDelDiaArUtc(): Date {
-  const ahoraUtcMs = Date.now()
-  const offsetMs = TZ_OFFSET_HOURS_AR * 60 * 60 * 1000
-  const ahoraArMs = ahoraUtcMs + offsetMs
-  const diaArMs = Math.floor(ahoraArMs / (24 * 60 * 60 * 1000)) * (24 * 60 * 60 * 1000)
-  return new Date(diaArMs - offsetMs)
-}
-
-function minAleatorio(minMin: number, maxMin: number): number {
-  if (maxMin < minMin) return minMin
-  return Math.floor(Math.random() * (maxMin - minMin + 1)) + minMin
+function minAleatorio(min: number, max: number): number {
+  return Math.floor(Math.random() * (max - min + 1)) + min
 }
 
 function sleep(ms: number) {
-  return new Promise<void>(resolve => setTimeout(resolve, ms))
+  return new Promise<void>(r => setTimeout(r, ms))
 }
 
-async function leerConfig(
-  supabase: SupabaseClient,
-  clave: string,
-  porDefecto: string
-): Promise<string> {
-  const { data } = await supabase
-    .from('configuracion')
-    .select('valor')
-    .eq('clave', clave)
-    .maybeSingle()
-  return data?.valor ?? porDefecto
+async function leerConfig(sup: SupabaseClient, clave: string, def: string): Promise<string> {
+  const { data } = await sup.from('configuracion').select('valor').eq('clave', clave).maybeSingle()
+  return data?.valor ?? def
 }
 
-async function leerConfigInt(
-  supabase: SupabaseClient,
-  clave: string,
-  porDefecto: number
-): Promise<number> {
-  const v = await leerConfig(supabase, clave, String(porDefecto))
-  const n = parseInt(v, 10)
-  return Number.isFinite(n) ? n : porDefecto
+async function escribirConfig(sup: SupabaseClient, clave: string, valor: string) {
+  await sup.from('configuracion').upsert({ clave, valor }, { onConflict: 'clave' })
 }
 
-async function escribirConfig(
-  supabase: SupabaseClient,
-  clave: string,
-  valor: string
+async function actualizarLead(sup: SupabaseClient, id: string, updates: Record<string, unknown>) {
+  const { error } = await sup.from(LEADS_TABLE).update(updates).eq('id', id)
+  if (error) console.error('[cron leads-pendientes] Error update lead:', error.message)
+}
+
+// Daily count — stored as "N|YYYY-MM-DD". Se resetea automáticamente al cambiar el día.
+async function leerDailyCount(sup: SupabaseClient, key: string): Promise<number> {
+  const raw = await leerConfig(sup, `${key}_primer_enviados_hoy`, `0|1970-01-01`)
+  const [countStr, fecha] = raw.split('|')
+  return fecha === fechaArHoy() ? (parseInt(countStr, 10) || 0) : 0
+}
+
+async function incrementarDailyCount(sup: SupabaseClient, key: string, actual: number) {
+  await escribirConfig(sup, `${key}_primer_enviados_hoy`, `${actual + 1}|${fechaArHoy()}`)
+}
+
+// Envía mensaje con template de Twilio (HSM pre-aprobado por Meta)
+async function enviarTemplateTwilio(
+  telefono: string,
+  nombre: string,
+  zona: string,
+  rubro: string,
+  fromNumber: string,
+  contentSid: string
 ): Promise<void> {
-  await supabase.from('configuracion').upsert({ clave, valor }, { onConflict: 'clave' })
-}
+  const accountSid = process.env.TWILIO_ACCOUNT_SID!
+  const auth = 'Basic ' + Buffer.from(`${accountSid}:${process.env.TWILIO_AUTH_TOKEN!}`).toString('base64')
 
-async function actualizarLead(
-  supabase: SupabaseClient,
-  id: string,
-  updates: Record<string, unknown>
-): Promise<void> {
-  const { error } = await supabase.from(LEADS_TABLE).update(updates).eq('id', id)
-  if (error) {
-    console.error('[cron leads-pendientes] Error update lead:', error.message)
+  const res = await fetch(
+    `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
+    {
+      method: 'POST',
+      headers: { Authorization: auth, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        From: `whatsapp:${fromNumber}`,
+        To: `whatsapp:+${telefono}`,
+        ContentSid: contentSid,
+        // {{1}}=nombre  {{3}}=zona  {{4}}=rubro  (según plantilla aprobada)
+        ContentVariables: JSON.stringify({ '1': nombre, '3': zona, '4': rubro }),
+      }).toString(),
+    }
+  )
+
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`Twilio template error ${res.status}: ${err}`)
   }
 }
 
-async function logCronRun(
-  supabase: SupabaseClient,
-  startedAt: string,
-  startMs: number,
+// ─── Procesar un sender ────────────────────────────────────────────────────────
+async function procesarSender(
+  sup: SupabaseClient,
+  sender: SenderDef,
   forced: boolean,
-  status: string,
-  result: Record<string, unknown>
-) {
-  try {
-    await supabase.from('cron_runs').insert({
-      cron_name: 'leads-pendientes',
-      started_at: startedAt,
-      finished_at: new Date().toISOString(),
-      status,
-      result,
-      duration_ms: Date.now() - startMs,
-      forced,
-    })
-  } catch (e) {
-    console.error('[cron] Error logging run:', e)
-  }
-}
+  yaProcesoIds: string[]  // leads tomados en este tick por el otro sender
+): Promise<Record<string, unknown>> {
+  const { key, provider, phoneNumber, contentSid, dailyLimit, intMin, intMax } = sender
 
-export async function GET(req: NextRequest) {
-  if (!authCron(req)) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  // 1. ¿Sender activo?
+  const activo = await leerConfig(sup, `${key}_primer_activo`, 'true')
+  if (activo !== 'true') return { status: 'inactivo' }
+
+  // 2. Límite diario
+  const enviados = await leerDailyCount(sup, key)
+  if (enviados >= dailyLimit) {
+    return { status: 'limite_diario', enviados_hoy: enviados, limite: dailyLimit }
   }
 
-  const startMs = Date.now()
-  const startedAt = new Date().toISOString()
-  const forced = req.nextUrl.searchParams.get('force') === 'true'
-
-  const supabase = createSupabaseServer()
-
-  // 1-4. Leer toda la config en UNA sola query (evita 6 roundtrips secuenciales)
-  const CONFIG_KEYS = [
-    'first_contact_activo',
-    'first_contact_limite_diario',
-    'first_contact_next_slot_at',
-    'first_contact_max_reintentos',
-    'first_contact_intervalo_min_min',
-    'first_contact_intervalo_max_min',
-    'first_contact_fallos_consecutivos',
-  ]
-  const { data: configRows } = await supabase
-    .from('configuracion')
-    .select('clave, valor')
-    .in('clave', CONFIG_KEYS)
-
-  const cfg = Object.fromEntries((configRows ?? []).map(c => [c.clave, c.valor as string]))
-
-  const activo             = cfg['first_contact_activo']             ?? 'true'
-  const limiteDiario       = parseInt(cfg['first_contact_limite_diario']       ?? '30', 10) || 30
-  const nextSlotStr        = cfg['first_contact_next_slot_at']       ?? '1970-01-01T00:00:00.000Z'
-  const maxReintentos      = parseInt(cfg['first_contact_max_reintentos']      ?? '3',  10) || 3
-  const intMin             = parseInt(cfg['first_contact_intervalo_min_min']   ?? '10', 10) || 10
-  const intMax             = parseInt(cfg['first_contact_intervalo_max_min']   ?? '15', 10) || 15
-  const fallosConsecutivos = parseInt(cfg['first_contact_fallos_consecutivos'] ?? '0',  10) || 0
-
-  // 1. ¿Está activado el sistema?
-  if (activo !== 'true') {
-    const r = { ok: true, skipped: 'first_contact_inactivo' }
-    await logCronRun(supabase, startedAt, startMs, forced, 'skipped', r)
-    return NextResponse.json(r)
+  // 3. Slot de cadencia
+  const nextSlotStr = await leerConfig(sup, `${key}_primer_next_slot_at`, '1970-01-01T00:00:00.000Z')
+  if (!forced && new Date(nextSlotStr).getTime() > Date.now()) {
+    const faltanMin = Math.ceil((new Date(nextSlotStr).getTime() - Date.now()) / 60_000)
+    return { status: 'slot_no_alcanzado', next_slot_at: nextSlotStr, faltan_min: faltanMin }
   }
 
-  // 2. Ventana horaria (hora AR) — TEMPORALMENTE DESACTIVADA
-  // const hora = horaArActual()
-  // ...
+  // 4. ID del sender en tabla senders (para taggear conversaciones)
+  const { data: senderRow } = await sup
+    .from('senders')
+    .select('id')
+    .eq('provider', provider)
+    .eq('phone_number', phoneNumber)
+    .maybeSingle()
+  const senderId = senderRow?.id ?? null
 
-  // 3. Límite diario + slot — en paralelo con la config ya leída
-  const inicioDiaUtc = inicioDelDiaArUtc().toISOString()
-  const { count: enviadosHoy } = await supabase
-    .from(LEADS_TABLE)
-    .select('*', { count: 'exact', head: true })
-    .gte('primer_envio_completado_at', inicioDiaUtc)
-
-  const yaEnviados = enviadosHoy ?? 0
-  if (yaEnviados >= limiteDiario) {
-    const r = {
-      ok: true,
-      skipped: 'limite_diario_alcanzado',
-      enviados_hoy: yaEnviados,
-      limite: limiteDiario,
-    }
-    await logCronRun(supabase, startedAt, startMs, forced, 'skipped', r)
-    return NextResponse.json(r)
-  }
-
-  // 4. Slot de cadencia — salteable con ?force=true
-  const nextSlotMs = new Date(nextSlotStr).getTime()
-  if (!forced && Number.isFinite(nextSlotMs) && nextSlotMs > Date.now()) {
-    const faltanMin = Math.ceil((nextSlotMs - Date.now()) / 60000)
-    const r = {
-      ok: true,
-      skipped: 'slot_no_alcanzado',
-      next_slot_at: nextSlotStr,
-      faltan_min: faltanMin,
-    }
-    await logCronRun(supabase, startedAt, startMs, forced, 'skipped', r)
-    return NextResponse.json(r)
-  }
-
-  // 5. Tomar lead pendiente más antiguo
-  const { data: leadData, error: errLead } = await supabase
+  // 5. Elegir lead: el más antiguo pendiente que no haya tomado el otro sender en este tick
+  const { data: candidatos } = await sup
     .from(LEADS_TABLE)
     .select('*')
     .eq('origen', 'outbound')
     .eq('mensaje_enviado', false)
     .eq('estado', 'pendiente')
-    .lt('primer_envio_intentos', maxReintentos)
+    .lt('primer_envio_intentos', MAX_REINTENTOS)
     .not('telefono', 'is', null)
     .order('created_at', { ascending: true })
-    .limit(1)
-    .maybeSingle()
+    .limit(20)
 
-  if (errLead) {
-    const r = { error: `db: ${errLead.message}` }
-    await logCronRun(supabase, startedAt, startMs, forced, 'error', r)
-    return NextResponse.json(r, { status: 500 })
-  }
+  const lead = (candidatos ?? []).find(
+    (l: LeadColaRow) => !yaProcesoIds.includes(l.id)
+  ) as LeadColaRow | undefined
 
-  const lead = leadData as LeadColaRow | null
-  if (!lead) {
-    const r = { ok: true, skipped: 'sin_pendientes' }
-    await logCronRun(supabase, startedAt, startMs, forced, 'skipped', r)
-    return NextResponse.json(r)
-  }
+  if (!lead) return { status: 'sin_pendientes' }
+
+  // Reservar este lead para que el otro sender no lo tome en el mismo tick
+  yaProcesoIds.push(lead.id)
 
   const telefono = String(lead.telefono).replace(/\D/g, '')
   if (!telefono) {
-    await actualizarLead(supabase, lead.id, {
-      estado: 'descartado',
-      primer_envio_error: 'telefono_invalido',
-    })
-    const r = { ok: false, skipped: 'telefono_invalido', lead_id: lead.id }
-    await logCronRun(supabase, startedAt, startMs, forced, 'error', r)
-    return NextResponse.json(r)
+    await actualizarLead(sup, lead.id, { estado: 'descartado', primer_envio_error: 'telefono_invalido' })
+    return { status: 'error', lead_id: lead.id, error: 'telefono_invalido' }
   }
 
-  // 6. Generar mensaje si todavía no hay
-  let mensaje = (lead.mensaje_inicial ?? '').trim()
-  if (!mensaje) {
-    const generado = await generarPrimerMensaje({
-      nombre: lead.nombre,
-      rubro: lead.rubro,
-      zona: lead.zona,
-      descripcion: lead.descripcion,
-      instagram: lead.instagram,
-    })
+  // 6. Enviar según provider
+  try {
+    let mensajeGuardado: string
 
-    if (!generado) {
-      await actualizarLead(supabase, lead.id, {
-        primer_envio_intentos: (lead.primer_envio_intentos ?? 0) + 1,
-        primer_envio_error: 'generar_mensaje_fallo',
-      })
-      const r = { ok: false, lead_id: lead.id, error: 'no_se_generó_mensaje' }
-      await logCronRun(supabase, startedAt, startMs, forced, 'error', r)
-      return NextResponse.json(r)
+    if (provider === 'twilio' && contentSid) {
+      await enviarTemplateTwilio(telefono, lead.nombre, lead.zona, lead.rubro, phoneNumber, contentSid)
+      // Representación legible del template para guardar en conversaciones
+      mensajeGuardado = `Hola ${lead.nombre} 👋\n\nTrabajo con negocios de ${lead.zona} haciendo páginas web para ${lead.rubro}. ¿Qué decís?`
+    } else {
+      // Wassenger: generar mensaje dinámico
+      let mensaje = (lead.mensaje_inicial ?? '').trim()
+      if (!mensaje) {
+        const generado = await generarPrimerMensaje({
+          nombre: lead.nombre,
+          rubro: lead.rubro,
+          zona: lead.zona,
+          descripcion: lead.descripcion,
+          instagram: lead.instagram,
+        })
+        if (!generado) {
+          await actualizarLead(sup, lead.id, {
+            primer_envio_intentos: (lead.primer_envio_intentos ?? 0) + 1,
+            primer_envio_error: 'generar_mensaje_fallo',
+          })
+          yaProcesoIds.pop() // devolver el lead — el otro sender no puede arreglar esto
+          return { status: 'error', lead_id: lead.id, error: 'generar_mensaje_fallo' }
+        }
+        mensaje = generado
+        await actualizarLead(sup, lead.id, { mensaje_inicial: mensaje })
+      }
+      await enviarMensajeWassenger(telefono, mensaje)
+      mensajeGuardado = mensaje
     }
 
-    mensaje = generado
-    await actualizarLead(supabase, lead.id, { mensaje_inicial: mensaje })
-  }
-
-  // 7. Enviar texto
-  try {
-    await enviarMensajeWassenger(telefono, mensaje)
-    await actualizarLead(supabase, lead.id, {
-      mensaje_enviado: true,
-      primer_envio_error: null,
-    })
-    await supabase.from('conversaciones').insert({
+    // 7. Guardar conversación con sender_id
+    await sup.from('conversaciones').insert({
       lead_id: lead.id,
       telefono,
-      mensaje,
+      mensaje: mensajeGuardado,
       rol: 'agente',
       tipo_mensaje: 'texto',
       manual: false,
+      sender_id: senderId,
     })
+
+    // 8. Marcar lead como contactado
+    await actualizarLead(sup, lead.id, {
+      mensaje_enviado: true,
+      estado: 'contactado',
+      primer_envio_completado_at: new Date().toISOString(),
+      primer_envio_error: null,
+    })
+
+    // 9. Video solo para Wassenger (Twilio no lo soporta en primer contacto template)
+    let videoOk = false
+    let videoError: string | null = null
+    if (provider === 'wassenger' && !forced) {
+      const videoUrl = process.env.VIDEO_PAGINA_URL
+      if (videoUrl) {
+        await sleep(2000 + Math.floor(Math.random() * 2000))
+        const rv = await enviarVideoWassengerConReintentos(telefono, videoUrl, 3)
+        videoOk = rv.ok
+        videoError = rv.error ?? null
+        if (videoOk) {
+          await actualizarLead(sup, lead.id, { video_enviado: true })
+          await sup.from('conversaciones').insert({
+            lead_id: lead.id,
+            telefono,
+            mensaje: '[VIDEO] Demo de landing — enviado automáticamente',
+            rol: 'agente',
+            tipo_mensaje: 'otro',
+            manual: false,
+            sender_id: senderId,
+          })
+        }
+      }
+    }
+
+    // 10. Avanzar slot y contador
+    await incrementarDailyCount(sup, key, enviados)
+    await escribirConfig(sup, `${key}_primer_fallos`, '0')
+    const proximoMin = minAleatorio(intMin, intMax)
+    const proximoSlot = new Date(Date.now() + proximoMin * 60_000)
+    await escribirConfig(sup, `${key}_primer_next_slot_at`, proximoSlot.toISOString())
+
+    return {
+      status: 'ok',
+      lead_id: lead.id,
+      nombre: lead.nombre,
+      enviados_hoy: enviados + 1,
+      limite: dailyLimit,
+      proximo_slot_at: proximoSlot.toISOString(),
+      proximo_min: proximoMin,
+      ...(provider === 'wassenger' ? { video_ok: videoOk, video_error: videoError } : {}),
+    }
+
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    console.error('[cron leads-pendientes] Error enviando texto:', msg)
+    console.error(`[cron leads-pendientes] [${key}] Error enviando:`, msg)
 
-    await actualizarLead(supabase, lead.id, {
+    await actualizarLead(sup, lead.id, {
       primer_envio_intentos: (lead.primer_envio_intentos ?? 0) + 1,
-      primer_envio_error: `texto: ${msg}`.slice(0, 500),
+      primer_envio_error: msg.slice(0, 500),
     })
 
-    const nuevosFallos = fallosConsecutivos + 1
-
-    // Resetear slot a pasado → el próximo tick del cron reintenta de inmediato
-    await escribirConfig(supabase, 'first_contact_next_slot_at', '1970-01-01T00:00:00.000Z')
-    await escribirConfig(supabase, 'first_contact_fallos_consecutivos', String(nuevosFallos))
-
-    // 10 fallos consecutivos → pausar SOLO el enviador (agente_activo no se toca)
-    let enviadorPausado = false
-    if (nuevosFallos >= 10) {
-      await escribirConfig(supabase, 'first_contact_activo', 'false')
-      enviadorPausado = true
-      console.error(`[cron leads-pendientes] ${nuevosFallos} fallos consecutivos — enviador pausado automáticamente`)
+    const fallosAntes = parseInt(await leerConfig(sup, `${key}_primer_fallos`, '0'), 10) || 0
+    const fallos = fallosAntes + 1
+    await escribirConfig(sup, `${key}_primer_fallos`, String(fallos))
+    // Resetear slot a pasado para reintentar en el próximo tick
+    await escribirConfig(sup, `${key}_primer_next_slot_at`, '1970-01-01T00:00:00.000Z')
+    if (fallos >= 10) {
+      await escribirConfig(sup, `${key}_primer_activo`, 'false')
+      console.error(`[cron leads-pendientes] [${key}] 10 fallos consecutivos — sender pausado`)
     }
 
-    const r = {
-      ok: false,
-      lead_id: lead.id,
-      error: 'texto_fallo',
-      detalle: msg,
-      fallos_consecutivos: nuevosFallos,
-      ...(enviadorPausado ? { enviador_pausado: true } : {}),
-    }
-    await logCronRun(supabase, startedAt, startMs, forced, 'error', r)
-    return NextResponse.json(r)
+    // Liberar el lead para que el otro sender lo intente si puede
+    yaProcesoIds.pop()
+
+    return { status: 'error', lead_id: lead.id, error: msg, fallos_consecutivos: fallos }
+  }
+}
+
+// ─── Handler ──────────────────────────────────────────────────────────────────
+export async function GET(req: NextRequest) {
+  if (!authCron(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const forced = req.nextUrl.searchParams.get('force') === 'true'
+  const sup = createSupabaseServer()
+
+  // Verificar interruptor global
+  const { data: cfgActivo } = await sup
+    .from('configuracion').select('valor').eq('clave', 'first_contact_activo').maybeSingle()
+  if (cfgActivo?.valor !== 'true') {
+    return NextResponse.json({ ok: true, skipped: 'first_contact_inactivo' })
   }
 
-  // 8. Pausa humana antes del video (2-4s) — skip en modo force para evitar timeout
-  if (!forced) {
-    await sleep(2000 + Math.floor(Math.random() * 2000))
+  // Cada sender corre de forma independiente y secuencial.
+  // yaProcesoIds previene que ambos tomen el mismo lead en el mismo tick.
+  const yaProcesoIds: string[] = []
+  const results: Record<string, unknown> = {}
+
+  for (const sender of SENDERS) {
+    results[sender.key] = await procesarSender(sup, sender, forced, yaProcesoIds)
   }
 
-  // 9. Enviar video — skip en modo force (el cron regular lo completará en próximo tick)
-  let videoOk = false
-  let videoError: string | null = null
-
-  if (!forced) {
-    const videoUrl = process.env.VIDEO_PAGINA_URL
-    if (videoUrl) {
-      const resultadoVideo = await enviarVideoWassengerConReintentos(telefono, videoUrl, 3)
-      videoOk = resultadoVideo.ok
-      videoError = resultadoVideo.error ?? null
-
-      if (videoOk) {
-        await actualizarLead(supabase, lead.id, { video_enviado: true })
-        await supabase.from('conversaciones').insert({
-          lead_id: lead.id,
-          telefono,
-          mensaje: '[VIDEO] Demo de landing — enviado automáticamente',
-          rol: 'agente',
-          tipo_mensaje: 'otro',
-          manual: false,
-        })
-      } else {
-        console.error(
-          `[cron leads-pendientes] Video falló tras ${resultadoVideo.intentos} intentos:`,
-          videoError
-        )
-        await actualizarLead(supabase, lead.id, {
-          primer_envio_error: `video: ${videoError}`.slice(0, 500),
-        })
-      }
-    } else {
-      console.warn('[cron leads-pendientes] VIDEO_PAGINA_URL no configurada, salteando video')
-    }
-  } else {
-    videoError = 'skipped_force_mode'
-  }
-
-  // 10. Primer contacto completado (texto enviado = contactado, aunque el video falle)
-  await actualizarLead(supabase, lead.id, {
-    estado: 'contactado',
-    primer_envio_completado_at: new Date().toISOString(),
-  })
-
-  // 11. Avanzar slot para próximo envío (10-15 min — ya leídos del batch inicial)
-  //     y resetear contador de fallos consecutivos
-  if (fallosConsecutivos > 0) {
-    await escribirConfig(supabase, 'first_contact_fallos_consecutivos', '0')
-  }
-  const proximoMin = minAleatorio(intMin, intMax)
-  const proximoSlot = new Date(Date.now() + proximoMin * 60 * 1000)
-  await escribirConfig(supabase, 'first_contact_next_slot_at', proximoSlot.toISOString())
-
-  const r = {
-    ok: true,
-    lead_id: lead.id,
-    nombre: lead.nombre,
-    telefono,
-    texto_enviado: true,
-    video_enviado: videoOk,
-    video_error: videoError,
-    proximo_slot_at: proximoSlot.toISOString(),
-    proximo_min: proximoMin,
-    enviados_hoy: yaEnviados + 1,
-    limite_diario: limiteDiario,
-  }
-  await logCronRun(supabase, startedAt, startMs, forced, 'success', r)
-  return NextResponse.json(r)
+  return NextResponse.json({ ok: true, results })
 }
 
 export async function POST(req: NextRequest) {
