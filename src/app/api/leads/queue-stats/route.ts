@@ -3,7 +3,7 @@ import { createSupabaseServer } from '@/lib/supabase-server'
 
 export const dynamic = 'force-dynamic'
 
-const LEADS_TABLE = 'leads_apex_next'
+const LEADS_TABLE = 'leads'
 const TZ_OFFSET_HOURS_AR = -3
 
 function inicioDelDiaArUtc(): Date {

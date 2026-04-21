@@ -188,7 +188,7 @@ async function procesarSender(
       .eq('estado', 'pendiente')
       .lt('primer_envio_intentos', MAX_REINTENTOS)
       .not('telefono', 'is', null)
-      .order('created_at', { ascending: true })
+      .order('created_at', { ascending: false })
       .limit(20)
 
     const lead = (candidatos ?? []).find(
