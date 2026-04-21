@@ -161,7 +161,7 @@ export default function ConversacionesPage() {
     new Date(ts).toLocaleString('es-AR', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })
 
   return (
-    <div className="flex flex-col h-[calc(100vh-80px)] -mx-4 sm:-mx-6 lg:-mx-8 -mt-4 sm:-mt-6 lg:-mt-8">
+    <div className="inbox-theme flex flex-col h-[calc(100vh-80px)] -mx-4 sm:-mx-6 lg:-mx-8 -mt-4 sm:-mt-6 lg:-mt-8">
       {/* Panel container */}
       <div className="flex flex-1 overflow-hidden bg-white border border-gray-200 shadow-sm lg:m-0 rounded-none lg:rounded-xl lg:m-2">
 
