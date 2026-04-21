@@ -161,7 +161,7 @@ export default function ConversacionesPage() {
     new Date(ts).toLocaleString('es-AR', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })
 
   return (
-    <div className="inbox-theme flex flex-col h-[calc(100vh-80px)] -mx-4 sm:-mx-6 lg:-mx-8 -mt-4 sm:-mt-6 lg:-mt-8">
+    <div className="flex flex-col h-[calc(100vh-80px)] -mx-4 sm:-mx-6 lg:-mx-8 -mt-4 sm:-mt-6 lg:-mt-8">
       {/* Panel container */}
       <div className="flex flex-1 overflow-hidden bg-white border border-gray-200 shadow-sm lg:m-0 rounded-none lg:rounded-xl lg:m-2">
 
@@ -191,7 +191,7 @@ export default function ConversacionesPage() {
 
           {/* Sender filter */}
           {sendersUnicos.length > 1 && (
-            <div className="px-4 py-2.5 border-b border-stone-100 flex gap-1.5 flex-wrap bg-stone-50/70">
+            <div className="px-4 py-2.5 border-b border-gray-100 flex gap-1.5 flex-wrap bg-gray-50/60">
               <button
                 onClick={() => setFiltroSender(null)}
                 className={`text-[10px] font-medium px-2.5 py-1 rounded-full transition-all ${
@@ -293,15 +293,15 @@ export default function ConversacionesPage() {
         {/* ── Right: chat view ── */}
         <div
           className={`flex-1 flex flex-col min-w-0 ${!seleccionado ? 'hidden lg:flex' : 'flex'}`}
-          style={{ backgroundImage: 'radial-gradient(circle, #ddd5c8 1px, transparent 1px)', backgroundSize: '22px 22px', backgroundColor: '#f7f3ee' }}
+          style={{ backgroundImage: 'radial-gradient(circle, #e5e7eb 1px, transparent 1px)', backgroundSize: '20px 20px', backgroundColor: '#f9fafb' }}
         >
           {!grupoActivo ? (
             <div className="flex-1 flex items-center justify-center bg-transparent">
               <div className="text-center">
-                <div className="w-16 h-16 rounded-full bg-white/80 shadow-md flex items-center justify-center mx-auto mb-3">
-                  <MessageSquare size={26} className="text-stone-300" />
+                <div className="w-16 h-16 rounded-full bg-white shadow-sm flex items-center justify-center mx-auto mb-3">
+                  <MessageSquare size={26} className="text-gray-300" />
                 </div>
-                <p className="text-sm text-stone-400">Seleccioná una conversación</p>
+                <p className="text-sm text-gray-400">Seleccioná una conversación</p>
               </div>
             </div>
           ) : (
@@ -374,7 +374,7 @@ export default function ConversacionesPage() {
                           className={`px-4 py-2.5 rounded-2xl text-sm shadow-sm ${
                             isAgente
                               ? 'bg-[#c8f135] text-gray-900 rounded-br-sm'
-                              : 'bg-white/90 text-gray-800 rounded-bl-sm border border-stone-200/60'
+                              : 'bg-white text-gray-800 rounded-bl-sm border border-gray-100'
                           }`}
                         >
                           <p className="whitespace-pre-wrap leading-relaxed">{msg.mensaje}</p>
@@ -395,7 +395,7 @@ export default function ConversacionesPage() {
                     onChange={e => setNuevoMensaje(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && !e.shiftKey && enviarMensaje()}
                     placeholder="Escribí un mensaje manual..."
-                    className="flex-1 bg-stone-50 border border-stone-200 rounded-xl px-4 py-2.5 text-sm text-gray-800 placeholder-stone-400 focus:outline-none focus:border-stone-300 focus:bg-white transition-colors"
+                    className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:border-gray-300 focus:bg-white transition-colors"
                   />
                   <button
                     onClick={sugerirRespuesta}

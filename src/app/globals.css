@@ -16,7 +16,7 @@ body {
   font-family: 'DM Sans', sans-serif;
 }
 
-/* Scrollbar global (dark) */
+/* Scrollbar personalizado */
 ::-webkit-scrollbar {
   width: 6px;
 }
@@ -29,18 +29,6 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #444444;
-}
-
-/* Scrollbar dentro del inbox WA */
-.inbox-theme ::-webkit-scrollbar-track {
-  background: transparent;
-}
-.inbox-theme ::-webkit-scrollbar-thumb {
-  background: #d8d0c4;
-  border-radius: 6px;
-}
-.inbox-theme ::-webkit-scrollbar-thumb:hover {
-  background: #c4baae;
 }
 
 /* Animaciones */
@@ -62,7 +50,7 @@ body {
   animation: pulse-lime 2s ease-in-out infinite;
 }
 
-/* Badge de estado — dark (global) */
+/* Badge de estado */
 .badge-pendiente    { background-color: #333; color: #999; }
 .badge-contactado   { background-color: #1a3a5c; color: #60a5fa; }
 .badge-respondio    { background-color: #1a3a1a; color: #4ade80; }
@@ -70,12 +58,3 @@ body {
 .badge-cerrado      { background-color: #1a3a2a; color: #34d399; }
 .badge-descartado   { background-color: #3a1a1a; color: #f87171; }
 .badge-no_interesado { background-color: #2a2a2a; color: #888; }
-
-/* Badge de estado — light (solo inbox WA) */
-.inbox-theme .badge-pendiente    { background-color: #edeae5; color: #7a7268; }
-.inbox-theme .badge-contactado   { background-color: #dbeafe; color: #2563eb; }
-.inbox-theme .badge-respondio    { background-color: #dcfce7; color: #16a34a; }
-.inbox-theme .badge-interesado   { background-color: #ecfccb; color: #4d7c0f; }
-.inbox-theme .badge-cerrado      { background-color: #d1fae5; color: #059669; }
-.inbox-theme .badge-descartado   { background-color: #fee2e2; color: #dc2626; }
-.inbox-theme .badge-no_interesado { background-color: #f0ece7; color: #9a8f85; }
