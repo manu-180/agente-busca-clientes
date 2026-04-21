@@ -46,7 +46,7 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
   }
 
   const { data: leadsRaw, error: errLeads } = await ejecutarConTablaLeads<Lead[]>((tabla) =>
-    supabase.from(tabla).select('*').eq('agente_activo', true).eq('mensaje_enviado', true)
+    supabase.from(tabla).select('*').eq('agente_activo', true).eq('mensaje_enviado', true).neq('estado', 'pendiente')
   )
 
   if (errLeads || !leadsRaw) {
