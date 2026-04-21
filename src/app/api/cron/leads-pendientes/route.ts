@@ -27,8 +27,8 @@ const SENDERS: SenderDef[] = [
     phoneNumber: '+5491124843094',
     contentSid: 'HXeab2f108288fe221bce43ebe6565912a',
     dailyLimit: 30,
-    intMin: 10,
-    intMax: 15,
+    intMin: 2,
+    intMax: 2,
   },
   {
     key: 'twilio_2',
@@ -36,8 +36,8 @@ const SENDERS: SenderDef[] = [
     phoneNumber: '+5491124842720',
     contentSid: 'HXeab2f108288fe221bce43ebe6565912a',
     dailyLimit: 30,
-    intMin: 10,
-    intMax: 15,
+    intMin: 2,
+    intMax: 2,
   },
 ]
 // ──────────────────────────────────────────────────────────────────────────────

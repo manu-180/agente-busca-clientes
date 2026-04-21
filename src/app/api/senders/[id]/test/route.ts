@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { enviarMensajeTwilio } from '@/lib/twilio'
-import { enviarMensajeWassenger } from '@/lib/wassenger'
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const supabase = createSupabaseServer()
@@ -20,11 +19,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   if (!sender) return NextResponse.json({ error: 'Sender no encontrado' }, { status: 404 })
 
   try {
-    if (sender.provider === 'twilio') {
-      await enviarMensajeTwilio(telefono_test, '✅ Test de conexión APEX Lead Engine', sender.phone_number)
-    } else {
-      await enviarMensajeWassenger(telefono_test, '✅ Test de conexión APEX Lead Engine')
-    }
+    await enviarMensajeTwilio(telefono_test, '✅ Test de conexión APEX Lead Engine', sender.phone_number)
     return NextResponse.json({ ok: true })
   } catch (err) {
     return NextResponse.json({ ok: false, error: String(err) }, { status: 500 })

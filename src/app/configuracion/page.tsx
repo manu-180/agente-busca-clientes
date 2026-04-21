@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { CheckCircle, Copy } from 'lucide-react'
+import { CheckCircle } from 'lucide-react'
 
 export default function ConfiguracionPage() {
   const [config, setConfig] = useState<Record<string, string>>({})
@@ -28,10 +28,6 @@ export default function ConfiguracionPage() {
     setTimeout(() => setGuardado(false), 2000)
   }
 
-  const webhookUrl = typeof window !== 'undefined'
-    ? `${window.location.origin}/api/webhook/wassenger`
-    : 'https://tu-dominio.vercel.app/api/webhook/wassenger'
-
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -56,7 +52,6 @@ export default function ConfiguracionPage() {
 
         {[
           { clave: 'anthropic_key_status', label: 'Anthropic API Key', desc: 'Se configura en .env.local como ANTHROPIC_API_KEY' },
-          { clave: 'wassenger_key_status', label: 'Wassenger API Key', desc: 'Se configura en .env.local como WASSENGER_API_KEY' },
         ].map(item => (
           <div key={item.clave} className="space-y-1.5">
             <label className="text-xs text-apex-muted font-mono uppercase tracking-wider block">
@@ -71,39 +66,6 @@ export default function ConfiguracionPage() {
             </div>
           </div>
         ))}
-      </div>
-
-      {/* Webhook */}
-      <div className="bg-apex-card border border-apex-border rounded-xl p-6 space-y-4">
-        <h2 className="font-syne font-semibold text-lg">Webhook de Wassenger</h2>
-
-        <div className="space-y-3">
-          <p className="text-sm text-apex-muted">
-            Copiá esta URL y configurala en Wassenger para recibir mensajes:
-          </p>
-          <div className="flex items-center gap-2">
-            <code className="flex-1 bg-apex-black border border-apex-border rounded-lg px-4 py-3 text-sm font-mono text-apex-lime break-all">
-              {webhookUrl}
-            </code>
-            <button
-              onClick={() => navigator.clipboard.writeText(webhookUrl)}
-              className="p-2.5 bg-apex-border rounded-lg hover:bg-apex-muted/30 transition-colors"
-            >
-              <Copy size={16} />
-            </button>
-          </div>
-        </div>
-
-        <div className="bg-apex-black border border-apex-border rounded-xl p-5 space-y-3">
-          <h3 className="font-semibold text-sm">Pasos para configurar:</h3>
-          <div className="space-y-2 text-sm text-apex-muted">
-            <p>1. Entrá a <span className="text-white">wassenger.com</span> → Settings → Webhooks</p>
-            <p>2. Clickeá <span className="text-white">"Add webhook"</span></p>
-            <p>3. Pegá la URL de arriba en el campo URL</p>
-            <p>4. En eventos, seleccioná <span className="text-apex-lime">"message:in:new"</span></p>
-            <p>5. Guardá</p>
-          </div>
-        </div>
       </div>
 
       {/* Límites */}

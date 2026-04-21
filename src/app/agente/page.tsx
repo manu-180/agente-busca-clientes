@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Bot, BotOff, Plus, Edit, Trash2, Save, X, Loader2, CheckCircle, AlertCircle } from 'lucide-react'
+import { Bot, BotOff, Plus, Edit, Trash2, Save, X, Loader2 } from 'lucide-react'
 import type { ApexInfo } from '@/types'
 
 const CATEGORIAS = ['servicios', 'precios', 'proceso', 'portfolio', 'faqs', 'diferencial']
@@ -13,7 +13,6 @@ export default function AgentePage() {
   const [showForm, setShowForm] = useState(false)
   const [editando, setEditando] = useState<string | null>(null)
   const [form, setForm] = useState({ categoria: 'servicios', titulo: '', contenido: '' })
-  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
 
   const cargar = async () => {
     try {
@@ -74,17 +73,6 @@ export default function AgentePage() {
     setShowForm(true)
   }
 
-  const testConexion = async () => {
-    setTestResult(null)
-    try {
-      const res = await fetch('/api/agente/test')
-      const data = await res.json()
-      setTestResult({ ok: data.ok, msg: data.ok ? 'Conexión exitosa' : data.error })
-    } catch {
-      setTestResult({ ok: false, msg: 'Error de conexión' })
-    }
-  }
-
   const infosPorCategoria = CATEGORIAS.map(cat => ({
     categoria: cat,
     items: infos.filter(i => i.categoria === cat),
@@ -122,31 +110,6 @@ export default function AgentePage() {
             agenteActivo ? 'left-[30px]' : 'left-0.5'
           }`} />
         </button>
-      </div>
-
-      {/* Test de conexión */}
-      <div className="bg-apex-card border border-apex-border rounded-xl p-6 space-y-4">
-        <h2 className="font-syne font-semibold text-lg">Conexión Wassenger</h2>
-        <p className="text-sm text-apex-muted">
-          URL del webhook para configurar en Wassenger:
-        </p>
-        <code className="block bg-apex-black border border-apex-border rounded-lg px-4 py-3 text-sm font-mono text-apex-lime break-all">
-          https://tu-dominio.vercel.app/api/webhook/wassenger
-        </code>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={testConexion}
-            className="bg-apex-border text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-apex-muted/30 transition-colors"
-          >
-            Probar conexión
-          </button>
-          {testResult && (
-            <span className={`flex items-center gap-1.5 text-sm ${testResult.ok ? 'text-emerald-400' : 'text-red-400'}`}>
-              {testResult.ok ? <CheckCircle size={14} /> : <AlertCircle size={14} />}
-              {testResult.msg}
-            </span>
-          )}
-        </div>
       </div>
 
       {/* Info de APEX */}

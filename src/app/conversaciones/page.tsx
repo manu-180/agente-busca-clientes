@@ -8,7 +8,7 @@ interface SenderInfo {
   id: string
   alias: string
   color: string
-  provider: 'twilio' | 'wassenger'
+  provider: 'twilio'
   phone_number: string
 }
 

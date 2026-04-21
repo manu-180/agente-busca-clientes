@@ -9,7 +9,7 @@ import {
 interface Sender {
   id: string
   alias: string
-  provider: 'twilio' | 'wassenger'
+  provider: 'twilio'
   phone_number: string
   descripcion: string | null
   color: string
@@ -25,7 +25,7 @@ const COLORS = ['#84cc16', '#22d3ee', '#f97316', '#a855f7', '#ec4899', '#ef4444'
 
 const emptyForm = {
   alias: '',
-  provider: 'twilio' as 'twilio' | 'wassenger',
+  provider: 'twilio' as const,
   phone_number: '',
   descripcion: '',
   color: '#84cc16',
@@ -180,13 +180,7 @@ export default function SendersPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
-                  <span
-                    className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
-                      s.provider === 'twilio'
-                        ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
-                        : 'bg-orange-500/10 text-orange-400 border border-orange-500/20'
-                    }`}
-                  >
+                  <span className="text-[9px] font-mono font-bold px-2 py-0.5 rounded-full uppercase tracking-wider bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
                     {s.provider}
                   </span>
                   {s.es_legacy && (
@@ -285,17 +279,14 @@ export default function SendersPage() {
                     <label className="text-xs font-mono text-apex-muted uppercase tracking-wider block mb-1.5">Proveedor</label>
                     <select
                       value={form.provider}
-                      onChange={e => setForm(f => ({ ...f, provider: e.target.value as 'twilio' | 'wassenger' }))}
+                      onChange={e => setForm(f => ({ ...f, provider: e.target.value as 'twilio' }))}
                       className="w-full bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
                     >
                       <option value="twilio">Twilio</option>
-                      <option value="wassenger">Wassenger</option>
                     </select>
-                    {form.provider === 'twilio' && (
-                      <p className="text-[10px] text-apex-muted font-mono mt-1">
-                        Usa las credenciales TWILIO_ACCOUNT_SID y TWILIO_AUTH_TOKEN del sistema
-                      </p>
-                    )}
+                    <p className="text-[10px] text-apex-muted font-mono mt-1">
+                      Usa las credenciales TWILIO_ACCOUNT_SID y TWILIO_AUTH_TOKEN del sistema
+                    </p>
                   </div>
 
                   <div>

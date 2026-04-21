@@ -5,7 +5,6 @@ import {
   pareceMensajeAutomaticoNegocio,
   RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
 } from '@/lib/outbound-auto-reply'
-import { enviarMensajeWassenger } from '@/lib/wassenger'
 import { obtenerConfigConversacional } from '@/lib/conversation-config'
 import { decidirRespuestaConversacional } from '@/lib/response-decision'
 import { registrarEventoConversacional } from '@/lib/conversation-events'
@@ -361,46 +360,3 @@ export async function generarRespuestaAgente({
   }
 }
 
-export async function enviarMensajeAgente({
-  telefono,
-  mensaje,
-  lead_id,
-}: {
-  telefono: string
-  mensaje: string
-  lead_id: string
-}): Promise<{ ok: boolean; error?: string }> {
-  console.log('[AGENTE] Enviando mensaje a:', telefono, 'lead:', lead_id)
-
-  if (!telefono || !mensaje) {
-    console.error('[AGENTE] Faltan parámetros: teléfono o mensaje')
-    return { ok: false, error: 'Faltan telefono o mensaje' }
-  }
-
-  const supabase = createSupabaseServer()
-
-  try {
-    // Enviar por Wassenger
-    console.log('[AGENTE] Enviando por Wassenger...')
-    await enviarMensajeWassenger(telefono, mensaje)
-
-    // Guardar en conversaciones
-    if (lead_id) {
-      console.log('[AGENTE] Guardando en base de datos...')
-      await supabase.from('conversaciones').insert({
-        lead_id,
-        telefono,
-        mensaje,
-        rol: 'agente',
-        tipo_mensaje: 'texto',
-        manual: true,
-      })
-    }
-
-    console.log('[AGENTE] Mensaje enviado exitosamente')
-    return { ok: true }
-  } catch (error: any) {
-    console.error('[AGENTE] Error enviando mensaje:', error.message)
-    return { ok: false, error: error.message }
-  }
-}
