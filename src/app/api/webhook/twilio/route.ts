@@ -437,19 +437,30 @@ export async function POST(req: NextRequest) {
       return twimlOk()
     }
 
-    const { data: apexInfo } = await supabase
-      .from('apex_info')
-      .select('categoria, titulo, contenido')
-      .eq('activo', true)
-
-    const apexInfoTextoRaw = (apexInfo ?? [])
-      .map(info => `[${info.categoria.toUpperCase()}] ${info.titulo}\n${info.contenido}`)
-      .join('\n\n')
+    const [{ data: apexInfo }, { data: demosActivos }] = await Promise.all([
+      supabase.from('apex_info').select('categoria, titulo, contenido').eq('activo', true),
+      supabase.from('demos_rubro').select('url, strong_keywords').eq('active', true),
+    ])
 
     const verticalLead = detectarVertical(
       String(lead.rubro ?? ''),
       lead.descripcion as string | null | undefined
     )
+
+    // Buscar demo que matchee el rubro del lead
+    const rubroNorm = String(lead.rubro ?? '').toLowerCase()
+    const demoMatch = (demosActivos ?? []).find(d =>
+      (d.strong_keywords as string[]).some(kw => rubroNorm.includes(kw.toLowerCase().trim()))
+    )
+    const demoBloque = demoMatch
+      ? `[DEMO] Demo de sitio web para mostrar al cliente\nURL: ${demoMatch.url}\nUsá esta URL cuando el cliente quiera ver un ejemplo o pida la demo. Mostrala de forma natural, sin forzar.`
+      : ''
+
+    const apexInfoTextoRaw = [
+      ...(apexInfo ?? []).map(info => `[${info.categoria.toUpperCase()}] ${info.titulo}\n${info.contenido}`),
+      ...(demoBloque ? [demoBloque] : []),
+    ].join('\n\n')
+
     const apexInfoSanitizado = sanitizarApexInfoPorVertical(apexInfoTextoRaw, verticalLead)
     const apexInfoTexto = apexInfoSanitizado.texto
 

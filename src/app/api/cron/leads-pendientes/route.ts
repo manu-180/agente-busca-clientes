@@ -229,6 +229,7 @@ async function procesarSender(
       await actualizarLead(sup, lead.id, {
         mensaje_enviado: true,
         estado: 'contactado',
+        mensaje_inicial: mensajeGuardado,
         primer_envio_completado_at: new Date().toISOString(),
         primer_envio_error: null,
       })

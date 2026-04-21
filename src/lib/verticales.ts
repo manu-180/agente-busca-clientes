@@ -31,7 +31,7 @@ const VERTICALES: VerticalDef[] = [
     id: 'moda',
     label: 'moda / indumentaria / tienda de ropa',
     patterns:
-      /\b(moda|boutique|indumentaria|ropa(?:\s+femenina|\s+masculina)?|vestidos?|tienda(?:\s+de)?\s+ropa|textil|lencer[ií]a|calzado|zapater[ií]a|accesorios?)\b/i,
+      /\b(moda|boutique|indumentaria|ropa(?:\s+femenina|\s+masculina)?|vestidos?|tienda(?:\s+de)?\s+(?:ropa|mujer)|textil|lencer[ií]a|calzado|zapater[ií]a|accesorios?|mujer(?:\s+(?:moda|ropa|indumentaria))?)\b/i,
     exclusivas:
       /\b(catal[oó]go|talles?|prendas?|colecci[oó]n|look|outfit|temporada|env[ií]os?|probador|showroom)\b/i,
     permitidas: [
