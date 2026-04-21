@@ -7,7 +7,7 @@ import { generarMensajeFollowupClaude } from '@/lib/generar-followup'
 import type { Lead } from '@/types'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 300
+export const maxDuration = 60
 
 const ESTADOS_EXCLUIDOS = new Set(['no_interesado', 'cliente'])
 
@@ -46,7 +46,7 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
   }
 
   const { data: leadsRaw, error: errLeads } = await ejecutarConTablaLeads<Lead[]>((tabla) =>
-    supabase.from(tabla).select('*').eq('agente_activo', true).eq('mensaje_enviado', true).neq('estado', 'pendiente')
+    supabase.from(tabla).select('*').eq('agente_activo', true).eq('mensaje_enviado', true).neq('estado', 'pendiente').limit(15)
   )
 
   if (errLeads || !leadsRaw) {

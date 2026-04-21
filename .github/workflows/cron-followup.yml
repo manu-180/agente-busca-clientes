@@ -15,7 +15,7 @@ jobs:
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          RESPONSE=$(curl -s -w "\n%{http_code}" \
+          RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 90 \
             -H "Authorization: Bearer $CRON_SECRET" \
             "https://apex-leads-six.vercel.app/api/cron/followup")
 
