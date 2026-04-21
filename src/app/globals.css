@@ -18,17 +18,17 @@ body {
 
 /* Scrollbar personalizado */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #111111;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #333333;
-  border-radius: 3px;
+  background: #d8d0c4;
+  border-radius: 6px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #444444;
+  background: #c4baae;
 }
 
 /* Animaciones */
@@ -51,10 +51,10 @@ body {
 }
 
 /* Badge de estado */
-.badge-pendiente { background-color: #333; color: #999; }
-.badge-contactado { background-color: #1a3a5c; color: #60a5fa; }
-.badge-respondio { background-color: #1a3a1a; color: #4ade80; }
-.badge-interesado { background-color: #3a3a1a; color: #c8f135; }
-.badge-cerrado { background-color: #1a3a2a; color: #34d399; }
-.badge-descartado { background-color: #3a1a1a; color: #f87171; }
-.badge-no_interesado { background-color: #2a2a2a; color: #888; }
+.badge-pendiente    { background-color: #edeae5; color: #7a7268; }
+.badge-contactado   { background-color: #dbeafe; color: #2563eb; }
+.badge-respondio    { background-color: #dcfce7; color: #16a34a; }
+.badge-interesado   { background-color: #ecfccb; color: #4d7c0f; }
+.badge-cerrado      { background-color: #d1fae5; color: #059669; }
+.badge-descartado   { background-color: #fee2e2; color: #dc2626; }
+.badge-no_interesado { background-color: #f0ece7; color: #9a8f85; }
