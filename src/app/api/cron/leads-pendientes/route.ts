@@ -208,7 +208,23 @@ async function procesarSender(
     const telefono = String(lead.telefono).replace(/\D/g, '')
     if (!telefono) {
       await actualizarLead(sup, lead.id, { estado: 'descartado', primer_envio_error: 'telefono_invalido' })
-      continue // teléfono inválido no es fallo del sender
+      continue
+    }
+
+    // Evitar spam: saltar si el teléfono ya tiene conversación previa o fue enviado antes
+    const [{ data: yaConv }, { data: yaLead }] = await Promise.all([
+      sup.from('conversaciones').select('id').eq('telefono', telefono).limit(1).maybeSingle(),
+      sup.from(LEADS_TABLE).select('id').eq('telefono', telefono).eq('mensaje_enviado', true).neq('id', lead.id).limit(1).maybeSingle(),
+    ])
+
+    if (yaConv || yaLead) {
+      await actualizarLead(sup, lead.id, {
+        estado: 'contactado',
+        mensaje_enviado: true,
+        primer_envio_error: 'telefono_ya_contactado',
+      })
+      console.warn(`[cron leads-pendientes] [${key}] Lead ${lead.id} saltado — teléfono ${telefono} ya fue contactado`)
+      continue
     }
 
     try {

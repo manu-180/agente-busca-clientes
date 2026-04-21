@@ -19,22 +19,29 @@ function normalizarTelefono(telefono: string | null | undefined): string {
 
 async function obtenerTelefonosExistentes(telefonos: string[]) {
   const supabase = createSupabaseServer()
-  const tablas = ['leads', 'leads_apex_next']
 
-  for (const tabla of tablas) {
-    const { data, error } = await supabase.from(tabla).select('telefono').in('telefono', telefonos)
+  const { data: leadsData, error: leadsError } = await supabase
+    .from('leads')
+    .select('telefono')
+    .in('telefono', telefonos)
 
-    if (!error) {
-      return { telefonos: (data || []).map((item) => normalizarTelefono(item.telefono)).filter(Boolean) }
-    }
-
-    const tablaNoExiste = error.message.includes("Could not find the table 'public.leads'")
-    if (!tablaNoExiste) {
-      return { error: `Error consultando leads: ${error.message}` }
-    }
+  if (leadsError) {
+    return { error: `Error consultando leads: ${leadsError.message}` }
   }
 
-  return { error: 'No existe la tabla de leads esperada en Supabase.' }
+  const { data: convsData } = await supabase
+    .from('conversaciones')
+    .select('telefono')
+    .in('telefono', telefonos)
+
+  const todos = [
+    ...(leadsData ?? []),
+    ...(convsData ?? []),
+  ]
+
+  return {
+    telefonos: todos.map((e) => normalizarTelefono(String(e.telefono ?? ''))).filter(Boolean),
+  }
 }
 
 export async function POST(req: NextRequest) {

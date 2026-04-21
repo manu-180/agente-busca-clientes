@@ -140,7 +140,6 @@ export default function ConversacionesPage() {
     await cargarConversaciones()
   }
 
-  // Senders únicos para el filtro
   const sendersUnicos = Array.from(
     new Map(
       grupos
@@ -153,41 +152,52 @@ export default function ConversacionesPage() {
     ? grupos.filter(g => g.sender?.id === filtroSender)
     : grupos
 
-  return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="font-syne font-bold text-3xl tracking-tight">Inbox</h1>
-        <p className="text-apex-muted text-sm mt-1 font-mono">Conversaciones de WhatsApp</p>
-      </div>
+  const getInitial = (nombre: string) => (nombre?.[0] ?? '?').toUpperCase()
 
-      <div className="flex gap-4 h-[calc(100vh-200px)]">
-        {/* Lista de conversaciones */}
-        <div className={`w-full lg:w-80 flex-shrink-0 bg-apex-card border border-apex-border rounded-xl overflow-hidden flex flex-col ${seleccionado ? 'hidden lg:flex' : 'flex'}`}>
-          <div className="p-4 border-b border-apex-border flex items-center justify-between">
-            <p className="text-xs font-mono text-apex-muted uppercase tracking-wider">
-              {gruposFiltrados.length} conversaciones
-            </p>
-            {totalNoLeidos > 0 && (
-              <button
-                onClick={leerTodos}
-                title="Marcar todas como leídas"
-                className="flex items-center gap-1 text-[11px] font-mono text-apex-muted hover:text-apex-lime transition-colors group"
-              >
-                <CheckCheck size={13} className="group-hover:text-apex-lime transition-colors" />
-                <span>leer todos</span>
-              </button>
-            )}
+  const formatTime = (ts: string) =>
+    new Date(ts).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
+
+  const formatDate = (ts: string) =>
+    new Date(ts).toLocaleString('es-AR', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })
+
+  return (
+    <div className="flex flex-col h-[calc(100vh-80px)] -mx-4 sm:-mx-6 lg:-mx-8 -mt-4 sm:-mt-6 lg:-mt-8">
+      {/* Panel container */}
+      <div className="flex flex-1 overflow-hidden bg-white border border-gray-200 shadow-sm lg:m-0 rounded-none lg:rounded-xl lg:m-2">
+
+        {/* ── Left: conversation list ── */}
+        <div className={`w-full lg:w-[320px] flex-shrink-0 flex flex-col border-r border-gray-100 bg-white ${seleccionado ? 'hidden lg:flex' : 'flex'}`}>
+
+          {/* Header */}
+          <div className="px-5 py-4 border-b border-gray-100">
+            <div className="flex items-center justify-between">
+              <div>
+                <h1 className="text-base font-semibold text-gray-900 tracking-tight">Inbox</h1>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {loading ? 'Cargando...' : `${gruposFiltrados.length} conversaciones`}
+                </p>
+              </div>
+              {totalNoLeidos > 0 && (
+                <button
+                  onClick={leerTodos}
+                  className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <CheckCheck size={13} />
+                  leer todos
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Filtro por sender */}
+          {/* Sender filter */}
           {sendersUnicos.length > 1 && (
-            <div className="px-4 py-2 border-b border-apex-border flex gap-2 flex-wrap">
+            <div className="px-4 py-2.5 border-b border-gray-100 flex gap-1.5 flex-wrap bg-gray-50/60">
               <button
                 onClick={() => setFiltroSender(null)}
-                className={`text-[10px] font-mono px-2 py-1 rounded-full border transition-colors ${
+                className={`text-[10px] font-medium px-2.5 py-1 rounded-full transition-all ${
                   !filtroSender
-                    ? 'border-apex-lime text-apex-lime bg-apex-lime/10'
-                    : 'border-apex-border text-apex-muted hover:text-white'
+                    ? 'bg-gray-900 text-white'
+                    : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-100'
                 }`}
               >
                 Todos
@@ -196,12 +206,12 @@ export default function ConversacionesPage() {
                 <button
                   key={s.id}
                   onClick={() => setFiltroSender(filtroSender === s.id ? null : s.id)}
-                  className={`text-[10px] font-mono px-2 py-1 rounded-full border transition-colors ${
+                  className="text-[10px] font-medium px-2.5 py-1 rounded-full border transition-all"
+                  style={
                     filtroSender === s.id
-                      ? 'border-current'
-                      : 'border-apex-border text-apex-muted hover:text-white'
-                  }`}
-                  style={filtroSender === s.id ? { color: s.color, borderColor: s.color, background: s.color + '15' } : {}}
+                      ? { backgroundColor: s.color, borderColor: s.color, color: '#111' }
+                      : { backgroundColor: '#fff', borderColor: '#e5e7eb', color: '#6b7280' }
+                  }
                 >
                   {s.alias}
                 </button>
@@ -209,169 +219,198 @@ export default function ConversacionesPage() {
             </div>
           )}
 
+          {/* List */}
           <div className="flex-1 overflow-y-auto">
             {loading ? (
-              <p className="p-4 text-sm text-apex-muted">Cargando...</p>
+              <div className="flex items-center justify-center h-24">
+                <Loader2 size={20} className="animate-spin text-gray-300" />
+              </div>
             ) : gruposFiltrados.length === 0 ? (
-              <div className="p-6 text-center">
-                <MessageSquare size={32} className="text-apex-muted mx-auto mb-3" />
-                <p className="text-sm text-apex-muted">No hay conversaciones aún</p>
+              <div className="flex flex-col items-center justify-center h-40 gap-2">
+                <MessageSquare size={28} className="text-gray-200" />
+                <p className="text-sm text-gray-400">No hay conversaciones</p>
               </div>
             ) : (
-              gruposFiltrados.map(grupo => (
-                <button
-                  key={grupo.lead.id}
-                  onClick={() => seleccionarLead(grupo.lead.id)}
-                  className={`w-full text-left p-4 border-b border-apex-border/50 hover:bg-apex-border/20 transition-colors ${
-                    seleccionado === grupo.lead.id ? 'bg-apex-lime/5 border-l-2 border-l-apex-lime' : ''
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-medium truncate flex-1 mr-2">{grupo.lead.nombre}</span>
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      {grupo.sender && (
-                        <span
-                          className="text-[9px] font-mono px-1.5 py-0.5 rounded-full border"
-                          style={{ color: grupo.sender.color, borderColor: grupo.sender.color + '60', background: grupo.sender.color + '15' }}
-                        >
-                          {grupo.sender.alias}
-                        </span>
-                      )}
-                      {grupo.no_leidos > 0 && (
-                        <span className="bg-red-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center">
-                          {grupo.no_leidos}
-                        </span>
-                      )}
+              gruposFiltrados.map(grupo => {
+                const activo = seleccionado === grupo.lead.id
+                return (
+                  <button
+                    key={grupo.lead.id}
+                    onClick={() => seleccionarLead(grupo.lead.id)}
+                    className={`w-full text-left px-4 py-3 border-b border-gray-50 transition-colors relative ${
+                      activo ? 'bg-lime-50' : 'hover:bg-gray-50'
+                    }`}
+                  >
+                    {activo && (
+                      <span className="absolute left-0 top-0 bottom-0 w-0.5 bg-[#c8f135] rounded-r" />
+                    )}
+                    <div className="flex items-start gap-3">
+                      {/* Avatar */}
+                      <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0 text-sm font-semibold text-gray-500 mt-0.5">
+                        {getInitial(grupo.lead.nombre)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1 mb-0.5">
+                          <span className={`text-sm truncate ${grupo.no_leidos > 0 ? 'font-semibold text-gray-900' : 'font-medium text-gray-700'}`}>
+                            {grupo.lead.nombre}
+                          </span>
+                          <span className="text-[10px] text-gray-400 flex-shrink-0 tabular-nums">
+                            {formatDate(grupo.ultimo_timestamp)}
+                          </span>
+                        </div>
+                        <p className={`text-xs truncate mb-1.5 ${grupo.no_leidos > 0 ? 'text-gray-700' : 'text-gray-400'}`}>
+                          {grupo.ultimo_mensaje}
+                        </p>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1">
+                            <span className={`badge-${grupo.lead.estado} text-[9px] px-1.5 py-0.5 rounded-full`}>
+                              {grupo.lead.estado}
+                            </span>
+                            {grupo.sender && (
+                              <span
+                                className="text-[9px] font-medium px-1.5 py-0.5 rounded-full"
+                                style={{ color: grupo.sender.color, background: grupo.sender.color + '20' }}
+                              >
+                                {grupo.sender.alias}
+                              </span>
+                            )}
+                          </div>
+                          {grupo.no_leidos > 0 && (
+                            <span className="bg-red-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center">
+                              {grupo.no_leidos}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <p className="text-xs text-apex-muted truncate">{grupo.ultimo_mensaje}</p>
-                  <div className="flex items-center justify-between mt-1">
-                    <span className={`badge-${grupo.lead.estado} text-[10px] px-1.5 py-0.5 rounded-full`}>
-                      {grupo.lead.estado}
-                    </span>
-                    <span className="text-[10px] text-apex-muted font-mono">
-                      {new Date(grupo.ultimo_timestamp).toLocaleString('es-AR', {
-                        hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit'
-                      })}
-                    </span>
-                  </div>
-                </button>
-              ))
+                  </button>
+                )
+              })
             )}
           </div>
         </div>
 
-        {/* Chat */}
-        <div className={`flex-1 bg-apex-card border border-apex-border rounded-xl overflow-hidden flex flex-col ${!seleccionado ? 'hidden lg:flex' : 'flex'}`}>
+        {/* ── Right: chat view ── */}
+        <div
+          className={`flex-1 flex flex-col min-w-0 ${!seleccionado ? 'hidden lg:flex' : 'flex'}`}
+          style={{ backgroundImage: 'radial-gradient(circle, #e5e7eb 1px, transparent 1px)', backgroundSize: '20px 20px', backgroundColor: '#f9fafb' }}
+        >
           {!grupoActivo ? (
-            <div className="flex-1 flex items-center justify-center">
+            <div className="flex-1 flex items-center justify-center bg-transparent">
               <div className="text-center">
-                <MessageSquare size={48} className="text-apex-border mx-auto mb-3" />
-                <p className="text-apex-muted text-sm">Seleccioná una conversación</p>
+                <div className="w-16 h-16 rounded-full bg-white shadow-sm flex items-center justify-center mx-auto mb-3">
+                  <MessageSquare size={26} className="text-gray-300" />
+                </div>
+                <p className="text-sm text-gray-400">Seleccioná una conversación</p>
               </div>
             </div>
           ) : (
             <>
-              {/* Header del chat */}
-              <div className="p-4 border-b border-apex-border flex items-center justify-between">
+              {/* Chat header */}
+              <div className="px-4 py-3 border-b border-gray-200 bg-white flex items-center justify-between shadow-sm flex-shrink-0">
                 <div className="flex items-center gap-3">
                   <button
                     onClick={() => setSeleccionado(null)}
-                    className="lg:hidden p-1 rounded hover:bg-apex-border"
+                    className="lg:hidden p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"
                   >
-                    <ArrowLeft size={18} />
+                    <ArrowLeft size={17} />
                   </button>
+                  <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-sm font-semibold text-gray-600">
+                    {getInitial(grupoActivo.lead.nombre)}
+                  </div>
                   <div>
-                    <h3 className="font-semibold text-sm">{grupoActivo.lead.nombre}</h3>
-                    <p className="text-[11px] text-apex-muted font-mono">
-                      {grupoActivo.lead.telefono} · {grupoActivo.lead.rubro}
+                    <h3 className="font-semibold text-gray-900 text-sm leading-tight">
+                      {grupoActivo.lead.nombre}
+                    </h3>
+                    <p className="text-[11px] text-gray-400 leading-tight">
+                      {grupoActivo.lead.telefono}
+                      {grupoActivo.lead.rubro && ` · ${grupoActivo.lead.rubro}`}
                       {grupoActivo.sender && (
-                        <span className="ml-2" style={{ color: grupoActivo.sender.color }}>
-                          · desde {grupoActivo.sender.alias} ({grupoActivo.sender.phone_number})
+                        <span className="ml-1" style={{ color: grupoActivo.sender.color }}>
+                          · {grupoActivo.sender.alias} ({grupoActivo.sender.phone_number})
                         </span>
                       )}
                     </p>
                   </div>
                 </div>
+
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => toggleAgente(grupoActivo.lead.id, !grupoActivo.lead.agente_activo)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
                       grupoActivo.lead.agente_activo
-                        ? 'bg-apex-lime/10 text-apex-lime border border-apex-lime/20'
-                        : 'bg-apex-border text-apex-muted'
+                        ? 'bg-lime-50 text-lime-700 border-lime-200 hover:bg-lime-100'
+                        : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
                     }`}
                   >
-                    {grupoActivo.lead.agente_activo ? <Bot size={14} /> : <BotOff size={14} />}
+                    {grupoActivo.lead.agente_activo ? <Bot size={13} /> : <BotOff size={13} />}
                     {grupoActivo.lead.agente_activo ? 'Agente ON' : 'Agente OFF'}
                   </button>
                   <button
                     onClick={() => cambiarEstadoLead(grupoActivo.lead.id, 'interesado')}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-apex-border hover:bg-apex-muted/30 transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100 transition-colors"
                   >
-                    <UserCheck size={14} />
+                    <UserCheck size={13} />
                     Interesado
                   </button>
                   <button
                     onClick={() => cambiarEstadoLead(grupoActivo.lead.id, 'cerrado')}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-100 transition-colors"
                   >
-                    <CheckCircle size={14} />
+                    <CheckCircle size={13} />
                     Cerrado
                   </button>
                 </div>
               </div>
 
-              {/* Mensajes */}
-              <div ref={chatRef} className="flex-1 overflow-y-auto p-4 space-y-3">
-                {grupoActivo.mensajes.map(msg => (
-                  <div
-                    key={msg.id}
-                    className={`flex ${msg.rol === 'agente' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div
-                      className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-sm ${
-                        msg.rol === 'agente'
-                          ? 'bg-apex-lime/15 text-apex-lime rounded-br-md'
-                          : 'bg-apex-border text-white rounded-bl-md'
-                      }`}
-                    >
-                      <p className="whitespace-pre-wrap">{msg.mensaje}</p>
-                      <p className={`text-[10px] mt-1 ${
-                        msg.rol === 'agente' ? 'text-apex-lime/50' : 'text-apex-muted'
-                      }`}>
-                        {new Date(msg.timestamp).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}
-                      </p>
+              {/* Messages */}
+              <div ref={chatRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-1.5">
+                {grupoActivo.mensajes.map(msg => {
+                  const isAgente = msg.rol === 'agente'
+                  return (
+                    <div key={msg.id} className={`flex ${isAgente ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`flex flex-col max-w-[70%] ${isAgente ? 'items-end' : 'items-start'}`}>
+                        <div
+                          className={`px-4 py-2.5 rounded-2xl text-sm shadow-sm ${
+                            isAgente
+                              ? 'bg-[#c8f135] text-gray-900 rounded-br-sm'
+                              : 'bg-white text-gray-800 rounded-bl-sm border border-gray-100'
+                          }`}
+                        >
+                          <p className="whitespace-pre-wrap leading-relaxed">{msg.mensaje}</p>
+                        </div>
+                        <p className="text-[10px] text-gray-400 mt-1 px-1">{formatTime(msg.timestamp)}</p>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
 
               {/* Input */}
-              <div className="p-4 border-t border-apex-border">
-                <div className="flex gap-2">
+              <div className="px-4 py-3 border-t border-gray-200 bg-white flex-shrink-0">
+                <div className="flex gap-2 items-center">
                   <input
                     type="text"
                     value={nuevoMensaje}
                     onChange={e => setNuevoMensaje(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && !e.shiftKey && enviarMensaje()}
                     placeholder="Escribí un mensaje manual..."
-                    className="flex-1 bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
+                    className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:border-gray-300 focus:bg-white transition-colors"
                   />
                   <button
                     onClick={sugerirRespuesta}
                     disabled={sugiriendo}
                     title="Sugerir respuesta con IA"
-                    className="bg-apex-border text-apex-muted hover:text-apex-lime hover:bg-apex-lime/10 p-2.5 rounded-lg transition-colors disabled:opacity-40"
+                    className="p-2.5 rounded-xl bg-gray-100 text-gray-400 hover:bg-lime-50 hover:text-lime-600 border border-gray-200 hover:border-lime-200 transition-all disabled:opacity-40"
                   >
                     {sugiriendo ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
                   </button>
                   <button
                     onClick={enviarMensaje}
                     disabled={!nuevoMensaje.trim() || enviando}
-                    className="bg-apex-lime text-apex-black p-2.5 rounded-lg hover:bg-apex-lime-hover transition-colors disabled:opacity-40"
+                    className="p-2.5 rounded-xl bg-[#c8f135] text-gray-900 hover:bg-[#d4f54d] transition-colors disabled:opacity-40 shadow-sm"
                   >
-                    <Send size={18} />
+                    {enviando ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
                   </button>
                 </div>
               </div>
