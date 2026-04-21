@@ -55,15 +55,24 @@ export async function POST(req: NextRequest) {
 
   const leadRow = data as { id: string } | null
   const mensajeInicial = typeof body.mensaje_inicial === 'string' ? body.mensaje_inicial.trim() : ''
-  if (leadRow?.id && mensajeInicial && body.telefono) {
+  if (leadRow?.id && mensajeInicial && telefonoNorm) {
+    // Usar siempre el teléfono normalizado para que el cron de leads-pendientes
+    // lo encuentre y no reenvíe el mensaje al mismo número.
     await supabase.from('conversaciones').insert({
       lead_id: leadRow.id,
-      telefono: String(body.telefono),
+      telefono: telefonoNorm,
       mensaje: mensajeInicial,
       rol: 'agente',
       tipo_mensaje: 'texto',
       manual: false,
     })
+    // Marcar el lead como ya contactado para que el cron no lo vuelva a tomar.
+    await ejecutarConTablaLeads((tabla) =>
+      supabase
+        .from(tabla)
+        .update({ mensaje_enviado: true, estado: 'contactado' })
+        .eq('id', leadRow.id)
+    )
   }
 
   return NextResponse.json({ lead: data })

@@ -211,19 +211,41 @@ async function procesarSender(
       continue
     }
 
-    // Evitar spam: saltar si el teléfono ya tiene conversación previa o fue enviado antes
-    const [{ data: yaConv }, { data: yaLead }] = await Promise.all([
+    // Evitar spam: saltar si el teléfono ya tiene conversación previa o fue enviado antes.
+    // Chequear también por lead_id directo para cubrir el caso en que el teléfono en
+    // conversaciones fue guardado con un formato diferente.
+    const [{ data: yaConv }, { data: yaLead }, { data: yaConvPorLead }] = await Promise.all([
       sup.from('conversaciones').select('id').eq('telefono', telefono).limit(1).maybeSingle(),
       sup.from(LEADS_TABLE).select('id').eq('telefono', telefono).eq('mensaje_enviado', true).neq('id', lead.id).limit(1).maybeSingle(),
+      sup.from('conversaciones').select('id').eq('lead_id', lead.id).limit(1).maybeSingle(),
     ])
 
-    if (yaConv || yaLead) {
+    if (yaConv || yaLead || yaConvPorLead) {
       await actualizarLead(sup, lead.id, {
         estado: 'contactado',
         mensaje_enviado: true,
         primer_envio_error: 'telefono_ya_contactado',
       })
       console.warn(`[cron leads-pendientes] [${key}] Lead ${lead.id} saltado — teléfono ${telefono} ya fue contactado`)
+      continue
+    }
+
+    // Lock atómico: intentar reclamar el lead marcando procesando_hasta.
+    // Si otro proceso ya lo reclamó (procesando_hasta en el futuro) o ya lo envió,
+    // el UPDATE no matchea y devuelve count=0 — saltar sin enviar.
+    const procesandoHasta = new Date(Date.now() + 5 * 60_000).toISOString()
+    const { data: claimed, error: claimErr } = await sup
+      .from(LEADS_TABLE)
+      .update({ procesando_hasta: procesandoHasta })
+      .eq('id', lead.id)
+      .eq('mensaje_enviado', false)
+      .eq('estado', 'pendiente')
+      .or(`procesando_hasta.is.null,procesando_hasta.lt.${new Date().toISOString()}`)
+      .select('id')
+      .maybeSingle()
+
+    if (claimErr || !claimed) {
+      console.warn(`[cron leads-pendientes] [${key}] Lead ${lead.id} ya reclamado por otro proceso — saltando`)
       continue
     }
 
