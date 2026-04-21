@@ -25,6 +25,21 @@ export async function GET(req: NextRequest) {
 
   const supabase = createSupabaseServer()
 
+  // Bloquea ejecuciones concurrentes: solo una instancia corre a la vez.
+  // Si otra instancia adquirió el lock en los últimos 10 min, retorna inmediatamente.
+  const { data: lockAcquired, error: lockErr } = await supabase.rpc('try_followup_cron_lock')
+  if (lockErr || !lockAcquired) {
+    return NextResponse.json({ ok: true, skipped: true, motivo: 'lock_activo' })
+  }
+
+  try {
+    return await runFollowup(supabase)
+  } finally {
+    await supabase.rpc('release_followup_cron_lock')
+  }
+}
+
+async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
   const { data: cfg } = await supabase.from('configuracion').select('valor').eq('clave', 'agente_activo').single()
   if (cfg?.valor !== 'true') {
     return NextResponse.json({ ok: true, skipped: true, motivo: 'agente_global_off' })

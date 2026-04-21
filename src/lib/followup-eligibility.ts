@@ -52,11 +52,13 @@ export function evaluarFollowup({
   if (followupsEnviados === 0) {
     if (!hayCliente) {
       const agentes = ordenados.filter(m => m.rol === 'agente')
-      const primerAgente = agentes[0]
-      if (!primerAgente) {
+      const ultimoAgente = agentes[agentes.length - 1]
+      if (!ultimoAgente) {
         return { elegible: false, motivo: 'sin_mensaje_agente' }
       }
-      referenciaTs = parseTs(primerAgente.timestamp)
+      // Usar el último mensaje del agente (no el primero) para que cualquier
+      // mensaje reciente del agente (incluso manual) reinicie el contador de 48h.
+      referenciaTs = parseTs(ultimoAgente.timestamp)
     } else {
       const ultimoCliente = ordenados.filter(m => m.rol === 'cliente').pop()!
       referenciaTs = parseTs(ultimoCliente.timestamp)
