@@ -6,15 +6,19 @@ export const dynamic = 'force-dynamic'
 export async function GET() {
   const supabase = createSupabaseServer()
 
-  const { data: conversaciones, error: convError } = await supabase
+  // Importante: con .order(asc).limit(N) PostgREST devuelve los N mensajes más *antiguos*.
+  // Pasado ~N filas en la tabla, los envíos nuevos quedan fuera y el inbox deja de actualizarse.
+  const { data: conversacionesRecientes, error: convError } = await supabase
     .from('conversaciones')
     .select(`
       id, lead_id, telefono, mensaje, rol, tipo_mensaje,
       timestamp, leido, manual,
       sender:sender_id (id, alias, color, provider, phone_number)
     `)
-    .order('timestamp', { ascending: true })
-    .limit(5000)
+    .order('timestamp', { ascending: false })
+    .limit(10000)
+
+  const conversaciones = [...(conversacionesRecientes ?? [])].reverse()
 
   if (convError) return NextResponse.json({ error: convError.message }, { status: 500 })
 
