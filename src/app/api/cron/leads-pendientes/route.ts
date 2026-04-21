@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
-import { enviarMensajeWassenger, enviarVideoWassengerConReintentos } from '@/lib/wassenger'
-import { generarPrimerMensaje } from '@/lib/generar-primer-mensaje'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -14,17 +12,17 @@ const MAX_REINTENTOS = 3
 // Para cambiar límites o intervalo, editar aquí (o migrar a tabla configuracion).
 interface SenderDef {
   key: string
-  provider: 'twilio' | 'wassenger'
+  provider: 'twilio'
   phoneNumber: string
-  contentSid?: string  // solo Twilio — template pre-aprobado por Meta
+  contentSid: string
   dailyLimit: number
-  intMin: number       // minutos mínimo entre envíos
-  intMax: number       // minutos máximo entre envíos
+  intMin: number
+  intMax: number
 }
 
 const SENDERS: SenderDef[] = [
   {
-    key: 'twilio',
+    key: 'twilio_1',
     provider: 'twilio',
     phoneNumber: '+5491124843094',
     contentSid: 'HXeab2f108288fe221bce43ebe6565912a',
@@ -33,9 +31,10 @@ const SENDERS: SenderDef[] = [
     intMax: 15,
   },
   {
-    key: 'wassenger',
-    provider: 'wassenger',
+    key: 'twilio_2',
+    provider: 'twilio',
     phoneNumber: '+5491124842720',
+    contentSid: 'HXeab2f108288fe221bce43ebe6565912a',
     dailyLimit: 30,
     intMin: 10,
     intMax: 15,
@@ -78,9 +77,6 @@ function minAleatorio(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min
 }
 
-function sleep(ms: number) {
-  return new Promise<void>(r => setTimeout(r, ms))
-}
 
 async function leerConfig(sup: SupabaseClient, clave: string, def: string): Promise<string> {
   const { data } = await sup.from('configuracion').select('valor').eq('clave', clave).maybeSingle()
@@ -129,7 +125,7 @@ async function enviarTemplateTwilio(
         To: `whatsapp:+${telefono}`,
         ContentSid: contentSid,
         // {{1}}=nombre  {{3}}=zona  {{4}}=rubro  (según plantilla aprobada)
-        ContentVariables: JSON.stringify({ '1': nombre, '3': zona, '4': rubro }),
+        ContentVariables: JSON.stringify({ '1': nombre, '2': '5', '3': zona, '4': rubro }),
       }).toString(),
     }
   )
@@ -216,35 +212,8 @@ async function procesarSender(
     }
 
     try {
-      let mensajeGuardado: string
-
-      if (provider === 'twilio' && contentSid) {
-        await enviarTemplateTwilio(telefono, lead.nombre, lead.zona, lead.rubro, phoneNumber, contentSid)
-        mensajeGuardado = `Hola ${lead.nombre} 👋\n\nTrabajo con negocios de ${lead.zona} haciendo páginas web para ${lead.rubro}. ¿Qué decís?`
-      } else {
-        // Wassenger: generar mensaje dinámico
-        let mensaje = (lead.mensaje_inicial ?? '').trim()
-        if (!mensaje) {
-          const generado = await generarPrimerMensaje({
-            nombre: lead.nombre,
-            rubro: lead.rubro,
-            zona: lead.zona,
-            descripcion: lead.descripcion,
-            instagram: lead.instagram,
-          })
-          if (!generado) {
-            await actualizarLead(sup, lead.id, {
-              primer_envio_intentos: (lead.primer_envio_intentos ?? 0) + 1,
-              primer_envio_error: 'generar_mensaje_fallo',
-            })
-            continue // fallo de generación no es fallo del sender
-          }
-          mensaje = generado
-          await actualizarLead(sup, lead.id, { mensaje_inicial: mensaje })
-        }
-        await enviarMensajeWassenger(telefono, mensaje)
-        mensajeGuardado = mensaje
-      }
+      await enviarTemplateTwilio(telefono, lead.nombre, lead.zona, lead.rubro, phoneNumber, contentSid)
+      const mensajeGuardado = `Hola ${lead.nombre} Vi que tu negocio tiene 5⭐ en Google. Trabajo con negocios de ${lead.zona} haciendo páginas web para ${lead.rubro}. ¿Puedo contarte en 2 minutos?`
 
       // Guardar conversación
       await sup.from('conversaciones').insert({
@@ -264,31 +233,6 @@ async function procesarSender(
         primer_envio_error: null,
       })
 
-      // Video solo para Wassenger
-      let videoOk = false
-      let videoError: string | null = null
-      if (provider === 'wassenger' && !forced) {
-        const videoUrl = process.env.VIDEO_PAGINA_URL
-        if (videoUrl) {
-          await sleep(2000 + Math.floor(Math.random() * 2000))
-          const rv = await enviarVideoWassengerConReintentos(telefono, videoUrl, 3)
-          videoOk = rv.ok
-          videoError = rv.error ?? null
-          if (videoOk) {
-            await actualizarLead(sup, lead.id, { video_enviado: true })
-            await sup.from('conversaciones').insert({
-              lead_id: lead.id,
-              telefono,
-              mensaje: '[VIDEO] Demo de landing — enviado automáticamente',
-              rol: 'agente',
-              tipo_mensaje: 'otro',
-              manual: false,
-              sender_id: senderId,
-            })
-          }
-        }
-      }
-
       // Éxito: reset fallos, avanzar slot y contador
       await incrementarDailyCount(sup, key, enviados)
       await escribirConfig(sup, `${key}_primer_fallos`, '0')
@@ -306,7 +250,6 @@ async function procesarSender(
         proximo_min: proximoMin,
         intentos_hasta_envio: i + 1,
         ...(erroresTick.length > 0 ? { saltados: erroresTick.length } : {}),
-        ...(provider === 'wassenger' ? { video_ok: videoOk, video_error: videoError } : {}),
       }
 
     } catch (e) {

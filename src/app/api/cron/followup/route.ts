@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { ejecutarConTablaLeads } from '@/lib/leads-table'
-import { enviarMensajeWassenger } from '@/lib/wassenger'
+import { enviarMensajeTwilio } from '@/lib/twilio'
 import { evaluarFollowup } from '@/lib/followup-eligibility'
 import { generarMensajeFollowupClaude } from '@/lib/generar-followup'
 import type { Lead } from '@/types'
@@ -115,11 +115,32 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
       continue
     }
 
+    // Buscar sender original del lead para mantener el mismo número
+    const { data: ultimaConv } = await supabase
+      .from('conversaciones')
+      .select('sender_id')
+      .eq('lead_id', lead.id)
+      .not('sender_id', 'is', null)
+      .order('timestamp', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    let senderPhone: string | undefined
+    let senderId: string | null = ultimaConv?.sender_id ?? null
+    if (senderId) {
+      const { data: senderRow } = await supabase
+        .from('senders')
+        .select('phone_number')
+        .eq('id', senderId)
+        .maybeSingle()
+      senderPhone = senderRow?.phone_number ?? undefined
+    }
+
     try {
-      await enviarMensajeWassenger(lead.telefono, texto)
+      await enviarMensajeTwilio(lead.telefono, texto, senderPhone)
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
-      resultados.push({ lead_id: lead.id, ok: false, detalle: `wassenger:${msg}` })
+      resultados.push({ lead_id: lead.id, ok: false, detalle: `twilio:${msg}` })
       continue
     }
 
@@ -131,6 +152,7 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
       tipo_mensaje: 'texto',
       manual: false,
       es_followup: true,
+      sender_id: senderId,
     })
 
     if (errIns) {

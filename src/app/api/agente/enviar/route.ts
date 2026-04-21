@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { enviarMensajeTwilio } from '@/lib/twilio'
-import { enviarMensajeWassenger, enviarVideoWassengerConReintentos } from '@/lib/wassenger'
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
@@ -33,11 +32,7 @@ export async function POST(req: NextRequest) {
     : { data: null }
 
   try {
-    if (senderData?.provider === 'twilio') {
-      await enviarMensajeTwilio(telefono, mensaje, senderData.phone_number)
-    } else {
-      await enviarMensajeWassenger(telefono, mensaje)
-    }
+    await enviarMensajeTwilio(telefono, mensaje, senderData?.phone_number)
 
     if (lead_id) {
       await supabase.from('conversaciones').insert({
@@ -51,21 +46,7 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // Video solo aplica para Wassenger (legacy behavior)
-    let videoResult: { ok: boolean; intentos: number; error?: string } | null = null
-    if (!senderData || senderData.provider === 'wassenger') {
-      const videoUrl = process.env.VIDEO_PAGINA_URL
-      if (videoUrl) {
-        videoResult = await enviarVideoWassengerConReintentos(telefono, videoUrl)
-        if (videoResult.ok) {
-          console.log(`[API] Video enviado a ${telefono} (intentos: ${videoResult.intentos})`)
-        } else {
-          console.error(`[API] Video falló tras ${videoResult.intentos} intentos:`, videoResult.error)
-        }
-      }
-    }
-
-    return NextResponse.json({ ok: true, video: videoResult })
+    return NextResponse.json({ ok: true })
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error)
     console.error('[API] Error enviando mensaje:', msg)
