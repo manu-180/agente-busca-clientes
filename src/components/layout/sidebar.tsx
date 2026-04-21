@@ -46,7 +46,7 @@ export function Sidebar() {
       {/* Mobile toggle */}
       <button
         onClick={() => setOpen(!open)}
-        className="fixed top-4 left-4 z-50 p-2 bg-apex-card rounded-lg border border-apex-border lg:hidden"
+        className="fixed top-4 left-4 z-50 p-2 bg-white rounded-lg border border-stone-200 lg:hidden"
       >
         {open ? <X size={20} /> : <Menu size={20} />}
       </button>
@@ -62,21 +62,21 @@ export function Sidebar() {
       {/* Sidebar */}
       <aside
         className={cn(
-          'fixed left-0 top-0 h-full w-64 bg-apex-dark border-r border-apex-border z-40',
+          'fixed left-0 top-0 h-full w-64 bg-white border-r border-stone-200 z-40',
           'flex flex-col transition-transform duration-200',
           'lg:translate-x-0',
           open ? 'translate-x-0' : '-translate-x-full'
         )}
       >
         {/* Logo */}
-        <div className="p-6 border-b border-apex-border">
+        <div className="p-6 border-b border-stone-200">
           <Link href="/dashboard" className="flex items-center gap-3">
             <div className="w-9 h-9 bg-apex-lime rounded-lg flex items-center justify-center">
               <Zap size={18} className="text-apex-black" />
             </div>
             <div>
-              <h1 className="font-syne font-bold text-lg text-white tracking-tight">APEX</h1>
-              <p className="text-[10px] font-mono text-apex-muted tracking-widest uppercase">Lead Engine</p>
+              <h1 className="font-syne font-bold text-lg text-gray-900 tracking-tight">APEX</h1>
+              <p className="text-[10px] font-mono text-stone-400 tracking-widest uppercase">Lead Engine</p>
             </div>
           </Link>
         </div>
@@ -94,8 +94,8 @@ export function Sidebar() {
                 className={cn(
                   'flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all',
                   isActive
-                    ? 'bg-apex-lime/10 text-apex-lime border border-apex-lime/20'
-                    : 'text-apex-muted hover:text-white hover:bg-apex-card'
+                    ? 'bg-[#c8f135]/15 text-[#5a7a00] border border-[#c8f135]/40'
+                    : 'text-stone-500 hover:text-gray-900 hover:bg-stone-100'
                 )}
               >
                 <item.icon size={18} />
@@ -111,10 +111,10 @@ export function Sidebar() {
         </nav>
 
         {/* Footer */}
-        <div className="p-4 border-t border-apex-border">
+        <div className="p-4 border-t border-stone-200">
           <div className="flex items-center gap-2 px-4 py-2">
             <div className="w-2 h-2 rounded-full bg-emerald-400 pulse-lime" />
-            <span className="text-xs font-mono text-apex-muted">Sistema activo</span>
+            <span className="text-xs font-mono text-stone-400">Sistema activo</span>
           </div>
         </div>
       </aside>

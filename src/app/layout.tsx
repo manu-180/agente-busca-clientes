@@ -14,7 +14,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="es">
-      <body className="bg-apex-black text-white antialiased">
+      <body className="bg-[#f0ebe3] text-gray-900 antialiased">
         <Sidebar />
         <main className="lg:ml-64 min-h-screen">
           <div className="p-6 lg:p-10 max-w-7xl">
