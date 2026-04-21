@@ -1,15 +1,5 @@
 {
   "framework": "nextjs",
   "buildCommand": "next build",
-  "installCommand": "npm install",
-  "crons": [
-    {
-      "path": "/api/cron/leads-pendientes",
-      "schedule": "* * * * *"
-    },
-    {
-      "path": "/api/cron/followup",
-      "schedule": "*/5 * * * *"
-    }
-  ]
+  "installCommand": "npm install"
 }
