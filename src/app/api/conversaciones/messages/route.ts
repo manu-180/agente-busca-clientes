@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
+import { variantesTelefonoMismaLinea } from '@/lib/phone'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,8 +16,10 @@ const MAX_MENSAJES_POR_HILO = 5000
  * Historial de un lead (un solo hilo). El listado del inbox no carga esto
  * para no explotar memoria en /api/conversaciones.
  *
- * Fallback: si lead_id devuelve 0 mensajes (caso de leads duplicados donde
- * los mensajes antiguos quedaron asociados a otro lead_id), busca por telefono.
+ * Fallback: si lead_id devuelve pocos mensajes (caso de leads duplicados donde
+ * los mensajes anteriores quedaron bajo otro lead_id), busca por todas las
+ * variantes del teléfono para recuperar el hilo completo.
+ * El threshold es 3 para cubrir hilos cortos reales + casos de split por lead_id.
  */
 export async function GET(req: NextRequest) {
   const leadId = req.nextUrl.searchParams.get('lead_id')
@@ -38,10 +41,10 @@ export async function GET(req: NextRequest) {
 
   const mensajesPorId = data ?? []
 
-  // Fallback por teléfono: cuando lead_id devuelve 0 ó 1 mensaje (solo el inbox
-  // cabeza), puede significar que mensajes anteriores están bajo un lead_id distinto
-  // (lead duplicado). Buscamos por teléfono para recuperar el hilo completo.
-  if (mensajesPorId.length <= 1) {
+  // Fallback por teléfono: si el lead tiene pocos mensajes bajo su lead_id,
+  // puede significar que el historial anterior quedó bajo un lead_id distinto
+  // (lead duplicado o re-creado). Buscamos por TODAS las variantes del teléfono.
+  if (mensajesPorId.length <= 3) {
     const { data: leadRow } = await supabase
       .from('leads')
       .select('telefono')
@@ -49,17 +52,19 @@ export async function GET(req: NextRequest) {
       .single()
 
     if (leadRow?.telefono) {
+      const variantes = variantesTelefonoMismaLinea(leadRow.telefono)
+
       const { data: byTel, error: telErr } = await supabase
         .from('conversaciones')
         .select(SELECT_CONV)
-        .eq('telefono', leadRow.telefono)
+        .in('telefono', variantes)
         .order('timestamp', { ascending: false })
         .range(0, MAX_MENSAJES_POR_HILO - 1)
 
       if (!telErr && byTel && byTel.length > mensajesPorId.length) {
         console.warn(
           `[messages] Fallback telefono: lead_id=${leadId} → ${mensajesPorId.length} msgs, ` +
-          `telefono=${leadRow.telefono} → ${byTel.length} msgs. ` +
+          `variantes=${variantes.join('|')} → ${byTel.length} msgs. ` +
           `Posible lead duplicado detectado.`
         )
         return NextResponse.json({ mensajes: [...byTel].reverse() })

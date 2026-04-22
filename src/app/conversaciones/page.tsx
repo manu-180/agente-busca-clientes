@@ -47,8 +47,9 @@ function ts(msj: MensajeConSender | undefined): number {
 /**
  * Evita que una respuesta atrasada del backend "retroceda" el hilo visible.
  * Si lo entrante es más viejo que lo ya mostrado, conservamos el estado local.
- * Además preferimos siempre el conjunto con MÁS mensajes cuando el timestamp
- * final es igual (ej: inbox cabeza = 1 msg vs hilo completo = N msgs).
+ * Si lo entrante tiene MENOS mensajes que el estado previo (aunque sea más reciente),
+ * se hace un merge para no perder historial conocido — esto cubre el caso donde la API
+ * devuelve solo el último mensaje del agente y el historial previo queda bajo otro lead_id.
  */
 function elegirMensajesMasRecientes(
   prevMensajes: MensajeConSender[],
@@ -58,9 +59,21 @@ function elegirMensajesMasRecientes(
   if (!prevMensajes.length) return incomingMensajes
   const prevUlt = ts(prevMensajes[prevMensajes.length - 1])
   const incomingUlt = ts(incomingMensajes[incomingMensajes.length - 1])
+  // Incoming más viejo → descartar para no retroceder el hilo
   if (incomingUlt < prevUlt) return prevMensajes
-  // Mismo timestamp final: preferir la lista con más mensajes (hilo completo vs cabeza)
-  if (incomingUlt === prevUlt && incomingMensajes.length < prevMensajes.length) return prevMensajes
+  // Incoming tiene MENOS mensajes: hacer merge para no perder historial.
+  // Esto evita el bug donde el agente responde (M3, timestamp nuevo) y el API
+  // devuelve solo [M3], mientras prev tiene [M1, M2] → sin merge se mostraría solo M3.
+  if (incomingMensajes.length < prevMensajes.length) {
+    const merged = new Map<string, MensajeConSender>()
+    // Excluir mensajes optimistas temporales del prev (id empieza con "tmp-")
+    for (const m of prevMensajes) {
+      if (!m.id.startsWith('tmp-')) merged.set(m.id, m)
+    }
+    // Incoming sobreescribe duplicados con datos frescos de la DB
+    for (const m of incomingMensajes) merged.set(m.id, m)
+    return Array.from(merged.values()).sort((a, b) => ts(a) - ts(b))
+  }
   return incomingMensajes
 }
 
