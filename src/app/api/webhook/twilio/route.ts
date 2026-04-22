@@ -153,6 +153,7 @@ export async function POST(req: NextRequest) {
   const mensaje = (form.get('Body') as string | null) ?? ''
   const numMedia = parseInt((form.get('NumMedia') as string | null) ?? '0', 10)
   const mediaContentType = (form.get('MediaContentType0') as string | null) ?? ''
+  const mediaUrl0 = (form.get('MediaUrl0') as string | null)?.trim() ?? ''
 
   // Twilio format: "whatsapp:+5491124843094" → "5491124843094"
   const telefono = rawFrom?.replace('whatsapp:', '').replace(/^\+/, '') ?? ''
@@ -256,6 +257,7 @@ export async function POST(req: NextRequest) {
       tipo_mensaje: tipoMensaje,
       leido: false,
       sender_id: senderId,
+      media_url: numMedia > 0 && mediaUrl0 ? mediaUrl0 : null,
     })
     .select('id, timestamp')
     .single()
@@ -294,22 +296,9 @@ export async function POST(req: NextRequest) {
     return twimlOk()
   }
 
+  // Imagen/audio: se muestran en Inbox (media_url + proxy). No respondemos con el agente
+  // (evita alucinar sin visión) ni enviamos un fallback automático al cliente.
   if (tipoMensaje !== 'texto') {
-    const respAudio =
-      'Disculpá, no puedo escuchar audios ni ver imágenes por acá. ¿Me lo podés escribir en texto?'
-    try {
-      await enviarTwilioYGuardar(supabase, telefono, lead.id, respAudio, senderPhone, senderId)
-      await registrarEventoConversacional({
-        leadId: lead.id,
-        telefono,
-        eventName: 'non_text_fallback_sent',
-        decisionAction: 'full_reply',
-        decisionReason: 'default_full_reply',
-        confidence: 1,
-      })
-    } catch (e) {
-      console.error('[Twilio] Audio fallback error:', e)
-    }
     return twimlOk()
   }
 

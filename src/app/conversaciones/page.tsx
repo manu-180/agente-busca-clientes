@@ -44,6 +44,47 @@ function ts(msj: MensajeConSender | undefined): number {
   return Number.isFinite(n) ? n : 0
 }
 
+/** Quitar prefijo `[IMAGEN]` / `[AUDIO]` que guarda el webhook de Twilio. */
+function captionLimpio(mensaje: string): string {
+  return mensaje.replace(/^\[(IMAGEN|AUDIO|OTRO)\]\s*/i, '').trim()
+}
+
+function ContenidoMensajeChat({ msg, isAgente }: { msg: MensajeConSender; isAgente: boolean }) {
+  const proxySrc = `/api/conversaciones/media?id=${encodeURIComponent(msg.id)}`
+  const caption = captionLimpio(msg.mensaje || '')
+
+  if (msg.tipo_mensaje === 'imagen' && msg.media_url) {
+    return (
+      <div className="space-y-2">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={proxySrc}
+          alt={caption || 'Imagen del cliente'}
+          className="max-w-full max-h-64 w-auto rounded-lg object-contain border border-black/10"
+          loading="lazy"
+        />
+        {caption ? <p className="whitespace-pre-wrap leading-relaxed">{caption}</p> : null}
+      </div>
+    )
+  }
+
+  if (msg.tipo_mensaje === 'audio' && msg.media_url) {
+    return (
+      <div className="space-y-2">
+        <audio
+          src={proxySrc}
+          controls
+          className={`w-full max-w-[280px] h-9 ${isAgente ? 'accent-apex-black' : 'accent-apex-lime'}`}
+          preload="metadata"
+        />
+        {caption ? <p className="whitespace-pre-wrap leading-relaxed text-xs opacity-90">{caption}</p> : null}
+      </div>
+    )
+  }
+
+  return <p className="whitespace-pre-wrap leading-relaxed">{msg.mensaje}</p>
+}
+
 /**
  * Evita que una respuesta atrasada del backend "retroceda" el hilo visible.
  * Si lo entrante es más viejo que lo ya mostrado, conservamos el estado local.
@@ -86,7 +127,6 @@ export default function ConversacionesPage() {
   const [sugiriendo, setSugiriendo] = useState(false)
   const [cargandoMensajes, setCargandoMensajes] = useState(false)
   const [filtroSender, setFiltroSender] = useState<string | null>(null)
-  const [soloNoLeidos, setSoloNoLeidos] = useState(false)
   /** Primer mensaje del hilo = cliente (no arrancó con template / outbound Twilio) */
   const [soloWeb, setSoloWeb] = useState(false)
   /** Cola operativa: boceto aceptado en DB o agente ofreciendo boceto en el último mensaje */
@@ -391,7 +431,6 @@ export default function ConversacionesPage() {
     }
 
     let list = filtroSender ? grupos.filter(g => g.sender?.id === filtroSender) : grupos
-    if (soloNoLeidos) list = list.filter(g => g.no_leidos > 0)
     if (soloBocetos) list = list.filter(enColaBocetos)
     if (soloWeb) list = list.filter(inicioDesdeCliente)
     const q = busquedaNombre.trim().toLowerCase()
@@ -399,7 +438,7 @@ export default function ConversacionesPage() {
       list = list.filter(g => (g.lead.nombre || '').toLowerCase().includes(q))
     }
     return list
-  }, [grupos, filtroSender, soloNoLeidos, soloBocetos, soloWeb, busquedaNombre])
+  }, [grupos, filtroSender, soloBocetos, soloWeb, busquedaNombre])
 
   const gruposOrdenados = useMemo(() => {
     return [...gruposFiltrados].sort((a, b) => {
@@ -473,35 +512,23 @@ export default function ConversacionesPage() {
             </div>
           </div>
 
-          {/* Filtro inbox: todos / no leídos + remitentes */}
+          {/* Filtro inbox: todos + remitentes */}
           <div className="px-4 py-2.5 border-b border-apex-border flex gap-1.5 flex-wrap bg-apex-black/50">
             <button
               type="button"
               onClick={() => {
                 setFiltroSender(null)
-                setSoloNoLeidos(false)
                 setSoloBocetos(false)
                 setSoloWeb(false)
                 setBusquedaNombre('')
               }}
               className={`text-[10px] font-medium px-2.5 py-1 rounded-full transition-all ${
-                !filtroSender && !soloNoLeidos && !soloBocetos && !soloWeb
+                !filtroSender && !soloBocetos && !soloWeb
                   ? 'bg-apex-lime text-apex-black'
                   : 'bg-apex-card border border-apex-border text-apex-muted hover:bg-apex-border'
               }`}
             >
               Todos
-            </button>
-            <button
-              type="button"
-              onClick={() => setSoloNoLeidos(s => !s)}
-              className={`text-[10px] font-medium px-2.5 py-1 rounded-full transition-all ${
-                soloNoLeidos
-                  ? 'bg-apex-lime text-apex-black'
-                  : 'bg-apex-card border border-apex-border text-apex-muted hover:bg-apex-border'
-              }`}
-            >
-              No leídos
             </button>
             <button
               type="button"
@@ -579,11 +606,9 @@ export default function ConversacionesPage() {
                     ? 'Ninguna conversación coincide con tu búsqueda'
                     : soloBocetos
                       ? 'No hay nada pendiente en la cola de bocetos'
-                      : soloNoLeidos
-                        ? 'No tenés conversaciones sin leer'
-                        : soloWeb
-                          ? 'No hay chats que empiecen con un mensaje del cliente'
-                          : 'No hay conversaciones'}
+                      : soloWeb
+                        ? 'No hay chats que empiecen con un mensaje del cliente'
+                        : 'No hay conversaciones'}
                 </p>
               </div>
             ) : (
@@ -738,7 +763,7 @@ export default function ConversacionesPage() {
                                 : 'bg-apex-card text-neutral-200 rounded-bl-sm border border-apex-border'
                             }`}
                           >
-                            <p className="whitespace-pre-wrap leading-relaxed">{msg.mensaje}</p>
+                            <ContenidoMensajeChat msg={msg} isAgente={isAgente} />
                           </div>
                           <p className="text-[10px] text-apex-muted mt-1 px-1">{formatTime(msg.timestamp)}</p>
                         </div>

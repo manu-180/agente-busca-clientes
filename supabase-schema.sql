@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS conversaciones (
   tipo_mensaje tipo_mensaje NOT NULL DEFAULT 'texto',
   timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
   leido BOOLEAN NOT NULL DEFAULT false,
-  manual BOOLEAN NOT NULL DEFAULT false
+  manual BOOLEAN NOT NULL DEFAULT false,
+  media_url TEXT
 );
 
 -- Tabla de telemetría conversacional
@@ -127,6 +128,7 @@ ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS timestamp TIMESTAMPTZ DEFAUL
 ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS leido BOOLEAN DEFAULT false;
 ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS manual BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS es_followup BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS media_url TEXT;
 
 ALTER TABLE apex_info ADD COLUMN IF NOT EXISTS id UUID DEFAULT gen_random_uuid();
 ALTER TABLE apex_info ADD COLUMN IF NOT EXISTS categoria TEXT;

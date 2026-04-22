@@ -51,6 +51,8 @@ export interface Conversacion {
   manual?: boolean
   /** true = mensaje de seguimiento automático (cron) */
   es_followup?: boolean
+  /** URL API Twilio del adjunto (WhatsApp); ver /api/conversaciones/media */
+  media_url?: string | null
 }
 
 export interface ApexInfo {

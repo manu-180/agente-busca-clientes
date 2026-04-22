@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic'
 
 const SELECT_CABEZA = `
   id, lead_id, telefono, mensaje, rol, tipo_mensaje,
-  timestamp, leido, manual, es_followup,
+  timestamp, leido, manual, es_followup, media_url,
   sender:sender_id (id, alias, color, provider, phone_number)
 ` as const
 
