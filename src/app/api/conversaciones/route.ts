@@ -57,9 +57,15 @@ export async function GET() {
     }
   }
 
-  const gruposArray = Object.values(grupos).sort(
-    (a: any, b: any) => new Date(b.ultimo_timestamp).getTime() - new Date(a.ultimo_timestamp).getTime()
-  )
+  const gruposArray = Object.values(grupos).sort((a: any, b: any) => {
+    const aUn = a.no_leidos > 0
+    const bUn = b.no_leidos > 0
+    if (aUn !== bUn) return aUn ? -1 : 1
+    if (aUn && bUn && a.no_leidos !== b.no_leidos) {
+      return b.no_leidos - a.no_leidos
+    }
+    return new Date(b.ultimo_timestamp).getTime() - new Date(a.ultimo_timestamp).getTime()
+  })
 
   return NextResponse.json({ grupos: gruposArray })
 }

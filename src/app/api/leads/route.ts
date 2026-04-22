@@ -92,7 +92,7 @@ export async function PATCH(req: NextRequest) {
   const ALLOWED_PATCH_FIELDS = new Set([
     'nombre', 'rubro', 'zona', 'telefono', 'instagram', 'descripcion',
     'mensaje_inicial', 'estado', 'origen', 'agente_activo', 'conversacion_cerrada',
-    'conversacion_cerrada_at', 'notas',
+    'conversacion_cerrada_at', 'notas', 'boceto_aceptado', 'boceto_aceptado_at',
   ])
   const safeUpdates = Object.fromEntries(
     Object.entries(updates).filter(([k]) => ALLOWED_PATCH_FIELDS.has(k))

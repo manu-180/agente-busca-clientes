@@ -284,9 +284,6 @@ END $$;
 -- Datos iniciales de configuración
 INSERT INTO configuracion (clave, valor) VALUES
   ('agente_activo', 'true'),
-  ('max_mensajes_dia', '20'),
-  ('horario_inicio', '09:00'),
-  ('horario_fin', '21:00'),
   ('decision_engine_enabled', 'true'),
   ('emoji_no_reply_enabled', 'true'),
   ('conversation_auto_close_enabled', 'true')

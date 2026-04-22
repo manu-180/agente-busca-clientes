@@ -21,7 +21,6 @@ export async function GET() {
 
   const inicioDiaUtc = inicioDelDiaArUtc().toISOString()
 
-  // Use limit(0) instead of head:true to avoid Vercel stripping Content-Range headers
   const [pendientesRes, enviadosHoyRes, configRes] = await Promise.all([
     supabase
       .from(LEADS_TABLE)
@@ -35,41 +34,19 @@ export async function GET() {
       .select('id', { count: 'exact' })
       .gte('primer_envio_completado_at', inicioDiaUtc)
       .limit(0),
-    supabase
-      .from('configuracion')
-      .select('clave, valor')
-      .in('clave', [
-        'first_contact_limite_diario',
-        'first_contact_hora_inicio',
-        'first_contact_hora_fin',
-        'first_contact_ventana_horaria_activa',
-        'first_contact_intervalo_min_min',
-        'first_contact_intervalo_max_min',
-        'first_contact_next_slot_at',
-        'first_contact_activo',
-      ]),
+    supabase.from('configuracion').select('valor').eq('clave', 'first_contact_activo').maybeSingle(),
   ])
 
-  const cfg: Record<string, string> = {}
-  for (const row of configRes.data ?? []) {
-    cfg[row.clave] = row.valor
-  }
+  const activo = (configRes.data?.valor ?? 'true') === 'true'
 
   const res = NextResponse.json({
     pendientes: pendientesRes.count ?? 0,
     enviados_hoy: enviadosHoyRes.count ?? 0,
-    limite_diario: parseInt(cfg.first_contact_limite_diario ?? '50', 10),
     ventana_horaria: {
       inicio: HORA_INICIO_AR,
       fin: HORA_FIN_AR,
     },
-    ventana_horaria_activa: true,
-    intervalo_min: {
-      min: parseInt(cfg.first_contact_intervalo_min_min ?? '10', 10),
-      max: parseInt(cfg.first_contact_intervalo_max_min ?? '15', 10),
-    },
-    next_slot_at: cfg.first_contact_next_slot_at ?? null,
-    activo: (cfg.first_contact_activo ?? 'true') === 'true',
+    activo,
   })
 
   res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate')

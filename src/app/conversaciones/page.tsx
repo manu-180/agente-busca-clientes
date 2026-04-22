@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import { MessageSquare, Send, Bot, BotOff, UserCheck, CheckCircle, ArrowLeft, Sparkles, Loader2, CheckCheck } from 'lucide-react'
 import type { Lead, Conversacion } from '@/types'
 
@@ -29,6 +29,9 @@ export default function ConversacionesPage() {
   const [enviando, setEnviando] = useState(false)
   const [sugiriendo, setSugiriendo] = useState(false)
   const [filtroSender, setFiltroSender] = useState<string | null>(null)
+  const [soloNoLeidos, setSoloNoLeidos] = useState(false)
+  /** Cola operativa: solo leads que aceptaron boceto por WhatsApp */
+  const [soloBocetos, setSoloBocetos] = useState(false)
   const chatRef = useRef<HTMLDivElement>(null)
 
   const cargarConversaciones = async () => {
@@ -148,9 +151,31 @@ export default function ConversacionesPage() {
     ).values()
   )
 
-  const gruposFiltrados = filtroSender
-    ? grupos.filter(g => g.sender?.id === filtroSender)
-    : grupos
+  const countBocetoPendientes = useMemo(
+    () => grupos.filter(g => g.lead.boceto_aceptado === true).length,
+    [grupos]
+  )
+
+  const gruposFiltrados = useMemo(() => {
+    let list = filtroSender ? grupos.filter(g => g.sender?.id === filtroSender) : grupos
+    if (soloNoLeidos) list = list.filter(g => g.no_leidos > 0)
+    if (soloBocetos) list = list.filter(g => g.lead.boceto_aceptado === true)
+    return list
+  }, [grupos, filtroSender, soloNoLeidos, soloBocetos])
+
+  const gruposOrdenados = useMemo(() => {
+    return [...gruposFiltrados].sort((a, b) => {
+      const aUn = a.no_leidos > 0
+      const bUn = b.no_leidos > 0
+      if (aUn !== bUn) return aUn ? -1 : 1
+      if (aUn && bUn && a.no_leidos !== b.no_leidos) {
+        return b.no_leidos - a.no_leidos
+      }
+      return (
+        new Date(b.ultimo_timestamp).getTime() - new Date(a.ultimo_timestamp).getTime()
+      )
+    })
+  }, [gruposFiltrados])
 
   const getInitial = (nombre: string) => (nombre?.[0] ?? '?').toUpperCase()
 
@@ -170,54 +195,90 @@ export default function ConversacionesPage() {
 
           {/* Header */}
           <div className="px-5 py-4 border-b border-apex-border">
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-center justify-between gap-2 min-w-0">
+              <div className="min-w-0">
                 <h1 className="text-base font-semibold text-white tracking-tight">Inbox</h1>
                 <p className="text-xs text-apex-muted mt-0.5">
                   {loading ? 'Cargando...' : `${gruposFiltrados.length} conversaciones`}
                 </p>
               </div>
-              {totalNoLeidos > 0 && (
+              <div className="flex items-center gap-1.5 flex-shrink-0">
                 <button
-                  onClick={leerTodos}
-                  className="flex items-center gap-1.5 text-xs text-apex-muted hover:text-neutral-300 transition-colors"
+                  type="button"
+                  onClick={() => setSoloBocetos(v => !v)}
+                  className={`text-xs font-semibold px-2.5 py-1.5 rounded-lg border transition-all ${
+                    soloBocetos
+                      ? 'bg-apex-lime text-apex-black border-apex-lime'
+                      : 'bg-apex-black/60 text-apex-lime border-apex-lime/45 hover:border-apex-lime'
+                  }`}
                 >
-                  <CheckCheck size={13} />
-                  leer todos
+                  Enviar bocetos
+                  {countBocetoPendientes > 0 && (
+                    <span
+                      className={`ml-1 tabular-nums ${soloBocetos ? 'text-apex-black/75' : 'text-apex-lime'}`}
+                    >
+                      ({countBocetoPendientes})
+                    </span>
+                  )}
                 </button>
-              )}
+                {totalNoLeidos > 0 && (
+                  <button
+                    type="button"
+                    onClick={leerTodos}
+                    className="flex items-center gap-1.5 text-xs text-apex-muted hover:text-neutral-300 transition-colors"
+                  >
+                    <CheckCheck size={13} />
+                    leer todos
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* Sender filter */}
-          {sendersUnicos.length > 1 && (
-            <div className="px-4 py-2.5 border-b border-apex-border flex gap-1.5 flex-wrap bg-apex-black/50">
+          {/* Filtro inbox: todos / no leídos + remitentes */}
+          <div className="px-4 py-2.5 border-b border-apex-border flex gap-1.5 flex-wrap bg-apex-black/50">
+            <button
+              type="button"
+              onClick={() => {
+                setFiltroSender(null)
+                setSoloNoLeidos(false)
+                setSoloBocetos(false)
+              }}
+              className={`text-[10px] font-medium px-2.5 py-1 rounded-full transition-all ${
+                !filtroSender && !soloNoLeidos && !soloBocetos
+                  ? 'bg-apex-lime text-apex-black'
+                  : 'bg-apex-card border border-apex-border text-apex-muted hover:bg-apex-border'
+              }`}
+            >
+              Todos
+            </button>
+            <button
+              type="button"
+              onClick={() => setSoloNoLeidos(s => !s)}
+              className={`text-[10px] font-medium px-2.5 py-1 rounded-full transition-all ${
+                soloNoLeidos
+                  ? 'bg-apex-lime text-apex-black'
+                  : 'bg-apex-card border border-apex-border text-apex-muted hover:bg-apex-border'
+              }`}
+            >
+              No leídos
+            </button>
+            {sendersUnicos.map(s => (
               <button
-                onClick={() => setFiltroSender(null)}
-                className={`text-[10px] font-medium px-2.5 py-1 rounded-full transition-all ${
-                  !filtroSender
-                    ? 'bg-apex-lime text-apex-black'
-                    : 'bg-apex-card border border-apex-border text-apex-muted hover:bg-apex-border'
-                }`}
+                type="button"
+                key={s.id}
+                onClick={() => setFiltroSender(filtroSender === s.id ? null : s.id)}
+                className="text-[10px] font-medium px-2.5 py-1 rounded-full border transition-all"
+                style={
+                  filtroSender === s.id
+                    ? { backgroundColor: s.color, borderColor: s.color, color: '#111' }
+                    : { backgroundColor: '#161616', borderColor: '#222222', color: '#888888' }
+                }
               >
-                Todos
+                {s.alias}
               </button>
-              {sendersUnicos.map(s => (
-                <button
-                  key={s.id}
-                  onClick={() => setFiltroSender(filtroSender === s.id ? null : s.id)}
-                  className="text-[10px] font-medium px-2.5 py-1 rounded-full border transition-all"
-                  style={
-                    filtroSender === s.id
-                      ? { backgroundColor: s.color, borderColor: s.color, color: '#111' }
-                      : { backgroundColor: '#161616', borderColor: '#222222', color: '#888888' }
-                  }
-                >
-                  {s.alias}
-                </button>
-              ))}
-            </div>
-          )}
+            ))}
+          </div>
 
           {/* List */}
           <div className="flex-1 overflow-y-auto">
@@ -225,13 +286,19 @@ export default function ConversacionesPage() {
               <div className="flex items-center justify-center h-24">
                 <Loader2 size={20} className="animate-spin text-apex-muted" />
               </div>
-            ) : gruposFiltrados.length === 0 ? (
+            ) : gruposOrdenados.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-40 gap-2">
                 <MessageSquare size={28} className="text-apex-border" />
-                <p className="text-sm text-apex-muted">No hay conversaciones</p>
+                <p className="text-sm text-apex-muted">
+                  {soloBocetos
+                    ? 'Nadie aceptó boceto todavía o ya los gestionaste'
+                    : soloNoLeidos
+                      ? 'No tenés conversaciones sin leer'
+                      : 'No hay conversaciones'}
+                </p>
               </div>
             ) : (
-              gruposFiltrados.map(grupo => {
+              gruposOrdenados.map(grupo => {
                 const activo = seleccionado === grupo.lead.id
                 return (
                   <button

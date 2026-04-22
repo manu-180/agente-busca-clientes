@@ -68,42 +68,15 @@ export default function ConfiguracionPage() {
         ))}
       </div>
 
-      {/* Límites */}
-      <div className="bg-apex-card border border-apex-border rounded-xl p-6 space-y-4">
-        <h2 className="font-syne font-semibold text-lg">Límites</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="text-xs text-apex-muted font-mono uppercase tracking-wider block mb-1.5">
-              Máx mensajes por día
-            </label>
-            <input
-              type="number"
-              value={config.max_mensajes_dia || '20'}
-              onChange={e => guardar('max_mensajes_dia', e.target.value)}
-              className="w-full bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
-            />
-          </div>
-          <div>
-            <label className="text-xs text-apex-muted font-mono uppercase tracking-wider block mb-1.5">
-              Horario de actividad
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                type="time"
-                value={config.horario_inicio || '09:00'}
-                onChange={e => guardar('horario_inicio', e.target.value)}
-                className="flex-1 bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm"
-              />
-              <span className="text-apex-muted">a</span>
-              <input
-                type="time"
-                value={config.horario_fin || '21:00'}
-                onChange={e => guardar('horario_fin', e.target.value)}
-                className="flex-1 bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm"
-              />
-            </div>
-          </div>
-        </div>
+      {/* Primer contacto (outbound) — fijo en código del cron */}
+      <div className="bg-apex-card border border-apex-border rounded-xl p-6 space-y-2">
+        <h2 className="font-syne font-semibold text-lg">Primer contacto (WhatsApp)</h2>
+        <p className="text-sm text-apex-muted">
+          El cron <span className="font-mono text-apex-lime/90">/api/cron/leads-pendientes</span> envía
+          plantillas en horario Argentina <span className="text-white/90">8:00–20:59</span> sin tope diario
+          de cantidad. Los senders activos rotan la cola; la única freno es no estar fuera de esa ventana o
+          tener <span className="font-mono">first_contact_activo</span> en pausa.
+        </p>
       </div>
 
       {/* Inteligencia del agente */}

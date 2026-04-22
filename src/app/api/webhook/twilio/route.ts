@@ -26,6 +26,7 @@ import {
 } from '@/lib/message-guards'
 import { enviarMensajeTwilio } from '@/lib/twilio'
 import { normalizarTelefonoArg, variantesTelefonoMismaLinea } from '@/lib/phone'
+import { debePersistirBocetoAceptado } from '@/lib/boceto-aceptacion'
 
 export const maxDuration = 30
 
@@ -423,9 +424,14 @@ export async function POST(req: NextRequest) {
     }
 
     const configConversacional = await obtenerConfigConversacional()
+    // Incluir agente+cliente: isCommitToProposal necesita el último mensaje del agente.
+    const historialParaDecision = filasHistorial.map(h => ({
+      rol: h.rol as 'agente' | 'cliente',
+      mensaje: h.mensaje,
+    }))
     const decision = decidirRespuestaConversacional({
       message: mensajeCombinado,
-      history: (pendientes ?? []).map(item => ({ rol: 'cliente', mensaje: item.mensaje })),
+      history: historialParaDecision,
       config: configConversacional,
     })
 
@@ -494,6 +500,9 @@ export async function POST(req: NextRequest) {
 
     if (decision.action === 'confirm_close') {
       const closeMsg = 'Genial. Te escribe alguien del equipo a la brevedad para coordinar los detalles.'
+      const ultAgent = [...filasHistorial].reverse().find(h => h.rol === 'agente')?.mensaje
+      const marcarBoceto = debePersistirBocetoAceptado(decision.eventName, ultAgent)
+      const ahora = new Date().toISOString()
       try {
         await enviarTwilioYGuardar(supabase, telefono, lead.id, closeMsg, senderPhone, senderId)
         await supabase
@@ -501,7 +510,10 @@ export async function POST(req: NextRequest) {
           .update({
             estado: 'interesado',
             conversacion_cerrada: true,
-            conversacion_cerrada_at: new Date().toISOString(),
+            conversacion_cerrada_at: ahora,
+            ...(marcarBoceto
+              ? { boceto_aceptado: true, boceto_aceptado_at: ahora }
+              : {}),
           })
           .eq('id', lead.id)
       } catch (e) {

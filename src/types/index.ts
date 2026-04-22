@@ -28,6 +28,9 @@ export interface Lead {
   notas: string | null
   conversacion_cerrada?: boolean
   conversacion_cerrada_at?: string | null
+  /** Cliente aceptó recibir el boceto (cola operativa en Inbox) */
+  boceto_aceptado?: boolean
+  boceto_aceptado_at?: string | null
   mensaje_enviado?: boolean
   video_enviado?: boolean
   primer_envio_intentos?: number

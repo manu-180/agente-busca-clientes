@@ -1,7 +1,19 @@
 'use client'
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
-import { Loader2, MapPin, Phone, Sparkles, Star, Globe, ExternalLink, CheckCircle2, Clock, Square } from 'lucide-react'
+import {
+  Loader2,
+  MapPin,
+  Phone,
+  Sparkles,
+  Star,
+  Globe,
+  ExternalLink,
+  CheckCircle2,
+  Clock,
+  Square,
+  Layers,
+} from 'lucide-react'
 import { ResultadoBusquedaLead } from '@/types'
 import {
   getDefaultPais,
@@ -11,6 +23,19 @@ import {
 
 const TODAS_LOCALIDADES = '__TODAS__'
 const TODAS_PROVINCIAS = '__TODAS_PROVINCIAS__'
+
+const OPCIONES_CONCURRENCIA = [
+  { valor: 1, etiqueta: '1 — secuencial' },
+  { valor: 3, etiqueta: '3 — suave' },
+  { valor: 5, etiqueta: '5 — normal' },
+  { valor: 8, etiqueta: '8 — agresivo' },
+] as const
+
+/** Orden fijo de arrays en `locations-ar`: primero → último, o inverso. */
+const OPCIONES_ORDEN_RECORRIDO = [
+  { valor: 'listado' as const, etiqueta: 'Del primero al último (como en el desplegable)' },
+  { valor: 'inverso' as const, etiqueta: 'Del último al primero (orden inverso)' },
+] as const
 
 interface LeadCardState extends ResultadoBusquedaLead {
   zona: string
@@ -23,17 +48,21 @@ interface ApiErrorResponse {
 interface QueueStats {
   pendientes: number
   enviados_hoy: number
-  limite_diario: number
   ventana_horaria: { inicio: number; fin: number }
-  ventana_horaria_activa?: boolean
-  intervalo_min: { min: number; max: number }
-  next_slot_at: string | null
   activo: boolean
 }
 
 interface QueueResult {
   agregados: number
   duplicados: number
+}
+
+type EstadoWorkerVisual = 'espera' | 'activo' | 'hecho' | 'pausa'
+
+interface WorkerSlotVisual {
+  id: number
+  estado: EstadoWorkerVisual
+  label: string
 }
 
 function buildDescripcion(lead: ResultadoBusquedaLead) {
@@ -62,7 +91,10 @@ export default function NuevoLeadClient() {
   const [progresoActual, setProgresoActual] = useState(0)
   const [progresoTotal, setProgresoTotal] = useState(0)
   const [progresoLocalidad, setProgresoLocalidad] = useState('')
+  const [slotsParalelo, setSlotsParalelo] = useState<WorkerSlotVisual[]>([])
   const [detenidoPorUsuario, setDetenidoPorUsuario] = useState(false)
+  const [concurrenciaBusqueda, setConcurrenciaBusqueda] = useState(5)
+  const [ordenRecorrido, setOrdenRecorrido] = useState<'listado' | 'inverso'>('listado')
 
   const detenerBusquedaRef = useRef(false)
   const abortBusquedaRef = useRef<AbortController | null>(null)
@@ -209,79 +241,109 @@ export default function NuevoLeadClient() {
     setProgresoActual(0)
     setProgresoTotal(0)
     setProgresoLocalidad('')
+    setSlotsParalelo([])
 
     let detenidoManual = false
 
     try {
       let acumulados: LeadCardState[] = []
 
-      if (esModoTodasProvincias) {
-        const telefonosVistos = new Set<string>()
-        const provincias = paisSeleccionado.provincias
-        let totalPasos = 0
-        for (const p of provincias) {
-          totalPasos += p.localidades.length
+      if (esModoTodasProvincias || esModoProvincia) {
+        type TareaBusqueda = { zonaLocal: string; progresoLabel: string }
+        const tareas: TareaBusqueda[] = []
+
+        if (esModoTodasProvincias) {
+          const provs = [...paisSeleccionado.provincias]
+          if (ordenRecorrido === 'inverso') provs.reverse()
+          for (const prov of provs) {
+            const locs =
+              ordenRecorrido === 'inverso' ? [...prov.localidades].reverse() : prov.localidades
+            for (const loc of locs) {
+              tareas.push({
+                zonaLocal: `${loc.nombre}, ${prov.nombre}, ${paisSeleccionado.nombre}`,
+                progresoLabel: `${loc.nombre} · ${prov.nombre}`,
+              })
+            }
+          }
+        } else {
+          const provSel = provinciaSeleccionada ?? paisSeleccionado.provincias[0]
+          const baseLocs = provSel.localidades || []
+          const locs = ordenRecorrido === 'inverso' ? [...baseLocs].reverse() : baseLocs
+          for (const loc of locs) {
+            tareas.push({
+              zonaLocal: `${loc.nombre}, ${provSel.nombre}, ${paisSeleccionado.nombre}`,
+              progresoLabel: loc.nombre,
+            })
+          }
         }
-        setProgresoTotal(totalPasos)
 
-        let paso = 0
-        outerPais: for (const prov of provincias) {
-          for (const loc of prov.localidades) {
-            if (detenerBusquedaRef.current) break outerPais
+        setProgresoTotal(tareas.length)
 
-            paso += 1
-            setProgresoActual(paso)
-            setProgresoLocalidad(`${loc.nombre} · ${prov.nombre}`)
+        const acum = { telefonos: new Set<string>(), filas: [] as LeadCardState[] }
+        const workers = Math.min(8, Math.max(1, concurrenciaBusqueda))
+        let nextIndex = 0
+        let completados = 0
 
-            const zonaLocal = `${loc.nombre}, ${prov.nombre}, ${paisSeleccionado.nombre}`
+        setSlotsParalelo(
+          Array.from({ length: workers }, (_, i) => ({
+            id: i + 1,
+            estado: 'espera' as const,
+            label: 'Iniciando…',
+          }))
+        )
+
+        function actualizarSlot(slotIdx: number, patch: Partial<WorkerSlotVisual>) {
+          setSlotsParalelo((prev) => {
+            const next = [...prev]
+            if (!next[slotIdx]) return prev
+            next[slotIdx] = { ...next[slotIdx], ...patch }
+            return next
+          })
+        }
+
+        async function workerParalelo(slotIdx: number) {
+          while (true) {
+            if (detenerBusquedaRef.current) {
+              actualizarSlot(slotIdx, { estado: 'pausa', label: 'Detenido' })
+              break
+            }
+            const i = nextIndex++
+            if (i >= tareas.length) {
+              actualizarSlot(slotIdx, { estado: 'hecho', label: 'Listo' })
+              break
+            }
+            const t = tareas[i]
+            actualizarSlot(slotIdx, { estado: 'activo', label: t.progresoLabel })
+            setProgresoLocalidad(t.progresoLabel)
             try {
-              const lista = await buscarEnLocalidad(zonaLocal, signal)
+              const lista = await buscarEnLocalidad(t.zonaLocal, signal)
+              if (detenerBusquedaRef.current) break
               for (const lead of lista) {
-                if (lead.telefono && !telefonosVistos.has(lead.telefono)) {
-                  telefonosVistos.add(lead.telefono)
-                  acumulados.push({ ...lead, zona: zonaLocal })
+                if (lead.telefono && !acum.telefonos.has(lead.telefono)) {
+                  acum.telefonos.add(lead.telefono)
+                  acum.filas.push({ ...lead, zona: t.zonaLocal })
                 }
               }
-              setResultados([...acumulados])
             } catch (err) {
               if (signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
-                break outerPais
+                detenerBusquedaRef.current = true
+                break
               }
-              // seguir
+            } finally {
+              completados += 1
+              setProgresoActual(completados)
+              setResultados([...acum.filas])
+              if (detenerBusquedaRef.current) {
+                actualizarSlot(slotIdx, { estado: 'pausa', label: 'Detenido' })
+              } else {
+                actualizarSlot(slotIdx, { estado: 'espera', label: 'Disponible' })
+              }
             }
           }
         }
-      } else if (esModoProvincia) {
-        const provSel = provinciaSeleccionada ?? paisSeleccionado.provincias[0]
-        const localidades = provSel.localidades || []
-        setProgresoTotal(localidades.length)
 
-        const telefonosVistos = new Set<string>()
-
-        outerProv: for (let i = 0; i < localidades.length; i++) {
-          if (detenerBusquedaRef.current) break outerProv
-
-          const loc = localidades[i]
-          setProgresoActual(i + 1)
-          setProgresoLocalidad(loc.nombre)
-
-          const zonaLocal = `${loc.nombre}, ${provSel.nombre}, ${paisSeleccionado.nombre}`
-          try {
-            const lista = await buscarEnLocalidad(zonaLocal, signal)
-            for (const lead of lista) {
-              if (lead.telefono && !telefonosVistos.has(lead.telefono)) {
-                telefonosVistos.add(lead.telefono)
-                acumulados.push({ ...lead, zona: zonaLocal })
-              }
-            }
-            setResultados([...acumulados])
-          } catch (err) {
-            if (signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
-              break outerProv
-            }
-            // seguir
-          }
-        }
+        await Promise.all(Array.from({ length: workers }, (_, slotIdx) => workerParalelo(slotIdx)))
+        acumulados = acum.filas
       } else {
         const response = await fetch('/api/leads/buscar', {
           method: 'POST',
@@ -334,6 +396,7 @@ export default function NuevoLeadClient() {
     } finally {
       setBuscando(false)
       setProgresoLocalidad('')
+      setSlotsParalelo([])
       detenerBusquedaRef.current = false
       abortBusquedaRef.current = null
     }
@@ -341,13 +404,32 @@ export default function NuevoLeadClient() {
 
   const porcentajeProgreso = progresoTotal > 0 ? Math.round((progresoActual / progresoTotal) * 100) : 0
 
+  const clasesGridWorkers = (n: number) => {
+    if (n <= 0) return 'grid-cols-1'
+    if (n === 1) return 'grid-cols-1 max-w-sm mx-auto w-full'
+    if (n === 2) return 'grid-cols-2'
+    if (n === 3) return 'grid-cols-3'
+    if (n === 4) return 'grid-cols-2 sm:grid-cols-4'
+    if (n === 5) return 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'
+    if (n === 6) return 'grid-cols-2 sm:grid-cols-3'
+    return 'grid-cols-2 sm:grid-cols-4'
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-syne font-bold text-3xl tracking-tight">Nuevo Lead</h1>
           <p className="text-apex-muted text-sm mt-1">
-            Cola automática de primer contacto — el cron envía cada {queueStats?.intervalo_min.min ?? 10}-{queueStats?.intervalo_min.max ?? 15} min
+            Cola automática de primer contacto: sin tope diario; solo ventana horaria Argentina{' '}
+            {queueStats ? (
+              <>
+                {queueStats.ventana_horaria.inicio}:00–{queueStats.ventana_horaria.fin}:59
+              </>
+            ) : (
+              '8:00–20:59'
+            )}
+            .
           </p>
         </div>
       </div>
@@ -361,26 +443,14 @@ export default function NuevoLeadClient() {
           </div>
           <div className="bg-apex-card border border-apex-border rounded-lg p-3">
             <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Enviados hoy</div>
-            <div className="text-2xl font-bold mt-1">
-              {queueStats.enviados_hoy}
-              <span className="text-sm text-apex-muted font-mono">/{queueStats.limite_diario}</span>
-            </div>
+            <div className="text-2xl font-bold mt-1">{queueStats.enviados_hoy}</div>
           </div>
           <div className="bg-apex-card border border-apex-border rounded-lg p-3">
             <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Ventana AR</div>
             <div className="text-2xl font-bold mt-1">
-              {queueStats.ventana_horaria_activa ? (
-                <>
-                  {queueStats.ventana_horaria.inicio}-{queueStats.ventana_horaria.fin}
-                  <span className="text-sm text-apex-muted font-mono">hs</span>
-                </>
-              ) : (
-                <span className="text-lg">24h</span>
-              )}
+              {queueStats.ventana_horaria.inicio}:00–{queueStats.ventana_horaria.fin}:59
+              <span className="text-sm text-apex-muted font-mono ml-1">hs</span>
             </div>
-            {queueStats.ventana_horaria_activa === false && (
-              <div className="text-[10px] text-apex-muted mt-0.5">límite horario off</div>
-            )}
           </div>
           <div className="bg-apex-card border border-apex-border rounded-lg p-3">
             <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Sistema</div>
@@ -494,6 +564,52 @@ export default function NuevoLeadClient() {
           </div>
         </div>
 
+        {(esModoTodasProvincias || esModoProvincia) && (
+          <div className="space-y-4">
+            <div>
+              <label className="text-xs text-apex-muted font-mono uppercase tracking-wider block mb-1.5">
+                Orden del recorrido
+              </label>
+              <p className="text-[11px] text-apex-muted mb-1.5">
+                {esModoTodasProvincias
+                  ? 'Define si se recorre el país de la primera a la última provincia en el listado, o al revés. En cada provincia, el orden de localidades sigue la misma lógica.'
+                  : 'Define si se recorre la provincia de la primera a la última localidad en el desplegable, o al revés.'}
+              </p>
+              <select
+                value={ordenRecorrido}
+                onChange={(e) => setOrdenRecorrido(e.target.value as 'listado' | 'inverso')}
+                className="w-full sm:max-w-md bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
+              >
+                {OPCIONES_ORDEN_RECORRIDO.map((o) => (
+                  <option key={o.valor} value={o.valor}>
+                    {o.etiqueta}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs text-apex-muted font-mono uppercase tracking-wider block mb-1.5">
+                Concurrencia
+              </label>
+              <p className="text-[11px] text-apex-muted mb-1.5">
+                Toda la provincia o todo el país: varias búsquedas en paralelo (máx. 8). Más grupos, más
+                carga a la API.
+              </p>
+              <select
+                value={concurrenciaBusqueda}
+                onChange={(e) => setConcurrenciaBusqueda(Number(e.target.value))}
+                className="w-full sm:max-w-xs bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
+              >
+                {OPCIONES_CONCURRENCIA.map((o) => (
+                  <option key={o.valor} value={o.valor}>
+                    {o.etiqueta}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="submit"
@@ -559,42 +675,141 @@ export default function NuevoLeadClient() {
                 </p>
               )}
               <p className="text-apex-muted text-xs mt-0.5">
-                El bot empezará a enviar en el próximo slot (cada {queueStats?.intervalo_min.min ?? 10}-{queueStats?.intervalo_min.max ?? 15} min).
+                Con el sistema activo y en horario (8:00–20:59 AR), el cron envía en cuanto haya cola; no hay tope diario de cantidad.
               </p>
             </div>
           </div>
         )}
       </form>
 
-      {/* Barra de progreso búsqueda provincial */}
+      {/* Progreso global + un slot por worker (concurrencia) */}
       {buscando && (esModoProvincia || esModoTodasProvincias) && progresoTotal > 0 && (
-        <div className="bg-apex-card border border-apex-border rounded-xl p-5 space-y-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-sm">
-            <span className="text-apex-muted font-mono min-w-0">
-              Buscando en <span className="text-white">{progresoLocalidad}</span>
-            </span>
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
-              <span className="text-apex-lime font-mono font-bold">
-                {progresoActual}/{progresoTotal} localidades
-              </span>
-              <button
-                type="button"
-                onClick={detenerBusqueda}
-                className="inline-flex items-center gap-1 border border-red-500/50 text-red-300 bg-red-500/10 px-2.5 py-1 rounded-md text-xs font-mono font-semibold hover:bg-red-500/20"
-              >
-                <Square size={10} className="fill-current" />
-                Detener
-              </button>
+        <div className="bg-apex-card/80 border border-apex-border rounded-xl p-5 sm:p-6 space-y-4 backdrop-blur-sm shadow-lg shadow-black/20">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-mono uppercase tracking-wider text-apex-muted">Progreso global</p>
+              <p className="text-lg font-syne font-semibold text-white mt-0.5 tabular-nums">
+                {progresoActual}
+                <span className="text-apex-muted text-base font-normal"> / </span>
+                {progresoTotal}
+                <span className="text-apex-muted text-sm font-mono font-normal ml-1.5">localidades</span>
+              </p>
+              {progresoLocalidad ? (
+                <p className="text-xs text-apex-muted font-mono mt-1.5 truncate" aria-live="polite">
+                  Última petición: <span className="text-apex-lime/90">{progresoLocalidad}</span>
+                </p>
+              ) : null}
             </div>
+            <button
+              type="button"
+              onClick={detenerBusqueda}
+              className="inline-flex items-center justify-center gap-1.5 min-h-[44px] shrink-0 border border-red-500/50 text-red-300 bg-red-500/10 px-4 py-2 rounded-lg text-sm font-mono font-semibold hover:bg-red-500/20 transition-colors"
+            >
+              <Square size={12} className="fill-current" />
+              Detener
+            </button>
           </div>
-          <div className="w-full bg-apex-black rounded-full h-2 overflow-hidden">
+          <div
+            className="w-full bg-apex-black/80 rounded-full h-1.5 overflow-hidden ring-1 ring-apex-border/50"
+            role="progressbar"
+            aria-valuenow={progresoActual}
+            aria-valuemin={0}
+            aria-valuemax={progresoTotal}
+            aria-label="Progreso de búsqueda"
+          >
             <div
-              className="h-2 bg-apex-lime rounded-full transition-all duration-300"
+              className="h-full bg-gradient-to-r from-apex-lime/80 to-apex-lime rounded-full transition-all duration-300 ease-out"
               style={{ width: `${porcentajeProgreso}%` }}
             />
           </div>
+
+          {slotsParalelo.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <Layers className="text-apex-lime shrink-0" size={16} strokeWidth={2} aria-hidden />
+                <h3 className="text-[11px] font-mono uppercase tracking-wider text-apex-muted">
+                  Grupos en paralelo ({slotsParalelo.length})
+                </h3>
+              </div>
+              <div
+                className={`grid ${clasesGridWorkers(slotsParalelo.length)} gap-2.5 sm:gap-3`}
+                role="list"
+                aria-label="Estado de cada grupo de búsqueda"
+              >
+                {slotsParalelo.map((slot) => {
+                  const esActivo = slot.estado === 'activo'
+                  const esHecho = slot.estado === 'hecho'
+                  const esPausa = slot.estado === 'pausa'
+                  return (
+                    <div
+                      key={slot.id}
+                      role="listitem"
+                      className={[
+                        'relative rounded-xl border p-3 sm:p-3.5 min-h-[5.25rem] flex flex-col justify-between transition-all duration-200',
+                        esActivo
+                          ? 'border-apex-lime/40 bg-apex-lime/[0.06] shadow-[0_0_0_1px_rgba(190,242,100,0.1)]'
+                          : esHecho
+                            ? 'border-emerald-500/20 bg-emerald-500/[0.04]'
+                            : esPausa
+                              ? 'border-amber-500/25 bg-amber-500/[0.06]'
+                              : 'border-apex-border/70 bg-apex-black/45',
+                      ].join(' ')}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-mono uppercase tracking-wider text-apex-muted">
+                          Grupo {slot.id}
+                        </span>
+                        {esActivo && (
+                          <Loader2
+                            size={15}
+                            className="text-apex-lime animate-spin shrink-0"
+                            aria-label="Buscando"
+                          />
+                        )}
+                        {esHecho && (
+                          <CheckCircle2
+                            size={15}
+                            className="text-emerald-400/90 shrink-0"
+                            aria-label="Completado"
+                          />
+                        )}
+                        {esPausa && (
+                          <Square
+                            size={12}
+                            className="text-amber-300/90 shrink-0 fill-amber-300/30"
+                            aria-label="Detenido"
+                          />
+                        )}
+                        {slot.estado === 'espera' && (
+                          <span
+                            className="h-1.5 w-1.5 rounded-full bg-apex-border shrink-0"
+                            aria-hidden
+                          />
+                        )}
+                      </div>
+                      <p
+                        className={`text-xs sm:text-sm font-mono leading-snug line-clamp-2 mt-1.5 ${esActivo ? 'text-white' : 'text-apex-muted'}`}
+                        title={slot.label}
+                      >
+                        {slot.label}
+                      </p>
+                      {esActivo && (
+                        <div
+                          className="mt-2.5 h-0.5 w-full rounded-full bg-apex-black/80 overflow-hidden"
+                          aria-hidden
+                        >
+                          <div className="h-full w-2/5 bg-apex-lime/70 rounded-full motion-safe:animate-pulse" />
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           {resultados.length > 0 && (
-            <p className="text-xs text-apex-muted font-mono">
+            <p className="text-xs text-apex-muted font-mono pt-1 border-t border-apex-border/50">
               {resultados.length} leads encontrados hasta ahora
             </p>
           )}

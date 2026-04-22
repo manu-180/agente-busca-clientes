@@ -9,16 +9,17 @@ const TZ_OFFSET_HOURS_AR = -3
 const LEADS_TABLE = 'leads'
 const MAX_REINTENTOS = 3
 const HORA_INICIO_AR = 8
+/** Última hora permitida (inclusive): se envía durante 8:00–20:59 AR. */
 const HORA_FIN_AR = 20
 
-// ─── Configuración de senders outbound ────────────────────────────────────────
-// Para cambiar límites o intervalo, editar aquí (o migrar a tabla configuracion).
+// ─── Senders Twilio (primer contacto) ────────────────────────────────────────
+// Cadencia intMin/intMax en minutos; si ambos ≤ 0 no hay espera entre envíos
+// (solo aplica la ventana horaria). Sin tope diario de cantidad.
 interface SenderDef {
   key: string
   provider: 'twilio'
   phoneNumber: string
   contentSid: string
-  dailyLimit: number
   intMin: number
   intMax: number
 }
@@ -29,18 +30,16 @@ const SENDERS: SenderDef[] = [
     provider: 'twilio',
     phoneNumber: '+5491124843094',
     contentSid: 'HXeab2f108288fe221bce43ebe6565912a',
-    dailyLimit: 200,
-    intMin: 2,
-    intMax: 2,
+    intMin: 0,
+    intMax: 0,
   },
   {
     key: 'twilio_2',
     provider: 'twilio',
     phoneNumber: '+5491124842720',
     contentSid: 'HXeab2f108288fe221bce43ebe6565912a',
-    dailyLimit: 200,
-    intMin: 2,
-    intMax: 2,
+    intMin: 0,
+    intMax: 0,
   },
 ]
 // ──────────────────────────────────────────────────────────────────────────────
@@ -151,7 +150,7 @@ async function procesarSender(
   forced: boolean,
   yaProcesoIds: string[]  // leads tomados en este tick por el otro sender
 ): Promise<Record<string, unknown>> {
-  const { key, provider, phoneNumber, contentSid, dailyLimit, intMin, intMax } = sender
+  const { key, provider, phoneNumber, contentSid, intMin, intMax } = sender
 
   // 1. Verificar sender en tabla senders (activo + id para taggear conversaciones)
   const { data: senderRow } = await sup
@@ -165,17 +164,16 @@ async function procesarSender(
 
   const senderId = senderRow?.id ?? null
 
-  // 2. Límite diario
+  // 2. Contador diario (métrica / diagnóstico; no condiciona envíos)
   const enviados = await leerDailyCount(sup, key)
-  if (enviados >= dailyLimit) {
-    return { status: 'limite_diario', enviados_hoy: enviados, limite: dailyLimit }
-  }
 
-  // 3. Slot de cadencia
-  const nextSlotStr = await leerConfig(sup, `${key}_primer_next_slot_at`, '1970-01-01T00:00:00.000Z')
-  if (!forced && new Date(nextSlotStr).getTime() > Date.now()) {
-    const faltanMin = Math.ceil((new Date(nextSlotStr).getTime() - Date.now()) / 60_000)
-    return { status: 'slot_no_alcanzado', next_slot_at: nextSlotStr, faltan_min: faltanMin }
+  // 3. Slot de cadencia (omitido si intMin e intMax son ≤ 0)
+  if (!forced && (intMin > 0 || intMax > 0)) {
+    const nextSlotStr = await leerConfig(sup, `${key}_primer_next_slot_at`, '1970-01-01T00:00:00.000Z')
+    if (new Date(nextSlotStr).getTime() > Date.now()) {
+      const faltanMin = Math.ceil((new Date(nextSlotStr).getTime() - Date.now()) / 60_000)
+      return { status: 'slot_no_alcanzado', next_slot_at: nextSlotStr, faltan_min: faltanMin }
+    }
   }
 
   // 4. Loop: intentar leads hasta mandar uno o agotar MAX_LEADS_POR_TICK
@@ -286,17 +284,22 @@ async function procesarSender(
       // Éxito: reset fallos, avanzar slot y contador
       await incrementarDailyCount(sup, key, enviados)
       await escribirConfig(sup, `${key}_primer_fallos`, '0')
-      const proximoMin = minAleatorio(intMin, intMax)
-      const proximoSlot = new Date(Date.now() + proximoMin * 60_000)
-      await escribirConfig(sup, `${key}_primer_next_slot_at`, proximoSlot.toISOString())
+      let proximoSlot: Date | null = null
+      let proximoMin = 0
+      if (intMin > 0 || intMax > 0) {
+        proximoMin = minAleatorio(intMin, intMax)
+        proximoSlot = new Date(Date.now() + proximoMin * 60_000)
+        await escribirConfig(sup, `${key}_primer_next_slot_at`, proximoSlot.toISOString())
+      } else {
+        await escribirConfig(sup, `${key}_primer_next_slot_at`, '1970-01-01T00:00:00.000Z')
+      }
 
       return {
         status: 'ok',
         lead_id: lead.id,
         nombre: lead.nombre,
         enviados_hoy: enviados + 1,
-        limite: dailyLimit,
-        proximo_slot_at: proximoSlot.toISOString(),
+        proximo_slot_at: proximoSlot?.toISOString() ?? null,
         proximo_min: proximoMin,
         intentos_hasta_envio: i + 1,
         ...(erroresTick.length > 0 ? { saltados: erroresTick.length } : {}),
@@ -354,18 +357,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: 'first_contact_inactivo' })
   }
 
-  // Ventana horaria AR hardcodeada: nunca enviar fuera de 08:00-20:00,
-  // incluso si Railway dispara el cron.
-  if (!forced) {
-    const horaAr = new Date(Date.now() + TZ_OFFSET_HOURS_AR * 3600_000).getUTCHours()
-    if (horaAr < HORA_INICIO_AR || horaAr >= HORA_FIN_AR) {
-      return NextResponse.json({
-        ok: true,
-        skipped: 'fuera_ventana_horaria',
-        hora_ar: horaAr,
-        ventana: `${HORA_INICIO_AR}-${HORA_FIN_AR}`,
-      })
-    }
+  // Ventana horaria AR: 08:00–20:59 (inclusive; sin tope de cantidad).
+  const horaAr = new Date(Date.now() + TZ_OFFSET_HOURS_AR * 3600_000).getUTCHours()
+  if (horaAr < HORA_INICIO_AR || horaAr > HORA_FIN_AR) {
+    return NextResponse.json({
+      ok: true,
+      skipped: 'fuera_ventana_horaria',
+      hora_ar: horaAr,
+      ventana: `${String(HORA_INICIO_AR).padStart(2, '0')}:00–${String(HORA_FIN_AR).padStart(2, '0')}:59`,
+    })
   }
 
   // Cada sender corre de forma independiente y secuencial.
