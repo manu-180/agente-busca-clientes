@@ -40,6 +40,7 @@ export async function GET() {
         'first_contact_limite_diario',
         'first_contact_hora_inicio',
         'first_contact_hora_fin',
+        'first_contact_ventana_horaria_activa',
         'first_contact_intervalo_min_min',
         'first_contact_intervalo_max_min',
         'first_contact_next_slot_at',
@@ -60,6 +61,7 @@ export async function GET() {
       inicio: parseInt(cfg.first_contact_hora_inicio ?? '9', 10),
       fin: parseInt(cfg.first_contact_hora_fin ?? '21', 10),
     },
+    ventana_horaria_activa: (cfg.first_contact_ventana_horaria_activa ?? 'false') === 'true',
     intervalo_min: {
       min: parseInt(cfg.first_contact_intervalo_min_min ?? '10', 10),
       max: parseInt(cfg.first_contact_intervalo_max_min ?? '15', 10),

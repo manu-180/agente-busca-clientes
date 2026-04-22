@@ -20,6 +20,7 @@ interface QueueStats {
   enviados_hoy: number
   limite_diario: number
   ventana_horaria: { inicio: number; fin: number }
+  ventana_horaria_activa?: boolean
   intervalo_min: { min: number; max: number }
   next_slot_at: string | null
   activo: boolean
@@ -261,9 +262,18 @@ export default function NuevoLeadClient() {
           <div className="bg-apex-card border border-apex-border rounded-lg p-3">
             <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Ventana AR</div>
             <div className="text-2xl font-bold mt-1">
-              {queueStats.ventana_horaria.inicio}-{queueStats.ventana_horaria.fin}
-              <span className="text-sm text-apex-muted font-mono">hs</span>
+              {queueStats.ventana_horaria_activa ? (
+                <>
+                  {queueStats.ventana_horaria.inicio}-{queueStats.ventana_horaria.fin}
+                  <span className="text-sm text-apex-muted font-mono">hs</span>
+                </>
+              ) : (
+                <span className="text-lg">24h</span>
+              )}
             </div>
+            {queueStats.ventana_horaria_activa === false && (
+              <div className="text-[10px] text-apex-muted mt-0.5">límite horario off</div>
+            )}
           </div>
           <div className="bg-apex-card border border-apex-border rounded-lg p-3">
             <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Sistema</div>

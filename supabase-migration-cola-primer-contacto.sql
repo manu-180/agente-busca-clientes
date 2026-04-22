@@ -52,6 +52,7 @@ CREATE INDEX IF NOT EXISTS idx_leads_primer_envio_completado_at
 INSERT INTO configuracion (clave, valor) VALUES
   ('first_contact_activo', 'true'),
   ('first_contact_limite_diario', '30'),
+  ('first_contact_ventana_horaria_activa', 'false'),
   ('first_contact_hora_inicio', '9'),
   ('first_contact_hora_fin', '21'),
   ('first_contact_intervalo_min_min', '10'),

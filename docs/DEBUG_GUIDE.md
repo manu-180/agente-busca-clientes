@@ -280,7 +280,7 @@ WHERE clave IN ('twilio_1_primer_fallos', 'twilio_2_primer_fallos');
 - [ ] ¿Tienen `procesando_hasta` en el futuro? (SQL BUG 2.3)
 - [ ] ¿Su teléfono ya tiene conversación? (SQL BUG 2.2)
 - [ ] ¿Los senders alcanzaron el límite diario? (30/día cada uno)
-- [ ] ¿Está dentro de la ventana horaria? (config `first_contact_hora_inicio/fin`)
+- [ ] ¿Ventana horaria activa? Solo aplica si `first_contact_ventana_horaria_activa` = `true` en `configuracion` (con `false` o ausente, el cron envía 24h). Si está activa, revisar `first_contact_hora_inicio` / `first_contact_hora_fin`.
 
 ### ¿Por qué hay ráfagas de mensajes?
 - [ ] ¿cron-job.org tiene un job para leads-pendientes? → desactivarlo

@@ -343,8 +343,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: 'first_contact_inactivo' })
   }
 
-  // Verificar ventana horaria AR (solo si no es forced)
-  if (!forced) {
+  // Ventana horaria AR (opt-in: `first_contact_ventana_horaria_activa` === 'true' en configuracion)
+  const ventanaHorariaActiva = (await leerConfig(sup, 'first_contact_ventana_horaria_activa', 'false')) === 'true'
+  if (ventanaHorariaActiva && !forced) {
     const [cfgInicio, cfgFin] = await Promise.all([
       sup.from('configuracion').select('valor').eq('clave', 'first_contact_hora_inicio').maybeSingle(),
       sup.from('configuracion').select('valor').eq('clave', 'first_contact_hora_fin').maybeSingle(),
