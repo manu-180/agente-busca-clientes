@@ -292,7 +292,7 @@ export default function NuevoLeadClient() {
           }))
         )
 
-        function actualizarSlot(slotIdx: number, patch: Partial<WorkerSlotVisual>) {
+        const actualizarSlot = (slotIdx: number, patch: Partial<WorkerSlotVisual>) => {
           setSlotsParalelo((prev) => {
             const next = [...prev]
             if (!next[slotIdx]) return prev
@@ -301,7 +301,7 @@ export default function NuevoLeadClient() {
           })
         }
 
-        async function workerParalelo(slotIdx: number) {
+        const workerParalelo = async (slotIdx: number) => {
           while (true) {
             if (detenerBusquedaRef.current) {
               actualizarSlot(slotIdx, { estado: 'pausa', label: 'Detenido' })
