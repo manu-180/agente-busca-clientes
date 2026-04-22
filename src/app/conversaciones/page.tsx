@@ -47,6 +47,8 @@ function ts(msj: MensajeConSender | undefined): number {
 /**
  * Evita que una respuesta atrasada del backend "retroceda" el hilo visible.
  * Si lo entrante es más viejo que lo ya mostrado, conservamos el estado local.
+ * Además preferimos siempre el conjunto con MÁS mensajes cuando el timestamp
+ * final es igual (ej: inbox cabeza = 1 msg vs hilo completo = N msgs).
  */
 function elegirMensajesMasRecientes(
   prevMensajes: MensajeConSender[],
@@ -57,6 +59,8 @@ function elegirMensajesMasRecientes(
   const prevUlt = ts(prevMensajes[prevMensajes.length - 1])
   const incomingUlt = ts(incomingMensajes[incomingMensajes.length - 1])
   if (incomingUlt < prevUlt) return prevMensajes
+  // Mismo timestamp final: preferir la lista con más mensajes (hilo completo vs cabeza)
+  if (incomingUlt === prevUlt && incomingMensajes.length < prevMensajes.length) return prevMensajes
   return incomingMensajes
 }
 
@@ -67,6 +71,7 @@ export default function ConversacionesPage() {
   const [loading, setLoading] = useState(true)
   const [enviando, setEnviando] = useState(false)
   const [sugiriendo, setSugiriendo] = useState(false)
+  const [cargandoMensajes, setCargandoMensajes] = useState(false)
   const [filtroSender, setFiltroSender] = useState<string | null>(null)
   const [soloNoLeidos, setSoloNoLeidos] = useState(false)
   /** Primer mensaje del hilo = cliente (no arrancó con template / outbound Twilio) */
@@ -84,23 +89,33 @@ export default function ConversacionesPage() {
 
   const cargarMensajesHilo = useCallback(async (leadId: string) => {
     const id = ++cargaMensajesIdRef.current
-    const t = Date.now()
-    const res = await fetch(
-      `/api/conversaciones/messages?lead_id=${encodeURIComponent(leadId)}&_=${t}`,
-      { cache: 'no-store' }
-    )
-    if (id !== cargaMensajesIdRef.current) return
-    if (!res.ok) return
-    const data = await res.json()
-    if (id !== cargaMensajesIdRef.current) return
-    const mensajes = (data.mensajes ?? []) as MensajeConSender[]
-    setGrupos(prev =>
-      prev.map(g =>
-        g.lead.id === leadId
-          ? { ...g, mensajes: elegirMensajesMasRecientes(g.mensajes, mensajes) }
-          : g
+    setCargandoMensajes(true)
+    try {
+      const t = Date.now()
+      const res = await fetch(
+        `/api/conversaciones/messages?lead_id=${encodeURIComponent(leadId)}&_=${t}`,
+        { cache: 'no-store' }
       )
-    )
+      if (id !== cargaMensajesIdRef.current) return
+      if (!res.ok) {
+        console.error('[Inbox] Error cargando mensajes del hilo', leadId, res.status, res.statusText)
+        return
+      }
+      const data = await res.json()
+      if (id !== cargaMensajesIdRef.current) return
+      const mensajes = (data.mensajes ?? []) as MensajeConSender[]
+      setGrupos(prev =>
+        prev.map(g =>
+          g.lead.id === leadId
+            ? { ...g, mensajes: elegirMensajesMasRecientes(g.mensajes, mensajes) }
+            : g
+        )
+      )
+    } catch (err) {
+      console.error('[Inbox] Excepción cargando mensajes del hilo', leadId, err)
+    } finally {
+      if (id === cargaMensajesIdRef.current) setCargandoMensajes(false)
+    }
   }, [])
 
   const cargarConversaciones = useCallback(async () => {
@@ -191,6 +206,7 @@ export default function ConversacionesPage() {
     setGrupos(prev => prev.map(g =>
       g.lead.id === leadId ? { ...g, no_leidos: 0 } : g
     ))
+    setCargandoMensajes(true)
     setSeleccionado(leadId)
     fetch('/api/conversaciones', {
       method: 'PATCH',
@@ -692,25 +708,31 @@ export default function ConversacionesPage() {
 
               {/* Messages */}
               <div ref={chatRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-1.5">
-                {grupoActivo.mensajes.map(msg => {
-                  const isAgente = msg.rol === 'agente'
-                  return (
-                    <div key={msg.id} className={`flex ${isAgente ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`flex flex-col max-w-[70%] ${isAgente ? 'items-end' : 'items-start'}`}>
-                        <div
-                          className={`px-4 py-2.5 rounded-2xl text-sm shadow-sm ${
-                            isAgente
-                              ? 'bg-[#c8f135] text-apex-black rounded-br-sm'
-                              : 'bg-apex-card text-neutral-200 rounded-bl-sm border border-apex-border'
-                          }`}
-                        >
-                          <p className="whitespace-pre-wrap leading-relaxed">{msg.mensaje}</p>
+                {cargandoMensajes && grupoActivo.mensajes.length <= 1 ? (
+                  <div className="flex items-center justify-center h-24">
+                    <Loader2 size={20} className="animate-spin text-apex-muted" />
+                  </div>
+                ) : (
+                  grupoActivo.mensajes.map(msg => {
+                    const isAgente = msg.rol === 'agente'
+                    return (
+                      <div key={msg.id} className={`flex ${isAgente ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`flex flex-col max-w-[70%] ${isAgente ? 'items-end' : 'items-start'}`}>
+                          <div
+                            className={`px-4 py-2.5 rounded-2xl text-sm shadow-sm ${
+                              isAgente
+                                ? 'bg-[#c8f135] text-apex-black rounded-br-sm'
+                                : 'bg-apex-card text-neutral-200 rounded-bl-sm border border-apex-border'
+                            }`}
+                          >
+                            <p className="whitespace-pre-wrap leading-relaxed">{msg.mensaje}</p>
+                          </div>
+                          <p className="text-[10px] text-apex-muted mt-1 px-1">{formatTime(msg.timestamp)}</p>
                         </div>
-                        <p className="text-[10px] text-apex-muted mt-1 px-1">{formatTime(msg.timestamp)}</p>
                       </div>
-                    </div>
-                  )
-                })}
+                    )
+                  })
+                )}
               </div>
 
               {/* Input */}
