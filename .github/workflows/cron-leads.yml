@@ -2,8 +2,13 @@ name: Cron Leads Pendientes
 
 on:
   schedule:
-    - cron: '* * * * *'  # Cada 1 min (GitHub ejecuta ~cada 5 min como mínimo real)
+    - cron: '*/5 * * * *'  # Cada 5 min (límite mínimo útil; GitHub puede demorar un poco más)
   workflow_dispatch:      # Disparo manual desde GitHub UI
+
+# Un solo run a la vez: evita dos instancias forzando envíos a la vez (ver docs/DEBUG_GUIDE.md)
+concurrency:
+  group: leads-pendientes-cron
+  cancel-in-progress: false
 
 jobs:
   trigger-cron:
@@ -15,9 +20,11 @@ jobs:
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
+          # force=true: mismo comportamiento que "Trigger Cron After Deploy" (post push).
+          # Sin esto, el schedule suele devolver 200 con slot/ventana y no manda aunque el workflow sea verde.
           RESPONSE=$(curl -s -w "\n%{http_code}" \
             -H "Authorization: Bearer $CRON_SECRET" \
-            "https://apex-leads-six.vercel.app/api/cron/leads-pendientes")
+            "https://apex-leads-six.vercel.app/api/cron/leads-pendientes?force=true")
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
           BODY=$(echo "$RESPONSE" | head -1)
