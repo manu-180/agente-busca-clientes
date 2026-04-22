@@ -1,9 +1,21 @@
-name: Cron Leads Pendientes
+name: Cron — Leads Pendientes (MIGRADO A RAILWAY)
 
+# SCHEDULE DESACTIVADO: migrado a Railway Cron Job.
+# Ver: railway-cron-pinger/README.md
+# Para disparo manual de emergencia usar el botón "Run workflow" en GitHub Actions.
 on:
-  schedule:
-    - cron: '*/5 * * * *'  # Cada 5 min (límite mínimo útil; GitHub puede demorar un poco más)
-  workflow_dispatch:      # Disparo manual desde GitHub UI
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Motivo del disparo manual"
+        required: false
+        default: "Disparo manual de emergencia"
+
+# El schedule fue migrado a Railway Cron. NO reactivar sin antes
+# deshabilitar el pinger en Railway para evitar doble disparo.
+# on:
+#   schedule:
+#     - cron: '*/5 * * * *'  # Cada 5 min (límite mínimo útil; GitHub puede demorar un poco más)
 
 # Un solo run a la vez: evita dos instancias forzando envíos a la vez (ver docs/DEBUG_GUIDE.md)
 concurrency:

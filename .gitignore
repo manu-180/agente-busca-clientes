@@ -6,3 +6,11 @@ node_modules/
 next-env.d.ts
 
 .vercel
+
+# Railway Cron Pinger — archivos locales (el .env real ya lo cubre la regla `.env` arriba)
+railway-cron-pinger/__pycache__/
+railway-cron-pinger/*.pyc
+railway-cron-pinger/.pytest_cache/
+railway-cron-pinger/venv/
+railway-cron-pinger/.venv/
+railway-cron-pinger/env/
