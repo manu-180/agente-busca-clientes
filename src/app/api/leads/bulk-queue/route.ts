@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { esErrorDuplicadoLead, esErrorOnConflictSinIndice } from '@/lib/db-errors'
 import { normalizarTelefonoArg, soloDigitos, variantesTelefonoMismaLinea } from '@/lib/phone'
+import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
 
 const LEADS_TABLE = 'leads'
 const CHUNK_IN = 200
@@ -121,9 +122,14 @@ export async function POST(req: NextRequest) {
 
     const vistosEnRequest = new Set<string>()
     const filas: FilaInsert[] = []
+    let excluidosBloqueo = 0
     for (const l of leadsIn) {
       const t = normalizarTelefono(l.telefono || '')
       if (!t) continue
+      if (isTelefonoHardBlocked(t)) {
+        excluidosBloqueo += 1
+        continue
+      }
       if (telefonosExistentes.has(t)) continue
       if (vistosEnRequest.has(t)) continue
       vistosEnRequest.add(t)
@@ -149,7 +155,11 @@ export async function POST(req: NextRequest) {
         ok: true,
         agregados: 0,
         duplicados: leadsIn.length,
-        mensaje: 'Todos los leads ya existían',
+        mensaje:
+          excluidosBloqueo > 0
+            ? 'Ningún lead nuevo (lista de bloqueo o ya existentes)'
+            : 'Todos los leads ya existían',
+        ...(excluidosBloqueo > 0 ? { excluidos_bloqueo: excluidosBloqueo } : {}),
       })
     }
 
@@ -169,6 +179,7 @@ export async function POST(req: NextRequest) {
       ok: true,
       agregados: agregadosTotal,
       duplicados,
+      ...(excluidosBloqueo > 0 ? { excluidos_bloqueo: excluidosBloqueo } : {}),
     })
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error)

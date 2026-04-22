@@ -1,3 +1,5 @@
+import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
+
 function getTwilioAuth() {
   const accountSid = process.env.TWILIO_ACCOUNT_SID!
   const authToken = process.env.TWILIO_AUTH_TOKEN!
@@ -5,6 +7,9 @@ function getTwilioAuth() {
 }
 
 export async function enviarMensajeTwilio(telefono: string, mensaje: string, fromNumber?: string) {
+  if (isTelefonoHardBlocked(telefono)) {
+    throw new Error('TELEFONO_BLOQUEADO')
+  }
   const accountSid = process.env.TWILIO_ACCOUNT_SID!
   const from = fromNumber ?? process.env.TWILIO_WHATSAPP_NUMBER!
 

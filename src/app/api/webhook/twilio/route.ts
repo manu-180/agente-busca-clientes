@@ -26,6 +26,7 @@ import {
 } from '@/lib/message-guards'
 import { enviarMensajeTwilio } from '@/lib/twilio'
 import { normalizarTelefonoArg, variantesTelefonoMismaLinea } from '@/lib/phone'
+import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
 import { debePersistirBocetoAceptado } from '@/lib/boceto-aceptacion'
 
 export const maxDuration = 30
@@ -160,6 +161,11 @@ export async function POST(req: NextRequest) {
   console.log('[Twilio Webhook] From:', telefono, 'To:', nuestroNumero, 'Body:', mensaje.slice(0, 80))
 
   if (!telefono) {
+    return twimlOk()
+  }
+
+  if (isTelefonoHardBlocked(telefono)) {
+    console.warn('[Twilio Webhook] Ignorado — tel en lista de bloqueo (sin respuesta automática):', telefono)
     return twimlOk()
   }
 

@@ -5,6 +5,7 @@ import { enviarMensajeTwilio } from '@/lib/twilio'
 import { evaluarFollowup } from '@/lib/followup-eligibility'
 import { generarMensajeFollowupClaude } from '@/lib/generar-followup'
 import { claveUnicaPaisLinea } from '@/lib/phone'
+import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
 import type { Lead } from '@/types'
 
 /** Evita 2+ filas de leads (5411 / 54911) y el followup a la misma persona dos veces por tick. */
@@ -85,6 +86,11 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
   const resultados: Array<{ lead_id: string; ok: boolean; detalle?: string }> = []
 
   for (const lead of leads) {
+    if (isTelefonoHardBlocked(lead.telefono)) {
+      resultados.push({ lead_id: lead.id, ok: true, detalle: 'skip:telefono_bloqueado' })
+      continue
+    }
+
     const { count: nFollowups, error: errCount } = await supabase
       .from('conversaciones')
       .select('*', { count: 'exact', head: true })

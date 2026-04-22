@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { ejecutarConTablaLeads } from '@/lib/leads-table'
 import { normalizarTelefonoArg, variantesTelefonoMismaLinea } from '@/lib/phone'
+import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
 
 export const dynamic = 'force-dynamic'
 
@@ -22,6 +23,9 @@ export async function POST(req: NextRequest) {
   const body = await req.json()
 
   const telefonoNorm = body.telefono ? normalizarTelefonoArg(body.telefono) : ''
+  if (telefonoNorm && isTelefonoHardBlocked(telefonoNorm)) {
+    return NextResponse.json({ error: 'Teléfono en lista de bloqueo' }, { status: 403 })
+  }
   const telsDup = telefonoNorm ? variantesTelefonoMismaLinea(telefonoNorm) : []
 
   // Dedup: misma línea (variantes 5411/54911) en leads o conversaciones

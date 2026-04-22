@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Search, Filter, ExternalLink, MessageSquare, Plus } from 'lucide-react'
 import Link from 'next/link'
 import type { Lead, EstadoLead } from '@/types'
+import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
 
 const ESTADOS: EstadoLead[] = ['pendiente', 'contactado', 'respondio', 'interesado', 'presupuesto_enviado', 'cerrado', 'cliente', 'descartado', 'no_interesado']
 
@@ -121,14 +122,24 @@ export default function LeadsPage() {
                     </td>
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-2">
-                        <a
-                          href={`https://wa.me/${lead.telefono}`}
-                          target="_blank"
-                          className="p-1.5 rounded-lg hover:bg-apex-border transition-colors text-apex-muted hover:text-green-400"
-                          title="Abrir WhatsApp"
-                        >
-                          <ExternalLink size={14} />
-                        </a>
+                        {isTelefonoHardBlocked(lead.telefono) ? (
+                          <span
+                            className="p-1.5 rounded-lg text-zinc-600 cursor-not-allowed opacity-50"
+                            title="WhatsApp deshabilitado (lista de bloqueo)"
+                          >
+                            <ExternalLink size={14} />
+                          </span>
+                        ) : (
+                          <a
+                            href={`https://wa.me/${lead.telefono}`}
+                            target="_blank"
+                            className="p-1.5 rounded-lg hover:bg-apex-border transition-colors text-apex-muted hover:text-green-400"
+                            title="Abrir WhatsApp"
+                            rel="noreferrer"
+                          >
+                            <ExternalLink size={14} />
+                          </a>
+                        )}
                         <Link
                           href={`/conversaciones?tel=${lead.telefono}`}
                           className="p-1.5 rounded-lg hover:bg-apex-border transition-colors text-apex-muted hover:text-apex-lime"

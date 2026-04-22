@@ -1,26 +1,60 @@
 import { NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 
+type Sb = ReturnType<typeof createSupabaseServer>
+
 export const dynamic = 'force-dynamic'
+
+const SELECT_CONV = `
+  id, lead_id, telefono, mensaje, rol, tipo_mensaje,
+  timestamp, leido, manual, es_followup,
+  sender:sender_id (id, alias, color, provider, phone_number)
+` as const
+
+/** Carga filas con fallback si la vista 1g aún no está aplicada en Supabase. */
+async function cargarFilasConversacion(supabase: Sb) {
+  const { data: cabezas, error: viewError } = await supabase
+    .from('conversaciones_ultima_por_lead')
+    .select(SELECT_CONV)
+    .order('timestamp', { ascending: false })
+
+  if (viewError) {
+    console.warn(
+      '[conversaciones] Vista conversaciones_ultima_por_lead no disponible; usar supabase-migration-missing-schema.sql 1g. Detalle:',
+      viewError.message
+    )
+    const { data: conversacionesRecientes, error: convError } = await supabase
+      .from('conversaciones')
+      .select(SELECT_CONV)
+      .order('timestamp', { ascending: false })
+      .limit(10000)
+    if (convError) return { error: convError.message, filas: [] }
+    return { error: null, filas: [...(conversacionesRecientes ?? [])].reverse() }
+  }
+
+  const leadIds = (cabezas ?? [])
+    .map((c) => c.lead_id)
+    .filter((id): id is string => id != null)
+
+  if (leadIds.length === 0) {
+    return { error: null, filas: [] }
+  }
+
+  const { data: historial, error: convError } = await supabase
+    .from('conversaciones')
+    .select(SELECT_CONV)
+    .in('lead_id', leadIds)
+    .order('timestamp', { ascending: true })
+
+  if (convError) return { error: convError.message, filas: [] }
+  return { error: null, filas: historial ?? [] }
+}
 
 export async function GET() {
   const supabase = createSupabaseServer()
 
-  // Importante: con .order(asc).limit(N) PostgREST devuelve los N mensajes más *antiguos*.
-  // Pasado ~N filas en la tabla, los envíos nuevos quedan fuera y el inbox deja de actualizarse.
-  const { data: conversacionesRecientes, error: convError } = await supabase
-    .from('conversaciones')
-    .select(`
-      id, lead_id, telefono, mensaje, rol, tipo_mensaje,
-      timestamp, leido, manual,
-      sender:sender_id (id, alias, color, provider, phone_number)
-    `)
-    .order('timestamp', { ascending: false })
-    .limit(10000)
-
-  const conversaciones = [...(conversacionesRecientes ?? [])].reverse()
-
-  if (convError) return NextResponse.json({ error: convError.message }, { status: 500 })
+  const { error: loadError, filas: conversaciones } = await cargarFilasConversacion(supabase)
+  if (loadError) return NextResponse.json({ error: loadError }, { status: 500 })
 
   const { data: leads, error: leadsError } = await supabase
     .from('leads')

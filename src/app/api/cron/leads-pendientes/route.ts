@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { normalizarTelefonoArg, variantesTelefonoMismaLinea } from '@/lib/phone'
+import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -114,6 +115,9 @@ async function enviarTemplateTwilio(
   fromNumber: string,
   contentSid: string
 ): Promise<void> {
+  if (isTelefonoHardBlocked(telefono)) {
+    throw new Error('TELEFONO_BLOQUEADO')
+  }
   const accountSid = process.env.TWILIO_ACCOUNT_SID!
   const auth = 'Basic ' + Buffer.from(`${accountSid}:${process.env.TWILIO_AUTH_TOKEN!}`).toString('base64')
 
@@ -180,7 +184,7 @@ async function procesarSender(
   const erroresTick: Array<{ lead_id: string; error: string }> = []
 
   for (let i = 0; i < MAX_LEADS_POR_TICK; i++) {
-    // Elegir lead: el más antiguo pendiente que no haya tomado el otro sender en este tick
+    // Elegir lead: el más antiguo en cola (FIFO) que no haya tomado el otro sender en este tick
     const { data: candidatos } = await sup
       .from(LEADS_TABLE)
       .select('*')
@@ -189,8 +193,8 @@ async function procesarSender(
       .eq('estado', 'pendiente')
       .lt('primer_envio_intentos', MAX_REINTENTOS)
       .not('telefono', 'is', null)
-      .order('created_at', { ascending: false })
-      .limit(20)
+      .order('created_at', { ascending: true })
+      .limit(200)
 
     const lead = (candidatos ?? []).find(
       (l: LeadColaRow) => !yaProcesoIds.includes(l.id)
@@ -209,6 +213,16 @@ async function procesarSender(
     const telefono = normalizarTelefonoArg(String(lead.telefono))
     if (!telefono) {
       await actualizarLead(sup, lead.id, { estado: 'descartado', primer_envio_error: 'telefono_invalido' })
+      continue
+    }
+
+    if (isTelefonoHardBlocked(telefono)) {
+      await actualizarLead(sup, lead.id, {
+        estado: 'descartado',
+        primer_envio_error: 'telefono_bloqueado_lista',
+        procesando_hasta: null,
+      })
+      console.warn(`[cron leads-pendientes] [${key}] Lead ${lead.id} — tel ${telefono} en lista de bloqueo, descartado`)
       continue
     }
 

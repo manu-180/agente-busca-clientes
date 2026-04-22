@@ -132,3 +132,16 @@ BEGIN
     CREATE POLICY "service_role_all_demos_rubro" ON demos_rubro FOR ALL USING (auth.role() = 'service_role');
   END IF;
 END $$;
+
+-- ─── 1g. Inbox: una fila por lead (último mensaje) + índice para el DISTINCT ON ─
+-- Requerido para /api/conversaciones: al superar muchos mensajes en total, un .limit(10000)
+-- sobre toda la tabla dejaba afuera envíos recientes; este view evita el techo.
+CREATE INDEX IF NOT EXISTS idx_conversaciones_lead_id_timestamp_desc
+  ON public.conversaciones(lead_id, "timestamp" DESC)
+  WHERE lead_id IS NOT NULL;
+
+CREATE OR REPLACE VIEW public.conversaciones_ultima_por_lead AS
+SELECT DISTINCT ON (lead_id) *
+FROM public.conversaciones
+WHERE lead_id IS NOT NULL
+ORDER BY lead_id, "timestamp" DESC;

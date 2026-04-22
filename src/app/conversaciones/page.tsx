@@ -36,7 +36,7 @@ export default function ConversacionesPage() {
 
   const cargarConversaciones = async () => {
     try {
-      const res = await fetch('/api/conversaciones')
+      const res = await fetch('/api/conversaciones', { cache: 'no-store' })
       const data = await res.json()
       setGrupos(data.grupos ?? [])
     } catch (err) {

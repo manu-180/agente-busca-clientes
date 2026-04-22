@@ -20,6 +20,7 @@ import {
   getInitialSeleccionArgentina,
   PAISES_HISPANOHABLANTES,
 } from '@/lib/locations-ar'
+import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
 
 const TODAS_LOCALIDADES = '__TODAS__'
 const TODAS_PROVINCIAS = '__TODAS_PROVINCIAS__'
@@ -199,8 +200,13 @@ export default function NuevoLeadClient() {
   async function encolarLeads(leads: LeadCardState[]): Promise<QueueResult | null> {
     if (leads.length === 0) return { agregados: 0, duplicados: 0 }
 
+    const permitidos = leads.filter(l => l.telefono && !isTelefonoHardBlocked(l.telefono))
+    if (permitidos.length === 0) {
+      return { agregados: 0, duplicados: leads.length }
+    }
+
     const payload = {
-      leads: leads.map(l => ({
+      leads: permitidos.map(l => ({
         nombre: l.nombre,
         rubro: l.rubro,
         zona: l.zona,

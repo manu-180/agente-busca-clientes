@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { enviarMensajeTwilio } from '@/lib/twilio'
+import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
@@ -8,6 +9,10 @@ export async function POST(req: NextRequest) {
 
   if (!telefono || !mensaje) {
     return NextResponse.json({ error: 'Faltan telefono o mensaje' }, { status: 400 })
+  }
+
+  if (isTelefonoHardBlocked(telefono)) {
+    return NextResponse.json({ error: 'Teléfono en lista de bloqueo' }, { status: 403 })
   }
 
   const supabase = createSupabaseServer()
