@@ -5,112 +5,193 @@ type Sb = ReturnType<typeof createSupabaseServer>
 
 export const dynamic = 'force-dynamic'
 
-const SELECT_CONV = `
+const SELECT_CABEZA = `
   id, lead_id, telefono, mensaje, rol, tipo_mensaje,
   timestamp, leido, manual, es_followup,
   sender:sender_id (id, alias, color, provider, phone_number)
 ` as const
 
-/** Carga filas con fallback si la vista 1g aún no está aplicada en Supabase. */
-async function cargarFilasConversacion(supabase: Sb) {
-  // PostgREST limita a 1000 filas por defecto: sin .range/.limit explícito se recorta.
-  const { data: cabezas, error: viewError } = await supabase
-    .from('conversaciones_ultima_por_lead')
-    .select(SELECT_CONV)
-    .order('timestamp', { ascending: false })
-    .range(0, 19999)
+/** Máximo de IDs por request para no superar el límite de URL de Kong (~8 KB). */
+const CHUNK_IDS = 50
 
-  if (viewError) {
-    console.warn(
-      '[conversaciones] Vista conversaciones_ultima_por_lead no disponible; usar supabase-migration-missing-schema.sql 1g. Detalle:',
-      viewError.message
+function chunkArray<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
+  return out
+}
+
+/** Cuenta mensajes no leídos del cliente, chunkeando leadIds para no superar el límite de URL. */
+async function contarNoLeidosPorLead(supabase: Sb, leadIds: string[]): Promise<Map<string, number>> {
+  const m = new Map<string, number>()
+  if (leadIds.length === 0) return m
+
+  const resultados = await Promise.all(
+    chunkArray(leadIds, CHUNK_IDS).map((chunk) =>
+      supabase
+        .from('conversaciones')
+        .select('lead_id')
+        .in('lead_id', chunk)
+        .eq('leido', false)
+        .eq('rol', 'cliente')
+        .limit(10_000)
     )
-    const { data: conversacionesRecientes, error: convError } = await supabase
-      .from('conversaciones')
-      .select(SELECT_CONV)
-      .order('timestamp', { ascending: false })
-      .limit(10000)
-    if (convError) return { error: convError.message, filas: [] }
-    return { error: null, filas: [...(conversacionesRecientes ?? [])].reverse() }
+  )
+
+  for (const { data, error } of resultados) {
+    if (error || !data) continue
+    for (const row of data) {
+      if (row.lead_id) m.set(row.lead_id, (m.get(row.lead_id) ?? 0) + 1)
+    }
   }
+  return m
+}
 
-  const leadIds = (cabezas ?? [])
-    .map((c) => c.lead_id)
-    .filter((id): id is string => id != null)
+/** Trae el primer rol por lead, chunkeando para no superar el límite de URL. */
+async function obtenerPrimerRol(
+  supabase: Sb,
+  leadIds: string[]
+): Promise<Map<string, string>> {
+  const m = new Map<string, string>()
+  if (leadIds.length === 0) return m
 
-  if (leadIds.length === 0) {
-    return { error: null, filas: [] }
+  const resultados = await Promise.all(
+    chunkArray(leadIds, CHUNK_IDS).map((chunk) =>
+      supabase
+        .from('conversaciones_primera_por_lead')
+        .select('lead_id, rol')
+        .in('lead_id', chunk)
+    )
+  )
+
+  for (const { data, error } of resultados) {
+    if (error || !data) continue
+    for (const r of data as { lead_id: string | null; rol: string }[]) {
+      if (r.lead_id) m.set(r.lead_id, String(r.rol))
+    }
   }
+  return m
+}
 
-  // Misma regla: .order(asc) sin paginar = solo las 1000 filas *más viejas* → el inbox
-  // quedaba “congelado” en el pasado y los de hoy caían del otro lado del corte.
-  const PAGE = 10_000
-  const acum: any[] = []
-  for (let from = 0; from < 2_000_000; from += PAGE) {
-    const { data: chunk, error: convError } = await supabase
-      .from('conversaciones')
-      .select(SELECT_CONV)
-      .in('lead_id', leadIds)
-      .order('timestamp', { ascending: true })
-      .range(from, from + PAGE - 1)
-
-    if (convError) return { error: convError.message, filas: [] }
-    if (!chunk?.length) break
-    acum.push(...chunk)
-    if (chunk.length < PAGE) break
+/**
+ * Carga filas de `leads` solo para los ids necesarios. Evita el techo de PostgREST
+ * (~1000 filas) que hacía que `.range(0, 9999)` devolviera un subconjunto arbitrario
+ * y el inbox descartara conversaciones con `if (!lead) return null`.
+ */
+async function fetchLeadsByIds(supabase: Sb, leadIds: string[]) {
+  const unique = Array.from(new Set(leadIds))
+  if (unique.length === 0) {
+    return { data: [] as Record<string, unknown>[], error: null as string | null }
   }
-
-  return { error: null, filas: acum }
+  const resultados = await Promise.all(
+    chunkArray(unique, CHUNK_IDS).map((chunk) => supabase.from('leads').select('*').in('id', chunk))
+  )
+  const rows: Record<string, unknown>[] = []
+  for (const { data, error } of resultados) {
+    if (error) return { data: [] as Record<string, unknown>[], error: error.message }
+    if (data?.length) rows.push(...(data as Record<string, unknown>[]))
+  }
+  return { data: rows, error: null as string | null }
 }
 
 export async function GET() {
   const supabase = createSupabaseServer()
 
-  const { error: loadError, filas: conversaciones } = await cargarFilasConversacion(supabase)
-  if (loadError) return NextResponse.json({ error: loadError }, { status: 500 })
+  const { data: cabezas, error: viewError } = await supabase
+    .from('conversaciones_ultima_por_lead')
+    .select(SELECT_CABEZA)
+    .order('timestamp', { ascending: false })
+    .range(0, 19_999)
 
-  const { data: leads, error: leadsError } = await supabase
-    .from('leads')
-    .select('*')
-
-  if (leadsError) return NextResponse.json({ error: leadsError.message }, { status: 500 })
-
-  const leadsMap = new Map(leads?.map(l => [l.id, l]) ?? [])
-  const grupos: Record<string, any> = {}
-
-  for (const conv of conversaciones ?? []) {
-    if (!conv.lead_id) continue
-    if (!grupos[conv.lead_id]) {
-      const lead = leadsMap.get(conv.lead_id)
-      if (!lead) continue
-      grupos[conv.lead_id] = {
-        lead,
-        mensajes: [],
-        ultimo_mensaje: '',
-        ultimo_timestamp: '',
-        no_leidos: 0,
-        sender: null,
+  if (viewError) {
+    console.warn(
+      '[conversaciones] Vista conversaciones_ultima_por_lead: usar supabase-migration-missing-schema.sql 1g. Detalle:',
+      viewError.message
+    )
+    const { data: recientes, error: convError } = await supabase
+      .from('conversaciones')
+      .select(SELECT_CABEZA)
+      .order('timestamp', { ascending: false })
+      .limit(10_000)
+    if (convError) return NextResponse.json({ error: convError.message }, { status: 500 })
+    const filas = [...(recientes ?? [])].reverse()
+    const idsFromConvs = Array.from(
+      new Set(filas.map((c) => c.lead_id).filter((id): id is string => id != null))
+    )
+    const { data: leadRows, error: leErr } = await fetchLeadsByIds(supabase, idsFromConvs)
+    if (leErr) return NextResponse.json({ error: leErr }, { status: 500 })
+    const lmap = new Map(leadRows.map((l) => [l.id as string, l]))
+    const g: Record<string, any> = {}
+    for (const conv of filas) {
+      if (!conv.lead_id) continue
+      if (!g[conv.lead_id]) {
+        const lead = lmap.get(conv.lead_id)
+        if (!lead) continue
+        g[conv.lead_id] = {
+          lead,
+          mensajes: [] as any[],
+          ultimo_mensaje: '',
+          ultimo_timestamp: '',
+          no_leidos: 0,
+          sender: null,
+          inicio_rol: null,
+        }
       }
+      const row = g[conv.lead_id]
+      if (!row) continue
+      row.mensajes.push(conv)
+      row.ultimo_mensaje = conv.mensaje
+      row.ultimo_timestamp = conv.timestamp
+      if (conv.sender) row.sender = conv.sender
+      if (!conv.leido && conv.rol === 'cliente') row.no_leidos++
     }
-    grupos[conv.lead_id].mensajes.push(conv)
-    grupos[conv.lead_id].ultimo_mensaje = conv.mensaje
-    grupos[conv.lead_id].ultimo_timestamp = conv.timestamp
-    // El sender del grupo es el del último mensaje con sender
-    if (conv.sender) {
-      grupos[conv.lead_id].sender = conv.sender
-    }
-    if (!conv.leido && conv.rol === 'cliente') {
-      grupos[conv.lead_id].no_leidos++
-    }
+    const arr = Object.values(g).sort((a: any, b: any) => {
+      const aU = a.no_leidos > 0
+      const bU = b.no_leidos > 0
+      if (aU !== bU) return aU ? -1 : 1
+      if (aU && bU && a.no_leidos !== b.no_leidos) return b.no_leidos - a.no_leidos
+      return new Date(b.ultimo_timestamp).getTime() - new Date(a.ultimo_timestamp).getTime()
+    })
+    return NextResponse.json({ grupos: arr })
   }
 
-  const gruposArray = Object.values(grupos).sort((a: any, b: any) => {
+  const listaCabezas = cabezas ?? []
+  const leadIds = listaCabezas.map((c) => c.lead_id).filter((id): id is string => id != null)
+  if (leadIds.length === 0) {
+    return NextResponse.json({ grupos: [] })
+  }
+
+  const [noLeidosMap, inicioRol] = await Promise.all([
+    contarNoLeidosPorLead(supabase, leadIds),
+    obtenerPrimerRol(supabase, leadIds),
+  ])
+
+  const { data: leadRows, error: leadsError } = await fetchLeadsByIds(supabase, leadIds)
+  if (leadsError) return NextResponse.json({ error: leadsError }, { status: 500 })
+  const leadsMap = new Map(leadRows.map((l) => [l.id as string, l]))
+
+  const gruposArray = listaCabezas
+    .map((cabeza) => {
+      if (!cabeza.lead_id) return null
+      const lead = leadsMap.get(cabeza.lead_id)
+      if (!lead) return null
+      return {
+        lead,
+        /** Solo el último en el listado; el hilo completo: GET /api/conversaciones/messages?lead_id= */
+        mensajes: [cabeza],
+        ultimo_mensaje: cabeza.mensaje,
+        ultimo_timestamp: cabeza.timestamp,
+        no_leidos: noLeidosMap.get(cabeza.lead_id) ?? 0,
+        sender: cabeza.sender ?? null,
+        inicio_rol: inicioRol.get(cabeza.lead_id) ?? null,
+      }
+    })
+    .filter((g) => g != null) as any[]
+
+  gruposArray.sort((a, b) => {
     const aUn = a.no_leidos > 0
     const bUn = b.no_leidos > 0
     if (aUn !== bUn) return aUn ? -1 : 1
-    if (aUn && bUn && a.no_leidos !== b.no_leidos) {
-      return b.no_leidos - a.no_leidos
-    }
+    if (aUn && bUn && a.no_leidos !== b.no_leidos) return b.no_leidos - a.no_leidos
     return new Date(b.ultimo_timestamp).getTime() - new Date(a.ultimo_timestamp).getTime()
   })
 

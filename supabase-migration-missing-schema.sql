@@ -145,3 +145,10 @@ SELECT DISTINCT ON (lead_id) *
 FROM public.conversaciones
 WHERE lead_id IS NOT NULL
 ORDER BY lead_id, "timestamp" DESC;
+
+-- Primer mensaje del hilo (p. ej. filtro "solo web" = arrancó con cliente, no con template)
+CREATE OR REPLACE VIEW public.conversaciones_primera_por_lead AS
+SELECT DISTINCT ON (lead_id) *
+FROM public.conversaciones
+WHERE lead_id IS NOT NULL
+ORDER BY lead_id, "timestamp" ASC;
