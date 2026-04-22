@@ -44,7 +44,7 @@ function formatDate(iso: string) {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const cfg = STATUS_CONFIG[status] ?? { label: status, color: 'text-gray-400', icon: Clock }
+  const cfg = STATUS_CONFIG[status] ?? { label: status, color: 'text-apex-muted', icon: Clock }
   const Icon = cfg.icon
   return (
     <span className={cn('flex items-center gap-1 font-mono text-xs font-semibold', cfg.color)}>

@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { buildAgentPrompt, buildUserMessageWithLeadContext } from '@/lib/prompts'
 import {
+  clienteYaMandoAlgoNoAutomatico,
+  esAutoReplyCortoNegocio,
   pareceMensajeAutomaticoNegocio,
   RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
 } from '@/lib/outbound-auto-reply'
@@ -23,6 +25,7 @@ import {
   validateContinuationMessage,
 } from '@/lib/message-guards'
 import { enviarMensajeTwilio } from '@/lib/twilio'
+import { normalizarTelefonoArg, variantesTelefonoMismaLinea } from '@/lib/phone'
 
 export const maxDuration = 30
 
@@ -191,21 +194,32 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  let { data: lead } = await supabase
+  const telsMismaLinea = variantesTelefonoMismaLinea(telefono)
+  const { data: candsMismaLinea } = await supabase
     .from('leads')
     .select('*')
-    .eq('telefono', telefono)
-    .single()
+    .in('telefono', telsMismaLinea)
+
+  let lead = candsMismaLinea?.length
+    ? [...candsMismaLinea].sort((a, b) => {
+        if (a.mensaje_enviado && !b.mensaje_enviado) return -1
+        if (!a.mensaje_enviado && b.mensaje_enviado) return 1
+        if (a.origen === 'outbound' && b.origen !== 'outbound') return -1
+        if (a.origen !== 'outbound' && b.origen === 'outbound') return 1
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      })[0]
+    : null
 
   if (!lead) {
     const origenDetectado = pareceMensajeAutomaticoNegocio(mensaje) ? 'outbound' : 'inbound'
+    const telefonoCanonica = normalizarTelefonoArg(telefono)
     const { data: nuevoLead } = await supabase
       .from('leads')
       .insert({
         nombre: `Lead ${telefono.slice(-4)}`,
         rubro: 'Por definir',
         zona: 'Por definir',
-        telefono,
+        telefono: telefonoCanonica,
         descripcion:
           origenDetectado === 'outbound'
             ? 'Lead outbound — auto-reply de negocio detectado'
@@ -343,6 +357,71 @@ export async function POST(req: NextRequest) {
         .filter(Boolean)
         .join('\n') || mensaje
 
+    const { data: historialRows } = await supabase
+      .from('conversaciones')
+      .select('rol, mensaje, timestamp')
+      .eq('lead_id', lead.id)
+      .order('timestamp', { ascending: true })
+      .limit(60)
+
+    const filasHistorial = historialRows ?? []
+
+    // Outbound sin mensaje "humano" real: un solo mensaje nuestro extra (plantilla + 1 respuesta).
+    // Evita 5–10 pitches LLM cuando WA Business manda burbujas con "?" o menús en trozos.
+    const outboundSinHumanoReal =
+      lead.origen === 'outbound' && !clienteYaMandoAlgoNoAutomatico(filasHistorial)
+
+    if (outboundSinHumanoReal) {
+      const mensajesAgente = filasHistorial.filter(h => h.rol === 'agente')
+      if (mensajesAgente.length >= 2) {
+        await registrarEventoConversacional({
+          leadId: lead.id,
+          telefono,
+          eventName: 'outbound_cap_sin_humano',
+          decisionAction: 'no_reply',
+          decisionReason: 'default_full_reply',
+          confidence: 1,
+          metadata: { motivo: 'max_mensajes_agente_sin_cliente_real', n_agente: mensajesAgente.length },
+        })
+        return twimlOk()
+      }
+
+      const esAutoCliente =
+        pareceMensajeAutomaticoNegocio(mensajeCombinado) || esAutoReplyCortoNegocio(mensajeCombinado)
+      if (esAutoCliente) {
+        const yaMandoRespuestaFija = mensajesAgente.some(
+          m =>
+            typeof m.mensaje === 'string' &&
+            (m.mensaje.includes('theapexweb.com') || m.mensaje.includes('Gracias por la info'))
+        )
+        if (yaMandoRespuestaFija) {
+          return twimlOk()
+        }
+        try {
+          await enviarTwilioYGuardar(
+            supabase,
+            telefono,
+            lead.id,
+            RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
+            senderPhone,
+            senderId
+          )
+          await registrarEventoConversacional({
+            leadId: lead.id,
+            telefono,
+            eventName: 'outbound_auto_business_reply_early',
+            decisionAction: 'full_reply',
+            decisionReason: 'default_full_reply',
+            confidence: 1,
+            metadata: { source: 'twilio_webhook_pre_decision' },
+          })
+        } catch (e) {
+          console.error('[Twilio] outbound auto early error:', e)
+        }
+        return twimlOk()
+      }
+    }
+
     const configConversacional = await obtenerConfigConversacional()
     const decision = decidirRespuestaConversacional({
       message: mensajeCombinado,
@@ -463,26 +542,6 @@ export async function POST(req: NextRequest) {
 
     const apexInfoSanitizado = sanitizarApexInfoPorVertical(apexInfoTextoRaw, verticalLead)
     const apexInfoTexto = apexInfoSanitizado.texto
-
-    const { data: historial } = await supabase
-      .from('conversaciones')
-      .select('rol, mensaje, timestamp')
-      .eq('lead_id', lead.id)
-      .order('timestamp', { ascending: true })
-      .limit(40)
-
-    const filasHistorial = historial ?? []
-
-    const cantidadMensajesAgente = filasHistorial.filter(h => h.rol === 'agente').length
-    const esAutoMensajeNegocio =
-      lead.origen === 'outbound' &&
-      cantidadMensajesAgente <= 1 &&
-      pareceMensajeAutomaticoNegocio(mensajeCombinado)
-
-    if (esAutoMensajeNegocio) {
-      await enviarTwilioYGuardar(supabase, telefono, lead.id, RESPUESTA_OUTBOUND_TRAS_AUTOMATICO, senderPhone, senderId)
-      return twimlOk()
-    }
 
     const ultimosMensajesAgente = filasHistorial
       .filter(h => h.rol === 'agente')

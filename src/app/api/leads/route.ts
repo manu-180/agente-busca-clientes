@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { ejecutarConTablaLeads } from '@/lib/leads-table'
+import { normalizarTelefonoArg, variantesTelefonoMismaLinea } from '@/lib/phone'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,15 +21,17 @@ export async function POST(req: NextRequest) {
   const supabase = createSupabaseServer()
   const body = await req.json()
 
-  const telefonoNorm = body.telefono ? body.telefono.replace(/\D/g, '') : ''
+  const telefonoNorm = body.telefono ? normalizarTelefonoArg(body.telefono) : ''
+  const telsDup = telefonoNorm ? variantesTelefonoMismaLinea(telefonoNorm) : []
 
-  // Dedup: no reinsertar si ya existe en leads o en conversaciones
+  // Dedup: misma línea (variantes 5411/54911) en leads o conversaciones
   if (telefonoNorm) {
-    const [{ data: leadExist }, { data: convExist }] = await Promise.all([
-      supabase.from('leads_apex_next').select('id').eq('telefono', telefonoNorm).maybeSingle(),
-      supabase.from('conversaciones').select('id').eq('telefono', telefonoNorm).limit(1).maybeSingle(),
+    const [{ data: leadMain }, { data: leadNext }, { data: convExist }] = await Promise.all([
+      supabase.from('leads').select('id').in('telefono', telsDup).maybeSingle(),
+      supabase.from('leads_apex_next').select('id').in('telefono', telsDup).maybeSingle(),
+      supabase.from('conversaciones').select('id').in('telefono', telsDup).limit(1).maybeSingle(),
     ])
-    if (leadExist || convExist) {
+    if (leadMain || leadNext || convExist) {
       return NextResponse.json({ error: 'Lead ya existente', duplicado: true }, { status: 409 })
     }
   }

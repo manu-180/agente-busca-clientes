@@ -163,24 +163,24 @@ export default function ConversacionesPage() {
   return (
     <div className="flex flex-col h-[calc(100vh-80px)] -mx-4 sm:-mx-6 lg:-mx-8 -mt-4 sm:-mt-6 lg:-mt-8">
       {/* Panel container */}
-      <div className="flex flex-1 overflow-hidden bg-white border border-gray-200 shadow-sm lg:m-0 rounded-none lg:rounded-xl lg:m-2">
+      <div className="flex flex-1 overflow-hidden bg-apex-card border border-apex-border shadow-sm lg:m-0 rounded-none lg:rounded-xl lg:m-2">
 
         {/* ── Left: conversation list ── */}
-        <div className={`w-full lg:w-[320px] flex-shrink-0 flex flex-col border-r border-gray-100 bg-white ${seleccionado ? 'hidden lg:flex' : 'flex'}`}>
+        <div className={`w-full lg:w-[320px] flex-shrink-0 flex flex-col border-r border-apex-border bg-apex-dark ${seleccionado ? 'hidden lg:flex' : 'flex'}`}>
 
           {/* Header */}
-          <div className="px-5 py-4 border-b border-gray-100">
+          <div className="px-5 py-4 border-b border-apex-border">
             <div className="flex items-center justify-between">
               <div>
-                <h1 className="text-base font-semibold text-gray-900 tracking-tight">Inbox</h1>
-                <p className="text-xs text-gray-400 mt-0.5">
+                <h1 className="text-base font-semibold text-white tracking-tight">Inbox</h1>
+                <p className="text-xs text-apex-muted mt-0.5">
                   {loading ? 'Cargando...' : `${gruposFiltrados.length} conversaciones`}
                 </p>
               </div>
               {totalNoLeidos > 0 && (
                 <button
                   onClick={leerTodos}
-                  className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                  className="flex items-center gap-1.5 text-xs text-apex-muted hover:text-neutral-300 transition-colors"
                 >
                   <CheckCheck size={13} />
                   leer todos
@@ -191,13 +191,13 @@ export default function ConversacionesPage() {
 
           {/* Sender filter */}
           {sendersUnicos.length > 1 && (
-            <div className="px-4 py-2.5 border-b border-gray-100 flex gap-1.5 flex-wrap bg-gray-50/60">
+            <div className="px-4 py-2.5 border-b border-apex-border flex gap-1.5 flex-wrap bg-apex-black/50">
               <button
                 onClick={() => setFiltroSender(null)}
                 className={`text-[10px] font-medium px-2.5 py-1 rounded-full transition-all ${
                   !filtroSender
-                    ? 'bg-gray-900 text-white'
-                    : 'bg-white border border-gray-200 text-gray-500 hover:bg-gray-100'
+                    ? 'bg-apex-lime text-apex-black'
+                    : 'bg-apex-card border border-apex-border text-apex-muted hover:bg-apex-border'
                 }`}
               >
                 Todos
@@ -210,7 +210,7 @@ export default function ConversacionesPage() {
                   style={
                     filtroSender === s.id
                       ? { backgroundColor: s.color, borderColor: s.color, color: '#111' }
-                      : { backgroundColor: '#fff', borderColor: '#e5e7eb', color: '#6b7280' }
+                      : { backgroundColor: '#161616', borderColor: '#222222', color: '#888888' }
                   }
                 >
                   {s.alias}
@@ -223,12 +223,12 @@ export default function ConversacionesPage() {
           <div className="flex-1 overflow-y-auto">
             {loading ? (
               <div className="flex items-center justify-center h-24">
-                <Loader2 size={20} className="animate-spin text-gray-300" />
+                <Loader2 size={20} className="animate-spin text-apex-muted" />
               </div>
             ) : gruposFiltrados.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-40 gap-2">
-                <MessageSquare size={28} className="text-gray-200" />
-                <p className="text-sm text-gray-400">No hay conversaciones</p>
+                <MessageSquare size={28} className="text-apex-border" />
+                <p className="text-sm text-apex-muted">No hay conversaciones</p>
               </div>
             ) : (
               gruposFiltrados.map(grupo => {
@@ -237,8 +237,8 @@ export default function ConversacionesPage() {
                   <button
                     key={grupo.lead.id}
                     onClick={() => seleccionarLead(grupo.lead.id)}
-                    className={`w-full text-left px-4 py-3 border-b border-gray-50 transition-colors relative ${
-                      activo ? 'bg-lime-50' : 'hover:bg-gray-50'
+                    className={`w-full text-left px-4 py-3 border-b border-apex-border transition-colors relative ${
+                      activo ? 'bg-apex-lime-dim/40' : 'hover:bg-apex-card'
                     }`}
                   >
                     {activo && (
@@ -246,19 +246,19 @@ export default function ConversacionesPage() {
                     )}
                     <div className="flex items-start gap-3">
                       {/* Avatar */}
-                      <div className="w-10 h-10 rounded-full bg-gray-100 flex items-center justify-center flex-shrink-0 text-sm font-semibold text-gray-500 mt-0.5">
+                      <div className="w-10 h-10 rounded-full bg-apex-border flex items-center justify-center flex-shrink-0 text-sm font-semibold text-apex-muted mt-0.5">
                         {getInitial(grupo.lead.nombre)}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-1 mb-0.5">
-                          <span className={`text-sm truncate ${grupo.no_leidos > 0 ? 'font-semibold text-gray-900' : 'font-medium text-gray-700'}`}>
+                          <span className={`text-sm truncate ${grupo.no_leidos > 0 ? 'font-semibold text-white' : 'font-medium text-neutral-400'}`}>
                             {grupo.lead.nombre}
                           </span>
-                          <span className="text-[10px] text-gray-400 flex-shrink-0 tabular-nums">
+                          <span className="text-[10px] text-apex-muted flex-shrink-0 tabular-nums">
                             {formatDate(grupo.ultimo_timestamp)}
                           </span>
                         </div>
-                        <p className={`text-xs truncate mb-1.5 ${grupo.no_leidos > 0 ? 'text-gray-700' : 'text-gray-400'}`}>
+                        <p className={`text-xs truncate mb-1.5 ${grupo.no_leidos > 0 ? 'text-neutral-300' : 'text-apex-muted'}`}>
                           {grupo.ultimo_mensaje}
                         </p>
                         <div className="flex items-center justify-between">
@@ -293,36 +293,36 @@ export default function ConversacionesPage() {
         {/* ── Right: chat view ── */}
         <div
           className={`flex-1 flex flex-col min-w-0 ${!seleccionado ? 'hidden lg:flex' : 'flex'}`}
-          style={{ backgroundImage: 'radial-gradient(circle, #e5e7eb 1px, transparent 1px)', backgroundSize: '20px 20px', backgroundColor: '#f9fafb' }}
+          style={{ backgroundImage: 'radial-gradient(circle, #2a2a2a 1px, transparent 1px)', backgroundSize: '20px 20px', backgroundColor: '#0a0a0a' }}
         >
           {!grupoActivo ? (
             <div className="flex-1 flex items-center justify-center bg-transparent">
               <div className="text-center">
-                <div className="w-16 h-16 rounded-full bg-white shadow-sm flex items-center justify-center mx-auto mb-3">
-                  <MessageSquare size={26} className="text-gray-300" />
+                <div className="w-16 h-16 rounded-full bg-apex-card border border-apex-border flex items-center justify-center mx-auto mb-3">
+                  <MessageSquare size={26} className="text-apex-muted" />
                 </div>
-                <p className="text-sm text-gray-400">Seleccioná una conversación</p>
+                <p className="text-sm text-apex-muted">Seleccioná una conversación</p>
               </div>
             </div>
           ) : (
             <>
               {/* Chat header */}
-              <div className="px-4 py-3 border-b border-gray-200 bg-white flex items-center justify-between shadow-sm flex-shrink-0">
+              <div className="px-4 py-3 border-b border-apex-border bg-apex-dark flex items-center justify-between shadow-sm flex-shrink-0">
                 <div className="flex items-center gap-3">
                   <button
                     onClick={() => setSeleccionado(null)}
-                    className="lg:hidden p-1.5 rounded-lg hover:bg-gray-100 text-gray-500"
+                    className="lg:hidden p-1.5 rounded-lg hover:bg-apex-border text-apex-muted"
                   >
                     <ArrowLeft size={17} />
                   </button>
-                  <div className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center text-sm font-semibold text-gray-600">
+                  <div className="w-9 h-9 rounded-full bg-apex-border flex items-center justify-center text-sm font-semibold text-neutral-300">
                     {getInitial(grupoActivo.lead.nombre)}
                   </div>
                   <div>
-                    <h3 className="font-semibold text-gray-900 text-sm leading-tight">
+                    <h3 className="font-semibold text-white text-sm leading-tight">
                       {grupoActivo.lead.nombre}
                     </h3>
-                    <p className="text-[11px] text-gray-400 leading-tight">
+                    <p className="text-[11px] text-apex-muted leading-tight">
                       {grupoActivo.lead.telefono}
                       {grupoActivo.lead.rubro && ` · ${grupoActivo.lead.rubro}`}
                       {grupoActivo.sender && (
@@ -339,8 +339,8 @@ export default function ConversacionesPage() {
                     onClick={() => toggleAgente(grupoActivo.lead.id, !grupoActivo.lead.agente_activo)}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
                       grupoActivo.lead.agente_activo
-                        ? 'bg-lime-50 text-lime-700 border-lime-200 hover:bg-lime-100'
-                        : 'bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100'
+                        ? 'bg-apex-lime/15 text-apex-lime border-apex-lime/30 hover:bg-apex-lime/25'
+                        : 'bg-apex-card text-apex-muted border-apex-border hover:bg-apex-border'
                     }`}
                   >
                     {grupoActivo.lead.agente_activo ? <Bot size={13} /> : <BotOff size={13} />}
@@ -348,14 +348,14 @@ export default function ConversacionesPage() {
                   </button>
                   <button
                     onClick={() => cambiarEstadoLead(grupoActivo.lead.id, 'interesado')}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-50 text-gray-600 border border-gray-200 hover:bg-gray-100 transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-apex-card text-neutral-300 border border-apex-border hover:bg-apex-border transition-colors"
                   >
                     <UserCheck size={13} />
                     Interesado
                   </button>
                   <button
                     onClick={() => cambiarEstadoLead(grupoActivo.lead.id, 'cerrado')}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-50 text-emerald-600 border border-emerald-200 hover:bg-emerald-100 transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 hover:bg-emerald-500/20 transition-colors"
                   >
                     <CheckCircle size={13} />
                     Cerrado
@@ -373,13 +373,13 @@ export default function ConversacionesPage() {
                         <div
                           className={`px-4 py-2.5 rounded-2xl text-sm shadow-sm ${
                             isAgente
-                              ? 'bg-[#c8f135] text-gray-900 rounded-br-sm'
-                              : 'bg-white text-gray-800 rounded-bl-sm border border-gray-100'
+                              ? 'bg-[#c8f135] text-apex-black rounded-br-sm'
+                              : 'bg-apex-card text-neutral-200 rounded-bl-sm border border-apex-border'
                           }`}
                         >
                           <p className="whitespace-pre-wrap leading-relaxed">{msg.mensaje}</p>
                         </div>
-                        <p className="text-[10px] text-gray-400 mt-1 px-1">{formatTime(msg.timestamp)}</p>
+                        <p className="text-[10px] text-apex-muted mt-1 px-1">{formatTime(msg.timestamp)}</p>
                       </div>
                     </div>
                   )
@@ -387,7 +387,7 @@ export default function ConversacionesPage() {
               </div>
 
               {/* Input */}
-              <div className="px-4 py-3 border-t border-gray-200 bg-white flex-shrink-0">
+              <div className="px-4 py-3 border-t border-apex-border bg-apex-dark flex-shrink-0">
                 <div className="flex gap-2 items-center">
                   <input
                     type="text"
@@ -395,20 +395,20 @@ export default function ConversacionesPage() {
                     onChange={e => setNuevoMensaje(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && !e.shiftKey && enviarMensaje()}
                     placeholder="Escribí un mensaje manual..."
-                    className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:border-gray-300 focus:bg-white transition-colors"
+                    className="flex-1 bg-apex-black border border-apex-border rounded-xl px-4 py-2.5 text-sm text-neutral-200 placeholder-apex-muted focus:outline-none focus:border-apex-lime/40 focus:bg-apex-black transition-colors"
                   />
                   <button
                     onClick={sugerirRespuesta}
                     disabled={sugiriendo}
                     title="Sugerir respuesta con IA"
-                    className="p-2.5 rounded-xl bg-gray-100 text-gray-400 hover:bg-lime-50 hover:text-lime-600 border border-gray-200 hover:border-lime-200 transition-all disabled:opacity-40"
+                    className="p-2.5 rounded-xl bg-apex-card text-apex-muted hover:bg-apex-lime/15 hover:text-apex-lime border border-apex-border hover:border-apex-lime/30 transition-all disabled:opacity-40"
                   >
                     {sugiriendo ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
                   </button>
                   <button
                     onClick={enviarMensaje}
                     disabled={!nuevoMensaje.trim() || enviando}
-                    className="p-2.5 rounded-xl bg-[#c8f135] text-gray-900 hover:bg-[#d4f54d] transition-colors disabled:opacity-40 shadow-sm"
+                    className="p-2.5 rounded-xl bg-[#c8f135] text-apex-black hover:bg-[#d4f54d] transition-colors disabled:opacity-40 shadow-sm"
                   >
                     {enviando ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
                   </button>

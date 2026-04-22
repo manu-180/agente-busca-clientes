@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
+import { normalizarTelefonoArg, soloDigitos, variantesTelefonoMismaLinea } from '@/lib/phone'
 
 const LEADS_TABLE = 'leads'
 
@@ -12,7 +13,7 @@ interface LeadInput {
 }
 
 function normalizarTelefono(telefono: string): string {
-  return telefono.replace(/\D/g, '')
+  return normalizarTelefonoArg(soloDigitos(telefono))
 }
 
 export async function POST(req: NextRequest) {
@@ -35,10 +36,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Ningún teléfono válido' }, { status: 400 })
     }
 
+    const telefonosClave = Array.from(
+      new Set(telefonos.reduce<string[]>((acc, t) => acc.concat(variantesTelefonoMismaLinea(t)), []))
+    )
+
     // Chequear contra leads Y contra conversaciones (protege leads borrados que ya fueron contactados)
     const [resLeads, resConvs] = await Promise.all([
-      supabase.from(LEADS_TABLE).select('telefono').in('telefono', telefonos),
-      supabase.from('conversaciones').select('telefono').in('telefono', telefonos),
+      supabase.from(LEADS_TABLE).select('telefono').in('telefono', telefonosClave),
+      supabase.from('conversaciones').select('telefono').in('telefono', telefonosClave),
     ])
 
     const telefonosExistentes = new Set(
@@ -46,7 +51,7 @@ export async function POST(req: NextRequest) {
         ...(resLeads.data ?? []),
         ...(resConvs.data ?? []),
       ]
-        .map(e => normalizarTelefono(String(e.telefono ?? '')))
+        .map(e => normalizarTelefonoArg(String(e.telefono ?? '')))
         .filter(Boolean)
     )
 

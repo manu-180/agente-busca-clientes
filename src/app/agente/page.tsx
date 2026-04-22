@@ -106,7 +106,7 @@ export default function AgentePage() {
             agenteActivo ? 'bg-apex-lime' : 'bg-apex-border'
           }`}
         >
-          <div className={`absolute top-0.5 w-6 h-6 rounded-full bg-white transition-transform ${
+          <div className={`absolute top-0.5 w-6 h-6 rounded-full bg-apex-black transition-transform ${
             agenteActivo ? 'left-[30px]' : 'left-0.5'
           }`} />
         </button>

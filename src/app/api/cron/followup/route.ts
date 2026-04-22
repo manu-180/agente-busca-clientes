@@ -4,7 +4,30 @@ import { ejecutarConTablaLeads } from '@/lib/leads-table'
 import { enviarMensajeTwilio } from '@/lib/twilio'
 import { evaluarFollowup } from '@/lib/followup-eligibility'
 import { generarMensajeFollowupClaude } from '@/lib/generar-followup'
+import { claveUnicaPaisLinea } from '@/lib/phone'
 import type { Lead } from '@/types'
+
+/** Evita 2+ filas de leads (5411 / 54911) y el followup a la misma persona dos veces por tick. */
+function dedupearLeadsMismaLinea(leads: Lead[]): Lead[] {
+  const map = new Map<string, Lead>()
+  for (const l of leads) {
+    const k = claveUnicaPaisLinea(l.telefono)
+    const o = map.get(k)
+    if (!o) {
+      map.set(k, l)
+      continue
+    }
+    const [preferido] = [o, l].sort((a, b) => {
+      if (a.mensaje_enviado && !b.mensaje_enviado) return -1
+      if (!a.mensaje_enviado && b.mensaje_enviado) return 1
+      if (a.origen === 'outbound' && b.origen !== 'outbound') return -1
+      if (a.origen !== 'outbound' && b.origen === 'outbound') return 1
+      return new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    })
+    map.set(k, preferido)
+  }
+  return Array.from(map.values())
+}
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -56,7 +79,9 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
     )
   }
 
-  const leads = leadsRaw.filter(l => !ESTADOS_EXCLUIDOS.has(l.estado) && !l.conversacion_cerrada)
+  const leads = dedupearLeadsMismaLinea(
+    leadsRaw.filter(l => !ESTADOS_EXCLUIDOS.has(l.estado) && !l.conversacion_cerrada)
+  )
   const resultados: Array<{ lead_id: string; ok: boolean; detalle?: string }> = []
 
   for (const lead of leads) {
@@ -84,13 +109,16 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
       continue
     }
 
+    const followupsEnHistorial = mensajes.filter(m => m.es_followup === true).length
+    const followupsEfectivos = Math.max(followupsEnviados, followupsEnHistorial)
+
     const evaluacion = evaluarFollowup({
       mensajes: mensajes.map(m => ({
         timestamp: m.timestamp,
         rol: m.rol as 'agente' | 'cliente',
         es_followup: m.es_followup,
       })),
-      followupsEnviados,
+      followupsEnviados: followupsEfectivos,
       conversacionCerrada: !!lead.conversacion_cerrada,
     })
 
@@ -106,7 +134,7 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
 
     const clienteRespondioAlguna = mensajes.some(m => m.rol === 'cliente')
     const texto = await generarMensajeFollowupClaude(lead, historialBreve, {
-      followupsPrevios: followupsEnviados,
+      followupsPrevios: followupsEfectivos,
       clienteRespondioAlguna,
       mensajeInicialApex: lead.mensaje_inicial ?? null,
     })
@@ -136,27 +164,32 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
       senderPhone = senderRow?.phone_number ?? undefined
     }
 
+    const { data: convInsertada, error: errIns } = await supabase
+      .from('conversaciones')
+      .insert({
+        lead_id: lead.id,
+        telefono: lead.telefono,
+        mensaje: texto,
+        rol: 'agente',
+        tipo_mensaje: 'texto',
+        manual: false,
+        es_followup: true,
+        sender_id: senderId,
+      })
+      .select('id')
+      .maybeSingle()
+
+    if (errIns || !convInsertada) {
+      resultados.push({ lead_id: lead.id, ok: false, detalle: `db:${errIns?.message ?? 'sin fila'}` })
+      continue
+    }
+
     try {
       await enviarMensajeTwilio(lead.telefono, texto, senderPhone)
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
+      await supabase.from('conversaciones').delete().eq('id', convInsertada.id)
       resultados.push({ lead_id: lead.id, ok: false, detalle: `twilio:${msg}` })
-      continue
-    }
-
-    const { error: errIns } = await supabase.from('conversaciones').insert({
-      lead_id: lead.id,
-      telefono: lead.telefono,
-      mensaje: texto,
-      rol: 'agente',
-      tipo_mensaje: 'texto',
-      manual: false,
-      es_followup: true,
-      sender_id: senderId,
-    })
-
-    if (errIns) {
-      resultados.push({ lead_id: lead.id, ok: false, detalle: `db:${errIns.message}` })
       continue
     }
 

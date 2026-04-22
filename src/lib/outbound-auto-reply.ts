@@ -22,8 +22,38 @@ function tieneBloquesEmojisDecorativos(texto: string): boolean {
   return /([\uD800-\uDBFF][\uDC00-\uDFFF]\s*){3,}/.test(texto)
 }
 
+/**
+ * True si ya hubo al menos un mensaje del cliente que no califica como auto-reply
+ * típico de WhatsApp Business. Hasta que eso pase, conviene no volver a “vender”
+ * con el modelo completo en outbound (evita 2–3 pitches seguidos por cada
+ * fragmento distinto del menú automático del negocio).
+ */
+export function clienteYaMandoAlgoNoAutomatico(
+  historial: Array<{ rol: string; mensaje: string | null | undefined }>
+): boolean {
+  return historial
+    .filter(h => h.rol === 'cliente' && h.mensaje)
+    .some(h => !pareceMensajeAutomaticoNegocio(String(h.mensaje)))
+}
+
+/**
+ * Mensajes muy cortos típicos de WhatsApp Business / chatbots que NO superan
+ * el umbral de 40 caracteres de `pareceMensajeAutomaticoNegocio` pero disparan
+ * el motor de decisión (p. ej. por llevar "?") y generan pitches LLM repetidos.
+ */
+export function esAutoReplyCortoNegocio(texto: string): boolean {
+  const t = (texto ?? '').trim()
+  if (!t) return false
+  if (RE_EN_QUE_AYUDAR.test(t)) return true
+  if (RE_COMUNICARTE_CON.test(t)) return true
+  if (RE_GRACIAS_CONTACTO.test(t) && t.length < 160) return true
+  return false
+}
+
 export function pareceMensajeAutomaticoNegocio(texto: string): boolean {
-  if (!texto || texto.length < 40) return false
+  if (!texto) return false
+  if (esAutoReplyCortoNegocio(texto)) return true
+  if (texto.length < 40) return false
   const t = texto.toLowerCase()
   const dolares = (texto.match(/\$/g) || []).length
   const señales = [

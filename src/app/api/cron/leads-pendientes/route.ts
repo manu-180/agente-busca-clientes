@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
+import { normalizarTelefonoArg, variantesTelefonoMismaLinea } from '@/lib/phone'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -205,18 +206,26 @@ async function procesarSender(
     // Reservar para que el otro sender no lo tome en el mismo tick
     yaProcesoIds.push(lead.id)
 
-    const telefono = String(lead.telefono).replace(/\D/g, '')
+    const telefono = normalizarTelefonoArg(String(lead.telefono))
     if (!telefono) {
       await actualizarLead(sup, lead.id, { estado: 'descartado', primer_envio_error: 'telefono_invalido' })
       continue
     }
 
-    // Evitar spam: saltar si el teléfono ya tiene conversación previa o fue enviado antes.
-    // Chequear también por lead_id directo para cubrir el caso en que el teléfono en
-    // conversaciones fue guardado con un formato diferente.
+    const telsMismaLinea = variantesTelefonoMismaLinea(telefono)
+
+    // Evitar spam: saltar si el teléfono ya tiene conversación previa o fue enviado antes
+    // (misma línea: 54 11 con/sin 9 móvil).
     const [{ data: yaConv }, { data: yaLead }, { data: yaConvPorLead }] = await Promise.all([
-      sup.from('conversaciones').select('id').eq('telefono', telefono).limit(1).maybeSingle(),
-      sup.from(LEADS_TABLE).select('id').eq('telefono', telefono).eq('mensaje_enviado', true).neq('id', lead.id).limit(1).maybeSingle(),
+      sup.from('conversaciones').select('id').in('telefono', telsMismaLinea).limit(1).maybeSingle(),
+      sup
+        .from(LEADS_TABLE)
+        .select('id')
+        .in('telefono', telsMismaLinea)
+        .eq('mensaje_enviado', true)
+        .neq('id', lead.id)
+        .limit(1)
+        .maybeSingle(),
       sup.from('conversaciones').select('id').eq('lead_id', lead.id).limit(1).maybeSingle(),
     ])
 

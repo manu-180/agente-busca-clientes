@@ -294,7 +294,7 @@ export default function DemosPage() {
               }`}
             >
               <div
-                className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
+                className={`absolute top-0.5 w-5 h-5 rounded-full bg-apex-black transition-transform ${
                   form.active ?? true ? 'translate-x-6' : 'translate-x-0'
                 }`}
               />

@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { buildAgentPrompt, buildUserMessageWithLeadContext } from '@/lib/prompts'
 import {
+  clienteYaMandoAlgoNoAutomatico,
   pareceMensajeAutomaticoNegocio,
   RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
 } from '@/lib/outbound-auto-reply'
@@ -185,10 +186,9 @@ export async function generarRespuestaAgente({
       }
     }
 
-    const cantidadMensajesAgente = filasHistorial.filter(h => h.rol === 'agente').length
     if (
       lead.origen === 'outbound' &&
-      cantidadMensajesAgente <= 1 &&
+      !clienteYaMandoAlgoNoAutomatico(filasHistorial) &&
       pareceMensajeAutomaticoNegocio(mensaje_nuevo)
     ) {
       console.log('[AGENTE] Outbound: mensaje del cliente parece respuesta automática del negocio')
