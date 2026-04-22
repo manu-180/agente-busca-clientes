@@ -8,6 +8,8 @@ export const maxDuration = 60
 const TZ_OFFSET_HOURS_AR = -3
 const LEADS_TABLE = 'leads'
 const MAX_REINTENTOS = 3
+const HORA_INICIO_AR = 8
+const HORA_FIN_AR = 20
 
 // ─── Configuración de senders outbound ────────────────────────────────────────
 // Para cambiar límites o intervalo, editar aquí (o migrar a tabla configuracion).
@@ -352,18 +354,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: 'first_contact_inactivo' })
   }
 
-  // Ventana horaria AR (opt-in: `first_contact_ventana_horaria_activa` === 'true' en configuracion)
-  const ventanaHorariaActiva = (await leerConfig(sup, 'first_contact_ventana_horaria_activa', 'false')) === 'true'
-  if (ventanaHorariaActiva && !forced) {
-    const [cfgInicio, cfgFin] = await Promise.all([
-      sup.from('configuracion').select('valor').eq('clave', 'first_contact_hora_inicio').maybeSingle(),
-      sup.from('configuracion').select('valor').eq('clave', 'first_contact_hora_fin').maybeSingle(),
-    ])
-    const horaInicio = parseInt(cfgInicio.data?.valor ?? '8', 10)
-    const horaFin = parseInt(cfgFin.data?.valor ?? '20', 10)
+  // Ventana horaria AR hardcodeada: nunca enviar fuera de 08:00-20:00,
+  // incluso si Railway dispara el cron.
+  if (!forced) {
     const horaAr = new Date(Date.now() + TZ_OFFSET_HOURS_AR * 3600_000).getUTCHours()
-    if (horaAr < horaInicio || horaAr >= horaFin) {
-      return NextResponse.json({ ok: true, skipped: 'fuera_ventana_horaria', hora_ar: horaAr, ventana: `${horaInicio}-${horaFin}` })
+    if (horaAr < HORA_INICIO_AR || horaAr >= HORA_FIN_AR) {
+      return NextResponse.json({
+        ok: true,
+        skipped: 'fuera_ventana_horaria',
+        hora_ar: horaAr,
+        ventana: `${HORA_INICIO_AR}-${HORA_FIN_AR}`,
+      })
     }
   }
 

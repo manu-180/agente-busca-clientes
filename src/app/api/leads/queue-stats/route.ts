@@ -5,6 +5,8 @@ export const dynamic = 'force-dynamic'
 
 const LEADS_TABLE = 'leads'
 const TZ_OFFSET_HOURS_AR = -3
+const HORA_INICIO_AR = 8
+const HORA_FIN_AR = 20
 
 function inicioDelDiaArUtc(): Date {
   const ahoraUtcMs = Date.now()
@@ -58,10 +60,10 @@ export async function GET() {
     enviados_hoy: enviadosHoyRes.count ?? 0,
     limite_diario: parseInt(cfg.first_contact_limite_diario ?? '50', 10),
     ventana_horaria: {
-      inicio: parseInt(cfg.first_contact_hora_inicio ?? '9', 10),
-      fin: parseInt(cfg.first_contact_hora_fin ?? '21', 10),
+      inicio: HORA_INICIO_AR,
+      fin: HORA_FIN_AR,
     },
-    ventana_horaria_activa: (cfg.first_contact_ventana_horaria_activa ?? 'false') === 'true',
+    ventana_horaria_activa: true,
     intervalo_min: {
       min: parseInt(cfg.first_contact_intervalo_min_min ?? '10', 10),
       max: parseInt(cfg.first_contact_intervalo_max_min ?? '15', 10),

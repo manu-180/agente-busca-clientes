@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "jest"
+    "test": "jest",
+    "generate:locations-ar": "node scripts/fetch-locations-ar.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",

@@ -1,11 +1,16 @@
 'use client'
 
-import { FormEvent, useEffect, useMemo, useState } from 'react'
-import { Loader2, MapPin, Phone, Sparkles, Star, Globe, ExternalLink, CheckCircle2, Clock } from 'lucide-react'
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { Loader2, MapPin, Phone, Sparkles, Star, Globe, ExternalLink, CheckCircle2, Clock, Square } from 'lucide-react'
 import { ResultadoBusquedaLead } from '@/types'
-import { getDefaultPais, PAISES_HISPANOHABLANTES } from '@/lib/locations-ar'
+import {
+  getDefaultPais,
+  getInitialSeleccionArgentina,
+  PAISES_HISPANOHABLANTES,
+} from '@/lib/locations-ar'
 
 const TODAS_LOCALIDADES = '__TODAS__'
+const TODAS_PROVINCIAS = '__TODAS_PROVINCIAS__'
 
 interface LeadCardState extends ResultadoBusquedaLead {
   zona: string
@@ -41,9 +46,11 @@ function buildDescripcion(lead: ResultadoBusquedaLead) {
 export default function NuevoLeadClient() {
   const [rubro, setRubro] = useState('')
   const [paisCodigo, setPaisCodigo] = useState(getDefaultPais().codigo)
-  const [provinciaNombre, setProvinciaNombre] = useState(getDefaultPais().provincias[0]?.nombre || '')
+  const [provinciaNombre, setProvinciaNombre] = useState(
+    () => getInitialSeleccionArgentina(getDefaultPais()).provincia
+  )
   const [localidadNombre, setLocalidadNombre] = useState(
-    getDefaultPais().provincias[0]?.localidades[0]?.nombre || ''
+    () => getInitialSeleccionArgentina(getDefaultPais()).localidad
   )
   const [resultados, setResultados] = useState<LeadCardState[]>([])
   const [buscando, setBuscando] = useState(false)
@@ -55,30 +62,59 @@ export default function NuevoLeadClient() {
   const [progresoActual, setProgresoActual] = useState(0)
   const [progresoTotal, setProgresoTotal] = useState(0)
   const [progresoLocalidad, setProgresoLocalidad] = useState('')
+  const [detenidoPorUsuario, setDetenidoPorUsuario] = useState(false)
+
+  const detenerBusquedaRef = useRef(false)
+  const abortBusquedaRef = useRef<AbortController | null>(null)
 
   const paisSeleccionado = useMemo(
     () => PAISES_HISPANOHABLANTES.find((p) => p.codigo === paisCodigo) || getDefaultPais(),
     [paisCodigo]
   )
 
+  const esModoTodasProvincias = provinciaNombre === TODAS_PROVINCIAS
+
   const provinciaSeleccionada = useMemo(
-    () => paisSeleccionado.provincias.find((p) => p.nombre === provinciaNombre) || paisSeleccionado.provincias[0],
-    [paisSeleccionado, provinciaNombre]
+    () =>
+      esModoTodasProvincias
+        ? null
+        : paisSeleccionado.provincias.find((p) => p.nombre === provinciaNombre) || paisSeleccionado.provincias[0],
+    [paisSeleccionado, provinciaNombre, esModoTodasProvincias]
   )
 
-  const esModoProvincia = localidadNombre === TODAS_LOCALIDADES
+  const esModoProvincia = localidadNombre === TODAS_LOCALIDADES && !esModoTodasProvincias
+
+  const totalLocalidadesPais = useMemo(
+    () => paisSeleccionado.provincias.reduce((n, p) => n + p.localidades.length, 0),
+    [paisSeleccionado]
+  )
 
   const puedeBuscar = useMemo(
-    () => rubro.trim().length > 0 && localidadNombre.trim().length > 0 && !buscando && !encolando,
-    [rubro, localidadNombre, buscando, encolando]
+    () =>
+      rubro.trim().length > 0 &&
+      !buscando &&
+      !encolando &&
+      (esModoTodasProvincias ||
+        esModoProvincia ||
+        (localidadNombre.trim().length > 0 && localidadNombre !== TODAS_LOCALIDADES)),
+    [rubro, localidadNombre, buscando, encolando, esModoTodasProvincias, esModoProvincia]
   )
 
   const zona = useMemo(
     () =>
-      esModoProvincia
-        ? `${provinciaSeleccionada?.nombre}, ${paisSeleccionado.nombre}`
-        : `${localidadNombre}, ${provinciaSeleccionada?.nombre}, ${paisSeleccionado.nombre}`,
-    [localidadNombre, provinciaSeleccionada?.nombre, paisSeleccionado.nombre, esModoProvincia]
+      esModoTodasProvincias
+        ? `${paisSeleccionado.nombre} (todas las provincias)`
+        : esModoProvincia
+          ? `${provinciaSeleccionada?.nombre}, ${paisSeleccionado.nombre}`
+          : `${localidadNombre}, ${provinciaSeleccionada?.nombre}, ${paisSeleccionado.nombre}`,
+    [
+      localidadNombre,
+      provinciaSeleccionada?.nombre,
+      paisSeleccionado.nombre,
+      esModoProvincia,
+      esModoTodasProvincias,
+      paisSeleccionado,
+    ]
   )
 
   async function cargarStats() {
@@ -108,15 +144,24 @@ export default function NuevoLeadClient() {
     }
   }
 
-  async function buscarEnLocalidad(zonaLocal: string): Promise<ResultadoBusquedaLead[]> {
+  async function buscarEnLocalidad(
+    zonaLocal: string,
+    signal?: AbortSignal
+  ): Promise<ResultadoBusquedaLead[]> {
     const response = await fetch('/api/leads/buscar', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rubro, zona: zonaLocal }),
+      signal,
     })
     if (!response.ok) return []
     const data = await response.json()
     return Array.isArray(data?.resultados) ? data.resultados : []
+  }
+
+  function detenerBusqueda() {
+    detenerBusquedaRef.current = true
+    abortBusquedaRef.current?.abort()
   }
 
   async function encolarLeads(leads: LeadCardState[]): Promise<QueueResult | null> {
@@ -152,6 +197,11 @@ export default function NuevoLeadClient() {
 
   async function buscarNegocios(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    detenerBusquedaRef.current = false
+    setDetenidoPorUsuario(false)
+    abortBusquedaRef.current = new AbortController()
+    const signal = abortBusquedaRef.current.signal
+
     setBuscando(true)
     setErrorBusqueda(null)
     setResultados([])
@@ -160,23 +210,64 @@ export default function NuevoLeadClient() {
     setProgresoTotal(0)
     setProgresoLocalidad('')
 
+    let detenidoManual = false
+
     try {
       let acumulados: LeadCardState[] = []
 
-      if (esModoProvincia) {
-        const localidades = provinciaSeleccionada?.localidades || []
+      if (esModoTodasProvincias) {
+        const telefonosVistos = new Set<string>()
+        const provincias = paisSeleccionado.provincias
+        let totalPasos = 0
+        for (const p of provincias) {
+          totalPasos += p.localidades.length
+        }
+        setProgresoTotal(totalPasos)
+
+        let paso = 0
+        outerPais: for (const prov of provincias) {
+          for (const loc of prov.localidades) {
+            if (detenerBusquedaRef.current) break outerPais
+
+            paso += 1
+            setProgresoActual(paso)
+            setProgresoLocalidad(`${loc.nombre} · ${prov.nombre}`)
+
+            const zonaLocal = `${loc.nombre}, ${prov.nombre}, ${paisSeleccionado.nombre}`
+            try {
+              const lista = await buscarEnLocalidad(zonaLocal, signal)
+              for (const lead of lista) {
+                if (lead.telefono && !telefonosVistos.has(lead.telefono)) {
+                  telefonosVistos.add(lead.telefono)
+                  acumulados.push({ ...lead, zona: zonaLocal })
+                }
+              }
+              setResultados([...acumulados])
+            } catch (err) {
+              if (signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+                break outerPais
+              }
+              // seguir
+            }
+          }
+        }
+      } else if (esModoProvincia) {
+        const provSel = provinciaSeleccionada ?? paisSeleccionado.provincias[0]
+        const localidades = provSel.localidades || []
         setProgresoTotal(localidades.length)
 
         const telefonosVistos = new Set<string>()
 
-        for (let i = 0; i < localidades.length; i++) {
+        outerProv: for (let i = 0; i < localidades.length; i++) {
+          if (detenerBusquedaRef.current) break outerProv
+
           const loc = localidades[i]
           setProgresoActual(i + 1)
           setProgresoLocalidad(loc.nombre)
 
-          const zonaLocal = `${loc.nombre}, ${provinciaSeleccionada.nombre}, ${paisSeleccionado.nombre}`
+          const zonaLocal = `${loc.nombre}, ${provSel.nombre}, ${paisSeleccionado.nombre}`
           try {
-            const lista = await buscarEnLocalidad(zonaLocal)
+            const lista = await buscarEnLocalidad(zonaLocal, signal)
             for (const lead of lista) {
               if (lead.telefono && !telefonosVistos.has(lead.telefono)) {
                 telefonosVistos.add(lead.telefono)
@@ -184,7 +275,10 @@ export default function NuevoLeadClient() {
               }
             }
             setResultados([...acumulados])
-          } catch {
+          } catch (err) {
+            if (signal.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+              break outerProv
+            }
             // seguir
           }
         }
@@ -193,6 +287,7 @@ export default function NuevoLeadClient() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ rubro, zona }),
+          signal,
         })
 
         if (!response.ok) {
@@ -207,7 +302,12 @@ export default function NuevoLeadClient() {
         setResultados(acumulados)
       }
 
-      // Encolar automáticamente
+      detenidoManual = detenerBusquedaRef.current
+      setDetenidoPorUsuario(detenidoManual)
+      detenerBusquedaRef.current = false
+      abortBusquedaRef.current = null
+
+      // Encolar automáticamente (también si detuviste a mitad: todo lo hallado hasta ahora)
       if (acumulados.length > 0) {
         setEncolando(true)
         try {
@@ -224,11 +324,18 @@ export default function NuevoLeadClient() {
         setUltimoResultadoCola({ agregados: 0, duplicados: 0 })
       }
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'No se pudieron buscar negocios.'
-      setErrorBusqueda(msg)
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        detenidoManual = true
+        setDetenidoPorUsuario(true)
+      } else {
+        const msg = error instanceof Error ? error.message : 'No se pudieron buscar negocios.'
+        setErrorBusqueda(msg)
+      }
     } finally {
       setBuscando(false)
       setProgresoLocalidad('')
+      detenerBusquedaRef.current = false
+      abortBusquedaRef.current = null
     }
   }
 
@@ -310,9 +417,11 @@ export default function NuevoLeadClient() {
                   const nuevoCodigo = event.target.value
                   setPaisCodigo(nuevoCodigo)
                   const nuevoPais = PAISES_HISPANOHABLANTES.find((p) => p.codigo === nuevoCodigo)
-                  const primeraProvincia = nuevoPais?.provincias[0]
-                  setProvinciaNombre(primeraProvincia?.nombre || '')
-                  setLocalidadNombre(primeraProvincia?.localidades[0]?.nombre || '')
+                  if (nuevoPais) {
+                    const sel = getInitialSeleccionArgentina(nuevoPais)
+                    setProvinciaNombre(sel.provincia)
+                    setLocalidadNombre(sel.localidad)
+                  }
                 }}
                 className="w-full bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
               >
@@ -333,11 +442,19 @@ export default function NuevoLeadClient() {
                   onChange={(event) => {
                     const nuevoNombre = event.target.value
                     setProvinciaNombre(nuevoNombre)
-                    const prov = paisSeleccionado.provincias.find((p) => p.nombre === nuevoNombre)
-                    setLocalidadNombre(prov?.localidades[0]?.nombre || '')
+                    if (nuevoNombre === TODAS_PROVINCIAS) {
+                      setLocalidadNombre(TODAS_LOCALIDADES)
+                    } else {
+                      const prov = paisSeleccionado.provincias.find((p) => p.nombre === nuevoNombre)
+                      setLocalidadNombre(prov?.localidades[0]?.nombre || '')
+                    }
                   }}
                   className="w-full bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
                 >
+                  <option value={TODAS_PROVINCIAS}>
+                    ★ Todo el país ({paisSeleccionado.provincias.length} provincias, {totalLocalidadesPais}{' '}
+                    localidades)
+                  </option>
                   {paisSeleccionado.provincias.map((provincia) => (
                     <option key={provincia.nombre} value={provincia.nombre}>
                       {provincia.nombre}
@@ -352,46 +469,73 @@ export default function NuevoLeadClient() {
                 <select
                   value={localidadNombre}
                   onChange={(event) => setLocalidadNombre(event.target.value)}
-                  className="w-full bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
+                  disabled={esModoTodasProvincias}
+                  className="w-full bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <option value={TODAS_LOCALIDADES}>
-                    ★ Toda la provincia ({provinciaSeleccionada?.localidades.length} localidades)
-                  </option>
-                  {provinciaSeleccionada?.localidades.map((loc) => (
-                    <option key={loc.nombre} value={loc.nombre}>
-                      {loc.nombre}
+                  {esModoTodasProvincias ? (
+                    <option value={TODAS_LOCALIDADES}>
+                      Recorre cada localidad de cada provincia
                     </option>
-                  ))}
+                  ) : (
+                    <>
+                      <option value={TODAS_LOCALIDADES}>
+                        ★ Toda la provincia ({provinciaSeleccionada?.localidades.length} localidades)
+                      </option>
+                      {provinciaSeleccionada?.localidades.map((loc) => (
+                        <option key={loc.nombre} value={loc.nombre}>
+                          {loc.nombre}
+                        </option>
+                      ))}
+                    </>
+                  )}
                 </select>
               </div>
             </div>
           </div>
         </div>
 
-        <button
-          type="submit"
-          disabled={!puedeBuscar}
-          className="flex items-center gap-2 bg-apex-lime text-apex-black px-5 py-2.5 rounded-lg font-semibold text-sm hover:bg-apex-lime-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {buscando ? (
-            <>
-              <Loader2 size={16} className="animate-spin" />
-              {esModoProvincia ? 'Buscando en la provincia...' : 'Buscando negocios...'}
-            </>
-          ) : encolando ? (
-            <>
-              <Loader2 size={16} className="animate-spin" />
-              Agregando a la cola...
-            </>
-          ) : (
-            <>
-              <Sparkles size={16} />
-              {esModoProvincia
-                ? `Buscar y encolar (toda ${provinciaSeleccionada?.nombre})`
-                : 'Buscar y encolar'}
-            </>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="submit"
+            disabled={!puedeBuscar}
+            className="flex items-center gap-2 bg-apex-lime text-apex-black px-5 py-2.5 rounded-lg font-semibold text-sm hover:bg-apex-lime-hover transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {buscando ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                {esModoTodasProvincias
+                  ? 'Buscando en todo el país...'
+                  : esModoProvincia
+                    ? 'Buscando en la provincia...'
+                    : 'Buscando negocios...'}
+              </>
+            ) : encolando ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                Agregando a la cola...
+              </>
+            ) : (
+              <>
+                <Sparkles size={16} />
+                {esModoTodasProvincias
+                  ? `Buscar y encolar (${paisSeleccionado.nombre} completo)`
+                  : esModoProvincia
+                    ? `Buscar y encolar (toda ${provinciaSeleccionada?.nombre})`
+                    : 'Buscar y encolar'}
+              </>
+            )}
+          </button>
+          {buscando && (esModoTodasProvincias || esModoProvincia) && (
+            <button
+              type="button"
+              onClick={detenerBusqueda}
+              className="inline-flex items-center gap-1.5 border border-red-500/50 text-red-300 bg-red-500/10 px-4 py-2.5 rounded-lg text-sm font-semibold hover:bg-red-500/20 transition-colors"
+            >
+              <Square size={14} className="fill-current" />
+              Detener y encolar lo encontrado
+            </button>
           )}
-        </button>
+        </div>
 
         {errorBusqueda && (
           <p className="text-sm text-red-400 border border-red-500/30 bg-red-500/10 rounded-lg px-3 py-2">{errorBusqueda}</p>
@@ -404,6 +548,11 @@ export default function NuevoLeadClient() {
               <p className="text-apex-lime font-semibold">
                 {ultimoResultadoCola.agregados} {ultimoResultadoCola.agregados === 1 ? 'lead agregado' : 'leads agregados'} a la cola
               </p>
+              {detenidoPorUsuario && (
+                <p className="text-amber-200/90 text-xs mt-1.5">
+                  Búsqueda detenida a mano: se usaron solo los resultados acumulados hasta ese momento.
+                </p>
+              )}
               {ultimoResultadoCola.duplicados > 0 && (
                 <p className="text-apex-muted text-xs mt-0.5">
                   {ultimoResultadoCola.duplicados} {ultimoResultadoCola.duplicados === 1 ? 'estaba' : 'estaban'} duplicados (omitidos)
@@ -418,15 +567,25 @@ export default function NuevoLeadClient() {
       </form>
 
       {/* Barra de progreso búsqueda provincial */}
-      {buscando && esModoProvincia && progresoTotal > 0 && (
+      {buscando && (esModoProvincia || esModoTodasProvincias) && progresoTotal > 0 && (
         <div className="bg-apex-card border border-apex-border rounded-xl p-5 space-y-3">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-apex-muted font-mono">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-sm">
+            <span className="text-apex-muted font-mono min-w-0">
               Buscando en <span className="text-white">{progresoLocalidad}</span>
             </span>
-            <span className="text-apex-lime font-mono font-bold">
-              {progresoActual}/{progresoTotal} localidades
-            </span>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <span className="text-apex-lime font-mono font-bold">
+                {progresoActual}/{progresoTotal} localidades
+              </span>
+              <button
+                type="button"
+                onClick={detenerBusqueda}
+                className="inline-flex items-center gap-1 border border-red-500/50 text-red-300 bg-red-500/10 px-2.5 py-1 rounded-md text-xs font-mono font-semibold hover:bg-red-500/20"
+              >
+                <Square size={10} className="fill-current" />
+                Detener
+              </button>
+            </div>
           </div>
           <div className="w-full bg-apex-black rounded-full h-2 overflow-hidden">
             <div
@@ -461,9 +620,14 @@ export default function NuevoLeadClient() {
           <div className="flex items-center justify-between">
             <h2 className="font-syne font-semibold text-lg">
               Encontrados ({resultados.length}
-              {buscando && esModoProvincia ? ' y contando...' : ''})
+              {buscando && (esModoProvincia || esModoTodasProvincias) ? ' y contando...' : ''})
             </h2>
-            {esModoProvincia && !buscando && (
+            {esModoTodasProvincias && !buscando && (
+              <span className="text-xs text-apex-muted font-mono">
+                {paisSeleccionado.provincias.length} provincias, {totalLocalidadesPais} localidades escaneadas
+              </span>
+            )}
+            {esModoProvincia && !esModoTodasProvincias && !buscando && (
               <span className="text-xs text-apex-muted font-mono">
                 {provinciaSeleccionada?.localidades.length} localidades escaneadas
               </span>
