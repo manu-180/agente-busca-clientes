@@ -13,10 +13,12 @@ const SELECT_CONV = `
 
 /** Carga filas con fallback si la vista 1g aún no está aplicada en Supabase. */
 async function cargarFilasConversacion(supabase: Sb) {
+  // PostgREST limita a 1000 filas por defecto: sin .range/.limit explícito se recorta.
   const { data: cabezas, error: viewError } = await supabase
     .from('conversaciones_ultima_por_lead')
     .select(SELECT_CONV)
     .order('timestamp', { ascending: false })
+    .range(0, 19999)
 
   if (viewError) {
     console.warn(
@@ -40,14 +42,25 @@ async function cargarFilasConversacion(supabase: Sb) {
     return { error: null, filas: [] }
   }
 
-  const { data: historial, error: convError } = await supabase
-    .from('conversaciones')
-    .select(SELECT_CONV)
-    .in('lead_id', leadIds)
-    .order('timestamp', { ascending: true })
+  // Misma regla: .order(asc) sin paginar = solo las 1000 filas *más viejas* → el inbox
+  // quedaba “congelado” en el pasado y los de hoy caían del otro lado del corte.
+  const PAGE = 10_000
+  const acum: any[] = []
+  for (let from = 0; from < 2_000_000; from += PAGE) {
+    const { data: chunk, error: convError } = await supabase
+      .from('conversaciones')
+      .select(SELECT_CONV)
+      .in('lead_id', leadIds)
+      .order('timestamp', { ascending: true })
+      .range(from, from + PAGE - 1)
 
-  if (convError) return { error: convError.message, filas: [] }
-  return { error: null, filas: historial ?? [] }
+    if (convError) return { error: convError.message, filas: [] }
+    if (!chunk?.length) break
+    acum.push(...chunk)
+    if (chunk.length < PAGE) break
+  }
+
+  return { error: null, filas: acum }
 }
 
 export async function GET() {
