@@ -56,7 +56,7 @@ export async function GET() {
   const res = NextResponse.json({
     pendientes: pendientesRes.count ?? 0,
     enviados_hoy: enviadosHoyRes.count ?? 0,
-    limite_diario: parseInt(cfg.first_contact_limite_diario ?? '30', 10),
+    limite_diario: parseInt(cfg.first_contact_limite_diario ?? '50', 10),
     ventana_horaria: {
       inicio: parseInt(cfg.first_contact_hora_inicio ?? '9', 10),
       fin: parseInt(cfg.first_contact_hora_fin ?? '21', 10),
