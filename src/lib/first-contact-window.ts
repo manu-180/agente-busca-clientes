@@ -1,0 +1,24 @@
+/**
+ * Ventana de envío de primer contacto (WhatsApp / Twilio) en hora Argentina.
+ * Misma regla en cron `leads-pendientes`, `queue-stats` y copy de UI.
+ */
+export const PRIMER_CONTACTO_HORA_INICIO_AR = 7
+export const PRIMER_CONTACTO_HORA_FIN_AR = 21
+
+const TZ_ARGENTINA = 'America/Argentina/Buenos_Aires'
+
+/** Hora local Argentina (0–23) en el instante dado. */
+export function getHoraArgentina(fecha: Date = new Date()): number {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: TZ_ARGENTINA,
+    hour: 'numeric',
+    hour12: false,
+  }).formatToParts(fecha)
+  const h = parts.find((p) => p.type === 'hour')?.value
+  return parseInt(h ?? '0', 10)
+}
+
+export function estaEnVentanaPrimerContacto(fecha: Date = new Date()): boolean {
+  const h = getHoraArgentina(fecha)
+  return h >= PRIMER_CONTACTO_HORA_INICIO_AR && h <= PRIMER_CONTACTO_HORA_FIN_AR
+}

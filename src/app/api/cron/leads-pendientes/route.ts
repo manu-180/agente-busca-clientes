@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { normalizarTelefonoArg, variantesTelefonoMismaLinea } from '@/lib/phone'
 import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
+import {
+  estaEnVentanaPrimerContacto,
+  getHoraArgentina,
+  PRIMER_CONTACTO_HORA_FIN_AR,
+  PRIMER_CONTACTO_HORA_INICIO_AR,
+} from '@/lib/first-contact-window'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -12,7 +18,7 @@ const MAX_REINTENTOS = 3
 
 // ─── Senders Twilio (primer contacto) ────────────────────────────────────────
 // Cadencia intMin/intMax en minutos; si ambos ≤ 0 no hay espera entre envíos.
-// Sin ventana horaria (24 h) ni tope diario de cantidad.
+// Ventana horaria 7:00–21:00 (America/Argentina/Buenos_Aires); ?force=true omite.
 interface SenderDef {
   key: string
   provider: 'twilio'
@@ -164,6 +170,18 @@ async function procesarSender(
   if (senderRow && !senderRow.activo) return { status: 'inactivo' }
 
   const senderId = senderRow?.id ?? null
+
+  if (!forced && !estaEnVentanaPrimerContacto()) {
+    const h = getHoraArgentina()
+    return {
+      status: 'fuera_de_ventana',
+      hora_argentina: h,
+      ventana: {
+        inicio: PRIMER_CONTACTO_HORA_INICIO_AR,
+        fin: PRIMER_CONTACTO_HORA_FIN_AR,
+      },
+    }
+  }
 
   // 2. Contador diario (métrica / diagnóstico; no condiciona envíos)
   const enviados = await leerDailyCount(sup, key)

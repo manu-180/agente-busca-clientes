@@ -50,6 +50,7 @@ interface QueueStats {
   pendientes: number
   enviados_hoy: number
   ventana_horaria: { inicio: number; fin: number }
+  en_ventana: boolean
   activo: boolean
 }
 
@@ -427,16 +428,13 @@ export default function NuevoLeadClient() {
         <div>
           <h1 className="font-syne font-bold text-3xl tracking-tight">Nuevo Lead</h1>
           <p className="text-apex-muted text-sm mt-1">
-            Cola automática de primer contacto: sin tope diario; el cron puede enviar las 24 h (hora
-            Argentina)
-            {queueStats ? (
-              <>
-                {' '}
-                ({queueStats.ventana_horaria.inicio}:00–{queueStats.ventana_horaria.fin}:59).
-              </>
-            ) : (
-              ' (0:00–23:59).'
-            )}
+            Cola automática de primer contacto: sin tope diario. El cron solo envía entre{' '}
+            <span className="text-apex-lime/90">7:00 y 21:00</span> (hora Argentina).
+            {queueStats
+              ? queueStats.en_ventana
+                ? ' Ahora estás en ventana de envío.'
+                : ' Ahora estás fuera de ventana; los envíos reanudan al abrirse el horario.'
+              : null}
           </p>
         </div>
       </div>
@@ -454,10 +452,20 @@ export default function NuevoLeadClient() {
           </div>
           <div className="bg-apex-card border border-apex-border rounded-lg p-3">
             <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Horario envío</div>
-            <div className="text-2xl font-bold mt-1">
-              {queueStats.ventana_horaria.inicio}:00–{queueStats.ventana_horaria.fin}:59
-              <span className="text-sm text-apex-muted font-mono ml-1">hs</span>
+            <div className="text-2xl font-bold mt-1 tabular-nums">
+              {String(queueStats.ventana_horaria.inicio).padStart(2, '0')}:00–
+              {String(queueStats.ventana_horaria.fin).padStart(2, '0')}:00
+              <span className="text-sm text-apex-muted font-mono ml-1">ART</span>
             </div>
+            <p
+              className={`text-xs mt-1.5 font-mono ${
+                queueStats.en_ventana ? 'text-apex-lime' : 'text-amber-400/90'
+              }`}
+            >
+              {queueStats.en_ventana
+                ? 'En horario de envío'
+                : 'Fuera de ventana — el cron reanuda a las 7:00 ART'}
+            </p>
           </div>
           <div className="bg-apex-card border border-apex-border rounded-lg p-3">
             <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Sistema</div>
@@ -682,8 +690,8 @@ export default function NuevoLeadClient() {
                 </p>
               )}
               <p className="text-apex-muted text-xs mt-0.5">
-                Con el sistema activo, el cron envía en cuanto haya cola (las 24 h); no hay tope diario de
-                cantidad.
+                Con el sistema activo, el cron envía según cola solo entre 7:00 y 21:00 (hora Argentina);
+                no hay tope diario de cantidad.
               </p>
             </div>
           </div>

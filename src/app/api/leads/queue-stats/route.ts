@@ -1,13 +1,15 @@
 import { NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
+import {
+  estaEnVentanaPrimerContacto,
+  PRIMER_CONTACTO_HORA_FIN_AR,
+  PRIMER_CONTACTO_HORA_INICIO_AR,
+} from '@/lib/first-contact-window'
 
 export const dynamic = 'force-dynamic'
 
 const LEADS_TABLE = 'leads'
 const TZ_OFFSET_HOURS_AR = -3
-/** Inicio/fin de la “ventana” solo para mostrar en UI: 24 h (sin límite en el cron). */
-const HORA_INICIO_AR = 0
-const HORA_FIN_AR = 23
 
 function inicioDelDiaArUtc(): Date {
   const ahoraUtcMs = Date.now()
@@ -40,13 +42,15 @@ export async function GET() {
 
   const activo = (configRes.data?.valor ?? 'true') === 'true'
 
+  const ahora = new Date()
   const res = NextResponse.json({
     pendientes: pendientesRes.count ?? 0,
     enviados_hoy: enviadosHoyRes.count ?? 0,
     ventana_horaria: {
-      inicio: HORA_INICIO_AR,
-      fin: HORA_FIN_AR,
+      inicio: PRIMER_CONTACTO_HORA_INICIO_AR,
+      fin: PRIMER_CONTACTO_HORA_FIN_AR,
     },
+    en_ventana: estaEnVentanaPrimerContacto(ahora),
     activo,
   })
 

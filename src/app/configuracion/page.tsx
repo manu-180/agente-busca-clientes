@@ -73,9 +73,11 @@ export default function ConfiguracionPage() {
         <h2 className="font-syne font-semibold text-lg">Primer contacto (WhatsApp)</h2>
         <p className="text-sm text-apex-muted">
           El cron <span className="font-mono text-apex-lime/90">/api/cron/leads-pendientes</span> envía
-          plantillas <span className="text-white/90">las 24 h</span> (hora Argentina), sin tope diario de
-          cantidad. Los senders activos rotan la cola; la única freno es tener{' '}
-          <span className="font-mono">first_contact_activo</span> en pausa.
+          plantillas solo entre <span className="text-white/90">7:00 y 21:00</span> (America/Argentina/Buenos_Aires),
+          sin tope diario de cantidad. Los senders activos rotan la cola; el otro freno es tener{' '}
+          <span className="font-mono">first_contact_activo</span> en pausa. Usá el query{' '}
+          <span className="font-mono">?force=true</span> (con el secreto de cron) solo para pruebas fuera de
+          ventana.
         </p>
       </div>
 
