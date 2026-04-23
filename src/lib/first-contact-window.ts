@@ -5,8 +5,8 @@
 export const PRIMER_CONTACTO_HORA_INICIO_AR = 7
 export const PRIMER_CONTACTO_HORA_FIN_AR = 21
 
-/** `true` = ignora 7–21 h (solo para pruebas; volver a `false` en producción estable). */
-export const PRIMER_CONTACTO_SIN_RESTRICCION_HORARIA = true
+/** `true` = ignora 7–21 h (solo para pruebas). Producción: `false`. */
+export const PRIMER_CONTACTO_SIN_RESTRICCION_HORARIA = false
 
 const TZ_ARGENTINA = 'America/Argentina/Buenos_Aires'
 
