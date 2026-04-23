@@ -155,8 +155,10 @@ export async function POST(req: NextRequest) {
   const mediaUrl0 = (form.get('MediaUrl0') as string | null)?.trim() ?? ''
 
   // Twilio format: "whatsapp:+5491124843094" → "5491124843094"
+  // Ambos se normalizan sin "+": así el lookup en senders siempre coincide
+  // independientemente de si phone_number en DB tiene o no el prefijo "+".
   const telefono = rawFrom?.replace('whatsapp:', '').replace(/^\+/, '') ?? ''
-  const nuestroNumero = rawTo?.replace('whatsapp:', '') ?? process.env.TWILIO_WHATSAPP_NUMBER!
+  const nuestroNumero = rawTo?.replace('whatsapp:', '').replace(/^\+/, '') ?? process.env.TWILIO_WHATSAPP_NUMBER!
 
   console.log('[Twilio Webhook] From:', telefono, 'To:', nuestroNumero, 'Body:', mensaje.slice(0, 80))
 
@@ -241,6 +243,13 @@ export async function POST(req: NextRequest) {
   if (!lead) {
     console.error('[Twilio] No se pudo crear/encontrar lead')
     return twimlOk()
+  }
+
+  // Anclar el sender al lead si todavía no tiene uno asignado.
+  // Esto garantiza que todas las respuestas futuras salgan por el mismo canal.
+  if (senderId && !lead.sender_id) {
+    await supabase.from('leads').update({ sender_id: senderId }).eq('id', lead.id)
+    lead = { ...lead, sender_id: senderId }
   }
 
   const { data: insertadoMsg } = await supabase

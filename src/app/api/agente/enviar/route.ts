@@ -23,19 +23,34 @@ export async function POST(req: NextRequest) {
 
   const supabase = createSupabaseServer()
 
-  // Resolver sender_id: viene del body o se busca en el historial del lead
+  // ─── Resolver sender con prioridad estricta ──────────────────────────────
+  // 1. sender_id explícito del body (enviado por la UI)
+  // 2. sender_id anclado en el lead (asignado al primer mensaje entrante)
+  // 3. Último mensaje del CLIENTE (no del agente) con sender_id no nulo
+  //    → garantiza que siempre respondemos por el canal que usó el contacto
+  // Si ninguno aplica → enviarMensajeTwilio usa TWILIO_WHATSAPP_NUMBER (último recurso).
   let resolvedSenderId: string | null = sender_id ?? null
 
   if (!resolvedSenderId && lead_id) {
-    const { data: ultimaConv } = await supabase
+    const { data: leadRow } = await supabase
+      .from('leads')
+      .select('sender_id')
+      .eq('id', lead_id)
+      .maybeSingle()
+    resolvedSenderId = (leadRow?.sender_id as string | null) ?? null
+  }
+
+  if (!resolvedSenderId && lead_id) {
+    const { data: ultimaConvCliente } = await supabase
       .from('conversaciones')
       .select('sender_id')
       .eq('lead_id', lead_id)
+      .eq('rol', 'cliente')
       .not('sender_id', 'is', null)
       .order('timestamp', { ascending: false })
       .limit(1)
       .maybeSingle()
-    resolvedSenderId = ultimaConv?.sender_id ?? null
+    resolvedSenderId = (ultimaConvCliente?.sender_id as string | null) ?? null
   }
 
   const { data: senderData } = resolvedSenderId

@@ -82,8 +82,12 @@ async function fetchLeadsByIds(supabase: Sb, leadIds: string[]) {
   if (unique.length === 0) {
     return { data: [] as Record<string, unknown>[], error: null as string | null }
   }
+  // Incluimos el sender anclado al lead para que el inbox siempre use el canal correcto.
+  const SELECT_LEAD = '*, sender:sender_id (id, alias, color, provider, phone_number)' as const
   const resultados = await Promise.all(
-    chunkArray(unique, CHUNK_IDS).map((chunk) => supabase.from('leads').select('*').in('id', chunk))
+    chunkArray(unique, CHUNK_IDS).map((chunk) =>
+      supabase.from('leads').select(SELECT_LEAD).in('id', chunk)
+    )
   )
   const rows: Record<string, unknown>[] = []
   for (const { data, error } of resultados) {
@@ -132,7 +136,8 @@ export async function GET() {
           ultimo_mensaje: '',
           ultimo_timestamp: '',
           no_leidos: 0,
-          sender: null,
+          // Inicializar con el sender anclado al lead si existe.
+          sender: (lead as any).sender ?? null,
           inicio_rol: null,
         }
       }
@@ -141,7 +146,8 @@ export async function GET() {
       row.mensajes.push(conv)
       row.ultimo_mensaje = conv.mensaje
       row.ultimo_timestamp = conv.timestamp
-      if (conv.sender) row.sender = conv.sender
+      // Solo sobreescribir con el sender del mensaje si el lead no tiene sender propio.
+      if (conv.sender && !(row.lead as any).sender) row.sender = conv.sender
       if (!conv.leido && conv.rol === 'cliente') row.no_leidos++
     }
     const arr = Object.values(g).sort((a: any, b: any) => {
@@ -181,7 +187,9 @@ export async function GET() {
         ultimo_mensaje: cabeza.mensaje,
         ultimo_timestamp: cabeza.timestamp,
         no_leidos: noLeidosMap.get(cabeza.lead_id) ?? 0,
-        sender: cabeza.sender ?? null,
+        // Prioridad: sender anclado en el lead > sender del último mensaje.
+        // Esto garantiza que el inbox siempre envíe por el canal correcto.
+        sender: (lead as any).sender ?? cabeza.sender ?? null,
         inicio_rol: inicioRol.get(cabeza.lead_id) ?? null,
       }
     })
