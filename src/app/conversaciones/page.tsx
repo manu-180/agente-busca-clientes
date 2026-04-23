@@ -103,11 +103,13 @@ function readFavoritoIdsFromStorage(): Set<string> {
 }
 
 /**
- * Evita que una respuesta atrasada del backend "retroceda" el hilo visible.
- * Si lo entrante es más viejo que lo ya mostrado, conservamos el estado local.
- * Si lo entrante tiene MENOS mensajes que el estado previo (aunque sea más reciente),
- * se hace un merge para no perder historial conocido — esto cubre el caso donde la API
- * devuelve solo el último mensaje del agente y el historial previo queda bajo otro lead_id.
+ * Fusiona dos listas de mensajes garantizando que NUNCA se pierde historial.
+ *
+ * Estrategia: siempre merge por ID.
+ * - Incoming (datos frescos de DB) sobreescribe duplicados con datos actualizados.
+ * - Prev aporta mensajes que incoming todavía no tiene (p. ej. optimistas en vuelo).
+ * - Mensajes tmp-* del prev se conservan si incoming no los confirmó aún;
+ *   desaparecen sólo cuando `enviarMensaje` los reemplaza por el id real de DB.
  */
 function elegirMensajesMasRecientes(
   prevMensajes: MensajeConSender[],
@@ -115,24 +117,16 @@ function elegirMensajesMasRecientes(
 ): MensajeConSender[] {
   if (!incomingMensajes.length) return prevMensajes
   if (!prevMensajes.length) return incomingMensajes
-  const prevUlt = ts(prevMensajes[prevMensajes.length - 1])
-  const incomingUlt = ts(incomingMensajes[incomingMensajes.length - 1])
-  // Incoming más viejo → descartar para no retroceder el hilo
-  if (incomingUlt < prevUlt) return prevMensajes
-  // Incoming tiene MENOS mensajes: hacer merge para no perder historial.
-  // Esto evita el bug donde el agente responde (M3, timestamp nuevo) y el API
-  // devuelve solo [M3], mientras prev tiene [M1, M2] → sin merge se mostraría solo M3.
-  if (incomingMensajes.length < prevMensajes.length) {
-    const merged = new Map<string, MensajeConSender>()
-    // Excluir mensajes optimistas temporales del prev (id empieza con "tmp-")
-    for (const m of prevMensajes) {
-      if (!m.id.startsWith('tmp-')) merged.set(m.id, m)
-    }
-    // Incoming sobreescribe duplicados con datos frescos de la DB
-    for (const m of incomingMensajes) merged.set(m.id, m)
-    return Array.from(merged.values()).sort((a, b) => ts(a) - ts(b))
-  }
-  return incomingMensajes
+
+  const merged = new Map<string, MensajeConSender>()
+
+  // 1. Prev primero (incluye optimistas tmp-*)
+  for (const m of prevMensajes) merged.set(m.id, m)
+
+  // 2. Incoming sobreescribe con datos frescos de DB (nunca descartamos mensajes reales)
+  for (const m of incomingMensajes) merged.set(m.id, m)
+
+  return Array.from(merged.values()).sort((a, b) => ts(a) - ts(b))
 }
 
 export default function ConversacionesPage() {
@@ -889,6 +883,10 @@ export default function ConversacionesPage() {
                   <div className="flex items-center justify-center h-24">
                     <Loader2 size={20} className="animate-spin text-apex-muted" />
                   </div>
+                ) : grupoActivo.mensajes.length === 0 ? (
+                  <div className="flex items-center justify-center h-24">
+                    <p className="text-sm text-apex-muted">Sin mensajes en este hilo</p>
+                  </div>
                 ) : (
                   grupoActivo.mensajes.map(msg => {
                     const isAgente = msg.rol === 'agente'
@@ -899,7 +897,7 @@ export default function ConversacionesPage() {
                             className={`px-4 py-2.5 rounded-2xl text-sm shadow-sm ${
                               isAgente
                                 ? 'bg-[#c8f135] text-apex-black rounded-br-sm'
-                                : 'bg-apex-card text-neutral-200 rounded-bl-sm border border-apex-border'
+                                : 'bg-[#1e2a1e] text-neutral-100 rounded-bl-sm border border-[#2d4230]'
                             }`}
                           >
                             <ContenidoMensajeChat msg={msg} isAgente={isAgente} />
