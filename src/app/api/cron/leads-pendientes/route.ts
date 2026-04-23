@@ -115,37 +115,6 @@ async function incrementarDailyCount(sup: SupabaseClient, key: string, actual: n
   await escribirConfig(sup, `${key}_primer_enviados_hoy`, `${actual + 1}|${fechaArHoy()}`)
 }
 
-// Verifica síncronamente si un número tiene WhatsApp usando Twilio Lookup API.
-// Retorna true si tiene WA, false si no tiene (no cuenta como fallo del sender).
-// Lanza error si hay problema de red/credenciales (cuenta como fallo del sender).
-async function tieneWhatsApp(telefono: string): Promise<boolean> {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID!
-  const authToken = process.env.TWILIO_AUTH_TOKEN!
-  const auth = 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64')
-
-  // DEBUG: verificar que las credenciales estén presentes
-  console.log(`[DBG lookup] accountSid=${accountSid ? accountSid.slice(0,8)+'…' : 'FALTA'} authToken=${authToken ? 'OK('+authToken.length+'chars)' : 'FALTA'}`)
-
-  const url = `https://lookups.twilio.com/v2/PhoneNumbers/%2B${telefono}?Fields=whatsapp`
-  console.log(`[DBG lookup] GET ${url}`)
-
-  const res = await fetch(url, { headers: { Authorization: auth } })
-
-  console.log(`[DBG lookup] tel=${telefono} httpStatus=${res.status}`)
-
-  if (!res.ok) {
-    const body = await res.text()
-    console.log(`[DBG lookup] respuesta error: ${body.slice(0, 400)}`)
-    // 404 significa que el número no existe → no tiene WA, skip silencioso
-    if (res.status === 404) return false
-    throw new Error(`Twilio Lookup error ${res.status}: ${body.slice(0, 300)}`)
-  }
-
-  const data = await res.json()
-  const tieneWA = !!data?.whatsapp?.whatsapp_id
-  console.log(`[DBG lookup] tel=${telefono} whatsapp_id=${data?.whatsapp?.whatsapp_id ?? 'null'} → tieneWA=${tieneWA}`)
-  return tieneWA
-}
 
 // Envía mensaje con template de Twilio (HSM pre-aprobado por Meta)
 // Variables: 1=nombre, 2=rating, 3=demo (host), 4=localidad, 5=rubro búsqueda, 6=sitio principal
@@ -382,23 +351,10 @@ async function procesarSender(
     }
 
     try {
-      console.log(`[DBG sender] [${key}] → llamando tieneWhatsApp(${telefono})`)
-
-      // Verificar síncronamente si el número tiene WhatsApp antes de enviar.
-      // false → skip de lead (no cuenta como fallo del sender).
-      // throw → error de API/red (cuenta como fallo del sender, cae al catch).
-      const esWhatsApp = await tieneWhatsApp(telefono)
-      console.log(`[DBG sender] [${key}] tieneWhatsApp(${telefono}) = ${esWhatsApp}`)
-
-      if (!esWhatsApp) {
-        await actualizarLead(sup, lead.id, {
-          estado: 'descartado',
-          primer_envio_error: 'no_es_whatsapp',
-          procesando_hasta: null,
-        })
-        console.warn(`[DBG sender] [${key}] ${telefono} no tiene WhatsApp → descartado, próximo lead`)
-        continue
-      }
+      // Nota: La validación síncrona de WhatsApp via Twilio Lookup API v2
+      // no está disponible (el campo 'whatsapp' fue removido de esa API).
+      // Los números sin WA se detectan de forma asíncrona por el webhook
+      // /api/webhook/twilio-status cuando Twilio reporta error 63024.
 
       const ratingStr = extraerRatingParaPlantilla(lead.descripcion)
       const demoHost = resolveWhatsAppDemoHost(lead.rubro, lead.descripcion)
