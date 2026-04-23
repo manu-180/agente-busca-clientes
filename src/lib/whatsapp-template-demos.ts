@@ -5,6 +5,9 @@
 
 export const SITIO_PRINCIPAL_APEX = 'www.theapexweb.com'
 
+/** Variable {{3}} (demo) cuando no aplica otra regla; rubro actual mayoritariamente moda mujer. */
+export const DEMO_HOST_DEFAULT = 'moda.theapexweb.com'
+
 function fold(s: string): string {
   return s
     .toLowerCase()
@@ -49,15 +52,15 @@ const RULES: Rule[] = [
 
 /**
  * Subdominio para la variable {{3}} del template (sin https://, como en Twilio).
- * Si no matchea ningún rubro, se usa el sitio principal.
+ * Si no matchea ninguna regla, siempre `DEMO_HOST_DEFAULT` (moda), no el sitio principal.
  */
 export function resolveWhatsAppDemoHost(rubro: string, descripcion?: string | null): string {
   const text = fold(`${rubro} ${descripcion ?? ''}`.trim())
-  if (!text) return SITIO_PRINCIPAL_APEX
+  if (!text) return DEMO_HOST_DEFAULT
   for (const r of RULES) {
     if (r.test(text)) return r.host
   }
-  return SITIO_PRINCIPAL_APEX
+  return DEMO_HOST_DEFAULT
 }
 
 /**
