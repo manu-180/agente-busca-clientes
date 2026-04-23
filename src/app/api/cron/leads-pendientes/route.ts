@@ -8,6 +8,11 @@ import {
   PRIMER_CONTACTO_HORA_FIN_AR,
   PRIMER_CONTACTO_HORA_INICIO_AR,
 } from '@/lib/first-contact-window'
+import {
+  extraerRatingParaPlantilla,
+  resolveWhatsAppDemoHost,
+  SITIO_PRINCIPAL_APEX,
+} from '@/lib/whatsapp-template-demos'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -33,7 +38,7 @@ const SENDERS: SenderDef[] = [
     key: 'twilio_1',
     provider: 'twilio',
     phoneNumber: '+5491124843094',
-    contentSid: 'HXeab2f108288fe221bce43ebe6565912a',
+    contentSid: 'HX3bc5194024e4cd0159fd951f236556bf',
     intMin: 0,
     intMax: 0,
   },
@@ -41,7 +46,7 @@ const SENDERS: SenderDef[] = [
     key: 'twilio_2',
     provider: 'twilio',
     phoneNumber: '+5491124842720',
-    contentSid: 'HXeab2f108288fe221bce43ebe6565912a',
+    contentSid: 'HX3bc5194024e4cd0159fd951f236556bf',
     intMin: 0,
     intMax: 0,
   },
@@ -57,6 +62,7 @@ interface LeadColaRow {
   zona: string
   telefono: string
   instagram: string | null
+  /** Incluye "Rating: X/5" cuando el lead viene de búsqueda (ver NuevoLeadClient). */
   descripcion: string
   mensaje_inicial: string
   estado: string
@@ -110,13 +116,19 @@ async function incrementarDailyCount(sup: SupabaseClient, key: string, actual: n
 }
 
 // Envía mensaje con template de Twilio (HSM pre-aprobado por Meta)
+// Variables: 1=nombre, 2=rating, 3=demo (host), 4=localidad, 5=rubro búsqueda, 6=sitio principal
 async function enviarTemplateTwilio(
   telefono: string,
-  nombre: string,
-  zona: string,
-  rubro: string,
   fromNumber: string,
-  contentSid: string
+  contentSid: string,
+  vars: {
+    nombre: string
+    rating: string
+    demoHost: string
+    zona: string
+    rubro: string
+    sitioPrincipal: string
+  }
 ): Promise<void> {
   if (isTelefonoHardBlocked(telefono)) {
     throw new Error('TELEFONO_BLOQUEADO')
@@ -133,8 +145,14 @@ async function enviarTemplateTwilio(
         From: `whatsapp:${fromNumber}`,
         To: `whatsapp:+${telefono}`,
         ContentSid: contentSid,
-        // {{1}}=nombre  {{3}}=zona  {{4}}=rubro  (según plantilla aprobada)
-        ContentVariables: JSON.stringify({ '1': nombre, '2': '5', '3': zona, '4': rubro }),
+        ContentVariables: JSON.stringify({
+          '1': vars.nombre,
+          '2': vars.rating,
+          '3': vars.demoHost,
+          '4': vars.zona,
+          '5': vars.rubro,
+          '6': vars.sitioPrincipal,
+        }),
       }).toString(),
     }
   )
@@ -288,8 +306,24 @@ async function procesarSender(
     }
 
     try {
-      await enviarTemplateTwilio(telefono, lead.nombre, lead.zona, lead.rubro, phoneNumber, contentSid)
-      const mensajeGuardado = `Hola ${lead.nombre} Vi que tu negocio tiene 5⭐ en Google. Trabajo con negocios de ${lead.zona} haciendo páginas web para ${lead.rubro}. ¿Puedo contarte en 2 minutos?`
+      const ratingStr = extraerRatingParaPlantilla(lead.descripcion)
+      const demoHost = resolveWhatsAppDemoHost(lead.rubro, lead.descripcion)
+      const vars = {
+        nombre: lead.nombre,
+        rating: ratingStr,
+        demoHost,
+        zona: lead.zona,
+        rubro: lead.rubro,
+        sitioPrincipal: SITIO_PRINCIPAL_APEX,
+      }
+      await enviarTemplateTwilio(telefono, phoneNumber, contentSid, vars)
+      const mensajeGuardado = [
+        `Hola ${lead.nombre}`,
+        `Vi que tu negocio tiene ${ratingStr}⭐ en Google Maps.`,
+        `Hice este boceto para un negocio como el tuyo: ${demoHost}`,
+        `Trabajo con negocios de ${lead.zona} haciendo páginas web para ${lead.rubro} - conocé mi trabajo en ${SITIO_PRINCIPAL_APEX}`,
+        `¿Te lo armamos con tu marca?`,
+      ].join('\n')
 
       // Guardar conversación
       await sup.from('conversaciones').insert({

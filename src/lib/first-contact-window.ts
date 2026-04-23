@@ -5,6 +5,9 @@
 export const PRIMER_CONTACTO_HORA_INICIO_AR = 7
 export const PRIMER_CONTACTO_HORA_FIN_AR = 21
 
+/** `true` = ignora 7–21 h (solo para pruebas; volver a `false` en producción estable). */
+export const PRIMER_CONTACTO_SIN_RESTRICCION_HORARIA = true
+
 const TZ_ARGENTINA = 'America/Argentina/Buenos_Aires'
 
 /** Hora local Argentina (0–23) en el instante dado. */
@@ -19,6 +22,7 @@ export function getHoraArgentina(fecha: Date = new Date()): number {
 }
 
 export function estaEnVentanaPrimerContacto(fecha: Date = new Date()): boolean {
+  if (PRIMER_CONTACTO_SIN_RESTRICCION_HORARIA) return true
   const h = getHoraArgentina(fecha)
   return h >= PRIMER_CONTACTO_HORA_INICIO_AR && h <= PRIMER_CONTACTO_HORA_FIN_AR
 }
