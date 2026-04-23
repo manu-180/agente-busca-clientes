@@ -115,8 +115,32 @@ async function incrementarDailyCount(sup: SupabaseClient, key: string, actual: n
   await escribirConfig(sup, `${key}_primer_enviados_hoy`, `${actual + 1}|${fechaArHoy()}`)
 }
 
+// Verifica síncronamente si un número tiene WhatsApp usando Twilio Lookup API.
+// Retorna true si tiene WA, false si no tiene (no cuenta como fallo del sender).
+// Lanza error si hay problema de red/credenciales (cuenta como fallo del sender).
+async function tieneWhatsApp(telefono: string): Promise<boolean> {
+  const accountSid = process.env.TWILIO_ACCOUNT_SID!
+  const auth = 'Basic ' + Buffer.from(`${accountSid}:${process.env.TWILIO_AUTH_TOKEN!}`).toString('base64')
+
+  const res = await fetch(
+    `https://lookups.twilio.com/v2/PhoneNumbers/%2B${telefono}?Fields=whatsapp`,
+    { headers: { Authorization: auth } }
+  )
+
+  if (!res.ok) {
+    // 404 significa que el número no existe → no tiene WA, skip silencioso
+    if (res.status === 404) return false
+    const err = await res.text()
+    throw new Error(`Twilio Lookup error ${res.status}: ${err}`)
+  }
+
+  const data = await res.json()
+  return !!data?.whatsapp?.whatsapp_id
+}
+
 // Envía mensaje con template de Twilio (HSM pre-aprobado por Meta)
 // Variables: 1=nombre, 2=rating, 3=demo (host), 4=localidad, 5=rubro búsqueda, 6=sitio principal
+// Retorna el MessageSid de Twilio para tracking asíncrono de entrega.
 async function enviarTemplateTwilio(
   telefono: string,
   fromNumber: string,
@@ -129,12 +153,13 @@ async function enviarTemplateTwilio(
     rubro: string
     sitioPrincipal: string
   }
-): Promise<void> {
+): Promise<string> {
   if (isTelefonoHardBlocked(telefono)) {
     throw new Error('TELEFONO_BLOQUEADO')
   }
   const accountSid = process.env.TWILIO_ACCOUNT_SID!
   const auth = 'Basic ' + Buffer.from(`${accountSid}:${process.env.TWILIO_AUTH_TOKEN!}`).toString('base64')
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://leads.theapexweb.com'
 
   const res = await fetch(
     `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
@@ -153,6 +178,7 @@ async function enviarTemplateTwilio(
           '5': vars.rubro,
           '6': vars.sitioPrincipal,
         }),
+        StatusCallback: `${appUrl}/api/webhook/twilio-status`,
       }).toString(),
     }
   )
@@ -161,6 +187,9 @@ async function enviarTemplateTwilio(
     const err = await res.text()
     throw new Error(`Twilio template error ${res.status}: ${err}`)
   }
+
+  const body = await res.json()
+  return body.sid as string
 }
 
 // Cuántos leads intentar por tick antes de rendirse
@@ -306,6 +335,20 @@ async function procesarSender(
     }
 
     try {
+      // Verificar síncronamente si el número tiene WhatsApp antes de enviar.
+      // false → skip de lead (no cuenta como fallo del sender).
+      // throw → error de API/red (cuenta como fallo del sender, cae al catch).
+      const esWhatsApp = await tieneWhatsApp(telefono)
+      if (!esWhatsApp) {
+        await actualizarLead(sup, lead.id, {
+          estado: 'descartado',
+          primer_envio_error: 'no_es_whatsapp',
+          procesando_hasta: null,
+        })
+        console.warn(`[cron leads-pendientes] [${key}] Lead ${lead.id} — ${telefono} no tiene WhatsApp, descartado`)
+        continue
+      }
+
       const ratingStr = extraerRatingParaPlantilla(lead.descripcion)
       const demoHost = resolveWhatsAppDemoHost(lead.rubro, lead.descripcion)
       const vars = {
@@ -316,7 +359,7 @@ async function procesarSender(
         rubro: lead.rubro,
         sitioPrincipal: SITIO_PRINCIPAL_APEX,
       }
-      await enviarTemplateTwilio(telefono, phoneNumber, contentSid, vars)
+      const messageSid = await enviarTemplateTwilio(telefono, phoneNumber, contentSid, vars)
       const mensajeGuardado = [
         `Hola ${lead.nombre}`,
         `Vi que tu negocio tiene ${ratingStr}⭐ en Google Maps.`,
@@ -325,7 +368,7 @@ async function procesarSender(
         `¿Te lo armamos con tu marca?`,
       ].join('\n')
 
-      // Guardar conversación
+      // Guardar conversación con SID para tracking asíncrono de entrega
       await sup.from('conversaciones').insert({
         lead_id: lead.id,
         telefono,
@@ -334,6 +377,7 @@ async function procesarSender(
         tipo_mensaje: 'texto',
         manual: false,
         sender_id: senderId,
+        twilio_message_sid: messageSid,
       })
 
       await actualizarLead(sup, lead.id, {
@@ -361,6 +405,7 @@ async function procesarSender(
         status: 'ok',
         lead_id: lead.id,
         nombre: lead.nombre,
+        twilio_message_sid: messageSid,
         enviados_hoy: enviados + 1,
         proximo_slot_at: proximoSlot?.toISOString() ?? null,
         proximo_min: proximoMin,
