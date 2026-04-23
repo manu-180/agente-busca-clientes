@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import Anthropic from '@anthropic-ai/sdk'
+import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 import { buildAgentPrompt } from '@/lib/prompts'
 import { detectarVertical, sanitizarApexInfoPorVertical } from '@/lib/verticales'
 
@@ -58,7 +59,7 @@ export async function POST(request: Request) {
   try {
     const client = new Anthropic({ apiKey })
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: ANTHROPIC_CHAT_MODEL,
       max_tokens: 300,
       system: systemPrompt,
       messages: [{

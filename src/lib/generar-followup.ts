@@ -5,9 +5,9 @@ import {
   validateContinuationMessage,
 } from '@/lib/message-guards'
 import type { Lead } from '@/types'
+import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 
 const MAX_CHARS = 300
-const MODEL = 'claude-sonnet-4-5'
 
 export interface FollowupStage {
   /** Número de followups ya enviados antes de este (0 = primer followup). */
@@ -24,7 +24,7 @@ async function callClaude(
   userContent: string
 ): Promise<string> {
   const response = await client.messages.create({
-    model: MODEL,
+    model: ANTHROPIC_CHAT_MODEL,
     max_tokens: 250,
     system,
     messages: [{ role: 'user', content: userContent }],

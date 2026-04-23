@@ -9,6 +9,7 @@ import { createSupabaseServer } from '@/lib/supabase-server'
 import { sendDM, SidecarError } from '@/lib/ig/sidecar'
 import { SYSTEM_PROMPT } from '@/lib/ig/prompts/system'
 import { pickFollowupTemplate, GHOSTED_CLOSE } from '@/lib/ig/prompts/templates'
+import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -79,7 +80,7 @@ export async function GET(req: NextRequest) {
 
       try {
         const completion = await anthropic.messages.create({
-          model: 'claude-sonnet-4-5',
+          model: ANTHROPIC_CHAT_MODEL,
           max_tokens: 150,
           system: SYSTEM_PROMPT,
           messages: [

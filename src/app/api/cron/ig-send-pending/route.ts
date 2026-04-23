@@ -10,6 +10,7 @@ import { sendDM, SidecarError } from '@/lib/ig/sidecar'
 import { SYSTEM_PROMPT } from '@/lib/ig/prompts/system'
 import { pickOpeningTemplate } from '@/lib/ig/prompts/templates'
 import { alertCircuitOpen } from '@/lib/ig/alerts'
+import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 90
@@ -81,7 +82,7 @@ export async function GET(req: NextRequest) {
   try {
     const template = pickOpeningTemplate(lead)
     const completion = await anthropic.messages.create({
-      model: 'claude-sonnet-4-5',
+      model: ANTHROPIC_CHAT_MODEL,
       max_tokens: 200,
       system: SYSTEM_PROMPT,
       messages: [

@@ -5,6 +5,7 @@ import { SYSTEM_PROMPT } from '@/lib/ig/prompts/system'
 import { REPLY_TEMPLATES } from '@/lib/ig/prompts/templates'
 import { classifyIntent } from '@/lib/ig/intent'
 import { isOwnerTakeover } from '@/lib/ig/owner-takeover'
+import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 
 const CLOSED_STATUSES = new Set([
   'closed_positive',
@@ -153,7 +154,7 @@ export async function handleIncomingReply(
 
   try {
     const completion = await anthropic.messages.create({
-      model: 'claude-sonnet-4-5',
+      model: ANTHROPIC_CHAT_MODEL,
       max_tokens: 300,
       system: systemWithHint,
       messages,

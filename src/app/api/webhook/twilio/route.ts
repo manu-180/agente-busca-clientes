@@ -22,6 +22,7 @@ import {
   sanitizarRespuestaModelo,
 } from '@/lib/response-guardrails'
 import { detectarVertical, sanitizarApexInfoPorVertical } from '@/lib/verticales'
+import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 import { extraerContenidoNuevo } from '@/lib/echo-detection'
 import {
   stripContinuationViolations,
@@ -625,7 +626,7 @@ async function procesarConLock(
   const client = new Anthropic({ apiKey: anthropicKey })
 
   const response = await client.messages.create({
-    model: 'claude-sonnet-4-5',
+    model: ANTHROPIC_CHAT_MODEL,
     max_tokens: isClosingState ? 60 : 500,
     ...(isClosingState && { temperature: 0.2 }),
     system: systemPrompt,
@@ -692,7 +693,7 @@ async function procesarConLock(
 
       try {
         const retry = await client.messages.create({
-          model: 'claude-sonnet-4-5',
+          model: ANTHROPIC_CHAT_MODEL,
           max_tokens: 500,
           system: systemPrompt,
           messages: [

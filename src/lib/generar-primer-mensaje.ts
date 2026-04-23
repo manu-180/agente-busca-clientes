@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 import { listDemos } from '@/lib/demos-repo'
 import { matchDemoFromTexts } from '@/lib/demo-match'
 
@@ -56,7 +57,7 @@ export async function generarPrimerMensaje(
 
     const client = new Anthropic({ apiKey })
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-5',
+      model: ANTHROPIC_CHAT_MODEL,
       max_tokens: 300,
       system: SYSTEM_PROMPT,
       messages: [

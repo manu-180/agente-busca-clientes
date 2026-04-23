@@ -15,6 +15,7 @@ import {
   instruccionRegeneracion,
   sanitizarRespuestaModelo,
 } from '@/lib/response-guardrails'
+import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 import { detectarVertical, sanitizarApexInfoPorVertical } from '@/lib/verticales'
 
 export async function generarRespuestaAgente({
@@ -231,7 +232,7 @@ export async function generarRespuestaAgente({
     console.log('[AGENTE] Llamando a Claude Sonnet...')
     const client = new Anthropic({ apiKey })
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-5',
+      model: ANTHROPIC_CHAT_MODEL,
       max_tokens: 500,
       system: systemPrompt,
       messages: [{ role: 'user', content: userContent }],
@@ -277,7 +278,7 @@ export async function generarRespuestaAgente({
 
       try {
         const retry = await client.messages.create({
-          model: 'claude-sonnet-4-5',
+          model: ANTHROPIC_CHAT_MODEL,
           max_tokens: 500,
           system: systemPrompt,
           messages: [

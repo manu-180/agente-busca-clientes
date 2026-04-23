@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 
 export type Intent =
   | 'interested'        // muestra interés, quiere saber más o avanzar
@@ -77,7 +78,7 @@ export async function classifyIntent(
 
   try {
     const response = await anthropic.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: ANTHROPIC_CHAT_MODEL,
       max_tokens: 200,
       system: CLASSIFIER_SYSTEM,
       tools: [INTENT_TOOL],
