@@ -16,6 +16,18 @@ const RE_HORARIO_ATENCION = /\bhorario\b[\s\S]{0,100}\d{1,2}:\d{2}/i
 const RE_EN_QUE_AYUDAR = /en\s+qu[eé]\s+(puedo|podemos|te\s+puedo|te\s+podemos)\s+ayudar/i
 // "de lunes a viernes/sábados/domingos"
 const RE_DIAS_LABORALES = /de\s+lunes\s+a\s+(viernes|s[aá]bados?|domingos?)\b/i
+// "Lunes a Viernes de 9 a 12" (muy común en WA Business; sin "de " al inicio)
+const RE_LUNES_A_VIERNES_FLEX = /\b(lunes|martes|mi[eé]rcoles)\s+a\s+(viernes|s[aá]bados?)\b/i
+// Horarios con "a" entre números o "de X a Y" sin obligar :mm
+const RE_HORARIO_ATENCION_FLEX =
+  /\b(horario|horarios)\b[\s\S]{0,180}(\d{1,2}\s*(?:hs?\.?|h)\s*)?(?:a|-|hasta)\s*\d{1,2}/i
+const RE_DIRECCION_TIPICA =
+  /\b(calle|av\.|avenida|ruta)\s+[a-záéíóúñ0-9.\s]{1,48}\d{2,5}\b/i
+// "de 9 a 12", "9 a 18 hs", "10:00 a 13:30"
+const RE_FRANJA_HORARIA_DIA =
+  /\b(de\s+)?\d{1,2}(:\d{2})?\s*(hs?\.?|h\.?)?\s*(a|-|hasta)\s*\d{1,2}/i
+const RE_DISCLAIMER_WA_NEGOCIO =
+  /\b(NO\s+ATENDEMOS|NO\s+ENVIAMOS|NO\s+CONTESTAMOS\s+LLAMADOS|SOLO\s+WHATSAPP)\b/i
 
 function tieneBloquesEmojisDecorativos(texto: string): boolean {
   // 3+ emojis consecutivos (pares sustitutos) — decoración típica de auto-replies de negocios
@@ -65,8 +77,13 @@ export function pareceMensajeAutomaticoNegocio(texto: string): boolean {
     RE_GRACIAS_CONTACTO.test(t),
     t.length > 260 && /\$\d/.test(texto),
     RE_HORARIO_ATENCION.test(texto),
+    RE_HORARIO_ATENCION_FLEX.test(texto),
     RE_EN_QUE_AYUDAR.test(texto),
     RE_DIAS_LABORALES.test(texto),
+    RE_LUNES_A_VIERNES_FLEX.test(texto),
+    RE_FRANJA_HORARIA_DIA.test(texto),
+    RE_DIRECCION_TIPICA.test(texto),
+    RE_DISCLAIMER_WA_NEGOCIO.test(texto),
     tieneBloquesEmojisDecorativos(texto),
   ]
   const n = señales.filter(Boolean).length
@@ -75,12 +92,28 @@ export function pareceMensajeAutomaticoNegocio(texto: string): boolean {
   if (RE_COMUNICARTE_CON.test(texto)) return true
   // Bienvenida clásica con mensaje largo y algún $
   if (RE_BIENVENIDO.test(texto) && texto.length > 160 && dolares >= 1) return true
+  // Cartel de negocio: dirección + días/horarios (menú automático típico)
+  if (texto.length >= 80 && RE_DIRECCION_TIPICA.test(texto) && RE_LUNES_A_VIERNES_FLEX.test(texto)) {
+    return true
+  }
+  if (texto.length >= 100 && RE_LUNES_A_VIERNES_FLEX.test(texto) && RE_HORARIO_ATENCION_FLEX.test(texto)) {
+    return true
+  }
+  if (texto.length >= 90 && RE_LUNES_A_VIERNES_FLEX.test(texto) && RE_FRANJA_HORARIA_DIA.test(texto)) {
+    return true
+  }
   return false
 }
 
-export const RESPUESTA_OUTBOUND_TRAS_AUTOMATICO = `Gracias por la info. Te escribimos nosotros con una propuesta que quedó en el mensaje de arriba.
+/** Respuesta fija post–menú automático de WA Business (no cuenta como “pitch” para el cap outbound). */
+export function esPlantillaRespuestaOutboundAuto(mensaje: string | null | undefined): boolean {
+  if (!mensaje || typeof mensaje !== 'string') return false
+  return mensaje.includes('theapexweb.com') && mensaje.includes('Gracias por la info')
+}
 
-Cuando quieras charlamos. Para conocer el trabajo de APEX entrá a *www.theapexweb.com*`
+export const RESPUESTA_OUTBOUND_TRAS_AUTOMATICO = `Gracias por la info. Eso suele ser el mensaje automático del negocio: *la propuesta ya quedó arriba* en nuestro primer mensaje.
+
+Cuando quieras charlamos con calma. Para ver trabajos de APEX: *www.theapexweb.com*`
 
 /** Respuesta cuando un intermediario/portero dice que va a reenviar el mensaje al decisor */
 export const RESPUESTA_GATEKEEPER = `Perfecto, gracias. Si le podés comentar que dejamos una propuesta arriba, genial. Cuando quieran charlar, por acá estamos.`
