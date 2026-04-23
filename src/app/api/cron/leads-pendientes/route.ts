@@ -120,22 +120,31 @@ async function incrementarDailyCount(sup: SupabaseClient, key: string, actual: n
 // Lanza error si hay problema de red/credenciales (cuenta como fallo del sender).
 async function tieneWhatsApp(telefono: string): Promise<boolean> {
   const accountSid = process.env.TWILIO_ACCOUNT_SID!
-  const auth = 'Basic ' + Buffer.from(`${accountSid}:${process.env.TWILIO_AUTH_TOKEN!}`).toString('base64')
+  const authToken = process.env.TWILIO_AUTH_TOKEN!
+  const auth = 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64')
 
-  const res = await fetch(
-    `https://lookups.twilio.com/v2/PhoneNumbers/%2B${telefono}?Fields=whatsapp`,
-    { headers: { Authorization: auth } }
-  )
+  // DEBUG: verificar que las credenciales estén presentes
+  console.log(`[DBG lookup] accountSid=${accountSid ? accountSid.slice(0,8)+'…' : 'FALTA'} authToken=${authToken ? 'OK('+authToken.length+'chars)' : 'FALTA'}`)
+
+  const url = `https://lookups.twilio.com/v2/PhoneNumbers/%2B${telefono}?Fields=whatsapp`
+  console.log(`[DBG lookup] GET ${url}`)
+
+  const res = await fetch(url, { headers: { Authorization: auth } })
+
+  console.log(`[DBG lookup] tel=${telefono} httpStatus=${res.status}`)
 
   if (!res.ok) {
+    const body = await res.text()
+    console.log(`[DBG lookup] respuesta error: ${body.slice(0, 400)}`)
     // 404 significa que el número no existe → no tiene WA, skip silencioso
     if (res.status === 404) return false
-    const err = await res.text()
-    throw new Error(`Twilio Lookup error ${res.status}: ${err}`)
+    throw new Error(`Twilio Lookup error ${res.status}: ${body.slice(0, 300)}`)
   }
 
   const data = await res.json()
-  return !!data?.whatsapp?.whatsapp_id
+  const tieneWA = !!data?.whatsapp?.whatsapp_id
+  console.log(`[DBG lookup] tel=${telefono} whatsapp_id=${data?.whatsapp?.whatsapp_id ?? 'null'} → tieneWA=${tieneWA}`)
+  return tieneWA
 }
 
 // Envía mensaje con template de Twilio (HSM pre-aprobado por Meta)
@@ -161,34 +170,44 @@ async function enviarTemplateTwilio(
   const auth = 'Basic ' + Buffer.from(`${accountSid}:${process.env.TWILIO_AUTH_TOKEN!}`).toString('base64')
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://leads.theapexweb.com'
 
+  const params = {
+    From: `whatsapp:${fromNumber}`,
+    To: `whatsapp:+${telefono}`,
+    ContentSid: contentSid,
+    ContentVariables: JSON.stringify({
+      '1': vars.nombre,
+      '2': vars.rating,
+      '3': vars.demoHost,
+      '4': vars.zona,
+      '5': vars.rubro,
+      '6': vars.sitioPrincipal,
+    }),
+    StatusCallback: `${appUrl}/api/webhook/twilio-status`,
+  }
+
+  console.log(`[DBG twilio] POST Messages.json From=${params.From} To=${params.To} ContentSid=${contentSid}`)
+  console.log(`[DBG twilio] ContentVariables=${params.ContentVariables}`)
+  console.log(`[DBG twilio] StatusCallback=${params.StatusCallback}`)
+
   const res = await fetch(
     `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
     {
       method: 'POST',
       headers: { Authorization: auth, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        From: `whatsapp:${fromNumber}`,
-        To: `whatsapp:+${telefono}`,
-        ContentSid: contentSid,
-        ContentVariables: JSON.stringify({
-          '1': vars.nombre,
-          '2': vars.rating,
-          '3': vars.demoHost,
-          '4': vars.zona,
-          '5': vars.rubro,
-          '6': vars.sitioPrincipal,
-        }),
-        StatusCallback: `${appUrl}/api/webhook/twilio-status`,
-      }).toString(),
+      body: new URLSearchParams(params).toString(),
     }
   )
 
+  console.log(`[DBG twilio] httpStatus=${res.status}`)
+
   if (!res.ok) {
     const err = await res.text()
+    console.error(`[DBG twilio] error body: ${err.slice(0, 500)}`)
     throw new Error(`Twilio template error ${res.status}: ${err}`)
   }
 
   const body = await res.json()
+  console.log(`[DBG twilio] OK sid=${body.sid} status=${body.status}`)
   return body.sid as string
 }
 
@@ -206,20 +225,34 @@ async function procesarSender(
 ): Promise<Record<string, unknown>> {
   const { key, provider, phoneNumber, contentSid, intMin, intMax } = sender
 
+  console.log(`[DBG sender] ── INICIO procesarSender key=${key} phone=${phoneNumber} forced=${forced} ──`)
+
   // 1. Verificar sender en tabla senders (activo + id para taggear conversaciones)
-  const { data: senderRow } = await sup
+  const { data: senderRow, error: senderErr } = await sup
     .from('senders')
     .select('id, activo')
     .eq('provider', provider)
     .eq('phone_number', phoneNumber)
     .maybeSingle()
 
-  if (senderRow && !senderRow.activo) return { status: 'inactivo' }
+  console.log(`[DBG sender] [${key}] senderRow=${JSON.stringify(senderRow)} error=${senderErr?.message ?? 'none'}`)
+
+  if (senderRow && !senderRow.activo) {
+    console.log(`[DBG sender] [${key}] → INACTIVO en DB`)
+    return { status: 'inactivo' }
+  }
+
+  if (!senderRow) {
+    console.warn(`[DBG sender] [${key}] ⚠ NO se encontró fila en tabla senders para phone=${phoneNumber}`)
+  }
 
   const senderId = senderRow?.id ?? null
+  const fallosActuales = parseInt(await leerConfig(sup, `${key}_primer_fallos`, '0'), 10) || 0
+  console.log(`[DBG sender] [${key}] senderId=${senderId} fallosActuales=${fallosActuales}`)
 
   if (!forced && !estaEnVentanaPrimerContacto()) {
     const h = getHoraArgentina()
+    console.log(`[DBG sender] [${key}] → fuera_de_ventana hora=${h}`)
     return {
       status: 'fuera_de_ventana',
       hora_argentina: h,
@@ -232,12 +265,14 @@ async function procesarSender(
 
   // 2. Contador diario (métrica / diagnóstico; no condiciona envíos)
   const enviados = await leerDailyCount(sup, key)
+  console.log(`[DBG sender] [${key}] enviados_hoy=${enviados}`)
 
   // 3. Slot de cadencia (omitido si intMin e intMax son ≤ 0)
   if (!forced && (intMin > 0 || intMax > 0)) {
     const nextSlotStr = await leerConfig(sup, `${key}_primer_next_slot_at`, '1970-01-01T00:00:00.000Z')
     if (new Date(nextSlotStr).getTime() > Date.now()) {
       const faltanMin = Math.ceil((new Date(nextSlotStr).getTime() - Date.now()) / 60_000)
+      console.log(`[DBG sender] [${key}] → slot_no_alcanzado next=${nextSlotStr} faltan=${faltanMin}min`)
       return { status: 'slot_no_alcanzado', next_slot_at: nextSlotStr, faltan_min: faltanMin }
     }
   }
@@ -246,8 +281,10 @@ async function procesarSender(
   const erroresTick: Array<{ lead_id: string; error: string }> = []
 
   for (let i = 0; i < MAX_LEADS_POR_TICK; i++) {
+    console.log(`[DBG sender] [${key}] ── intento ${i + 1}/${MAX_LEADS_POR_TICK} ──`)
+
     // Elegir lead: el más antiguo en cola (FIFO) que no haya tomado el otro sender en este tick
-    const { data: candidatos } = await sup
+    const { data: candidatos, error: candidatosErr } = await sup
       .from(LEADS_TABLE)
       .select('*')
       .eq('origen', 'outbound')
@@ -258,22 +295,30 @@ async function procesarSender(
       .order('created_at', { ascending: true })
       .limit(200)
 
+    console.log(`[DBG sender] [${key}] candidatos DB: count=${candidatos?.length ?? 0} error=${candidatosErr?.message ?? 'none'}`)
+
     const lead = (candidatos ?? []).find(
       (l: LeadColaRow) => !yaProcesoIds.includes(l.id)
     ) as LeadColaRow | undefined
 
     if (!lead) {
+      console.log(`[DBG sender] [${key}] → sin lead disponible (todos tomados o cola vacía)`)
       return {
         status: erroresTick.length > 0 ? 'error_sin_mas_candidatos' : 'sin_pendientes',
         errores: erroresTick,
       }
     }
 
+    console.log(`[DBG sender] [${key}] lead elegido id=${lead.id} tel_raw=${lead.telefono} nombre=${lead.nombre} intentos=${lead.primer_envio_intentos}`)
+
     // Reservar para que el otro sender no lo tome en el mismo tick
     yaProcesoIds.push(lead.id)
 
     const telefono = normalizarTelefonoArg(String(lead.telefono))
+    console.log(`[DBG sender] [${key}] tel normalizado: "${lead.telefono}" → "${telefono}"`)
+
     if (!telefono) {
+      console.warn(`[DBG sender] [${key}] tel inválido tras normalizar → descartando`)
       await actualizarLead(sup, lead.id, { estado: 'descartado', primer_envio_error: 'telefono_invalido' })
       continue
     }
@@ -284,14 +329,14 @@ async function procesarSender(
         primer_envio_error: 'telefono_bloqueado_lista',
         procesando_hasta: null,
       })
-      console.warn(`[cron leads-pendientes] [${key}] Lead ${lead.id} — tel ${telefono} en lista de bloqueo, descartado`)
+      console.warn(`[DBG sender] [${key}] tel ${telefono} en lista de bloqueo → descartado`)
       continue
     }
 
     const telsMismaLinea = variantesTelefonoMismaLinea(telefono)
+    console.log(`[DBG sender] [${key}] variantes misma línea: ${JSON.stringify(telsMismaLinea)}`)
 
     // Evitar spam: saltar si el teléfono ya tiene conversación previa o fue enviado antes
-    // (misma línea: 54 11 con/sin 9 móvil).
     const [{ data: yaConv }, { data: yaLead }, { data: yaConvPorLead }] = await Promise.all([
       sup.from('conversaciones').select('id').in('telefono', telsMismaLinea).limit(1).maybeSingle(),
       sup
@@ -305,19 +350,19 @@ async function procesarSender(
       sup.from('conversaciones').select('id').eq('lead_id', lead.id).limit(1).maybeSingle(),
     ])
 
+    console.log(`[DBG sender] [${key}] yaConv=${!!yaConv} yaLead=${!!yaLead} yaConvPorLead=${!!yaConvPorLead}`)
+
     if (yaConv || yaLead || yaConvPorLead) {
       await actualizarLead(sup, lead.id, {
         estado: 'contactado',
         mensaje_enviado: true,
         primer_envio_error: 'telefono_ya_contactado',
       })
-      console.warn(`[cron leads-pendientes] [${key}] Lead ${lead.id} saltado — teléfono ${telefono} ya fue contactado`)
+      console.warn(`[DBG sender] [${key}] tel ${telefono} ya contactado → saltando`)
       continue
     }
 
-    // Lock atómico: intentar reclamar el lead marcando procesando_hasta.
-    // Si otro proceso ya lo reclamó (procesando_hasta en el futuro) o ya lo envió,
-    // el UPDATE no matchea y devuelve count=0 — saltar sin enviar.
+    // Lock atómico
     const procesandoHasta = new Date(Date.now() + 5 * 60_000).toISOString()
     const { data: claimed, error: claimErr } = await sup
       .from(LEADS_TABLE)
@@ -329,23 +374,29 @@ async function procesarSender(
       .select('id')
       .maybeSingle()
 
+    console.log(`[DBG sender] [${key}] claim lead ${lead.id}: claimed=${!!claimed} claimErr=${claimErr?.message ?? 'none'}`)
+
     if (claimErr || !claimed) {
-      console.warn(`[cron leads-pendientes] [${key}] Lead ${lead.id} ya reclamado por otro proceso — saltando`)
+      console.warn(`[DBG sender] [${key}] lead ${lead.id} ya reclamado por otro proceso → saltando`)
       continue
     }
 
     try {
+      console.log(`[DBG sender] [${key}] → llamando tieneWhatsApp(${telefono})`)
+
       // Verificar síncronamente si el número tiene WhatsApp antes de enviar.
       // false → skip de lead (no cuenta como fallo del sender).
       // throw → error de API/red (cuenta como fallo del sender, cae al catch).
       const esWhatsApp = await tieneWhatsApp(telefono)
+      console.log(`[DBG sender] [${key}] tieneWhatsApp(${telefono}) = ${esWhatsApp}`)
+
       if (!esWhatsApp) {
         await actualizarLead(sup, lead.id, {
           estado: 'descartado',
           primer_envio_error: 'no_es_whatsapp',
           procesando_hasta: null,
         })
-        console.warn(`[cron leads-pendientes] [${key}] Lead ${lead.id} — ${telefono} no tiene WhatsApp, descartado`)
+        console.warn(`[DBG sender] [${key}] ${telefono} no tiene WhatsApp → descartado, próximo lead`)
         continue
       }
 
@@ -415,7 +466,9 @@ async function procesarSender(
 
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      console.error(`[cron leads-pendientes] [${key}] Lead ${lead.id} falló:`, msg)
+      const stack = e instanceof Error ? (e.stack ?? '') : ''
+      console.error(`[DBG sender] [${key}] ❌ CATCH lead=${lead.id} error="${msg}"`)
+      console.error(`[DBG sender] [${key}] stack: ${stack.slice(0, 800)}`)
 
       erroresTick.push({ lead_id: lead.id, error: msg })
 
@@ -428,12 +481,13 @@ async function procesarSender(
       const fallos = fallosAntes + 1
       await escribirConfig(sup, `${key}_primer_fallos`, String(fallos))
 
+      console.error(`[DBG sender] [${key}] fallos_sender=${fallos}/10`)
+
       if (fallos >= 10) {
-        // Pausar el sender automáticamente en la tabla senders (visible en UI)
         if (senderRow?.id) {
           await sup.from('senders').update({ activo: false }).eq('id', senderRow.id)
         }
-        console.error(`[cron leads-pendientes] [${key}] 10 fallos consecutivos — sender pausado automáticamente`)
+        console.error(`[DBG sender] [${key}] ❌❌ 10 fallos consecutivos → SENDER PAUSADO`)
         return {
           status: 'pausado_auto',
           lead_id: lead.id,
@@ -443,8 +497,7 @@ async function procesarSender(
         }
       }
 
-      console.warn(`[cron leads-pendientes] [${key}] Fallo ${fallos}/10 — saltando al siguiente lead...`)
-      // Continúa el loop con el siguiente lead
+      console.warn(`[DBG sender] [${key}] fallo ${fallos}/10 → continuando con siguiente lead`)
     }
   }
 
@@ -453,14 +506,25 @@ async function procesarSender(
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
-  if (!authCron(req)) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  console.log(`[DBG cron] ════ TICK INICIO ${new Date().toISOString()} ════`)
+
+  if (!authCron(req)) {
+    console.warn(`[DBG cron] ❌ Auth fallida. Header authorization=${req.headers.get('authorization')?.slice(0, 20)}… CRON_SECRET=${process.env.CRON_SECRET ? 'SET('+process.env.CRON_SECRET.length+'chars)' : 'FALTA'}`)
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
 
   const forced = req.nextUrl.searchParams.get('force') === 'true'
+  console.log(`[DBG cron] forced=${forced}`)
+
   const sup = createSupabaseServer()
+
+  // Verificar variables de entorno críticas
+  console.log(`[DBG cron] ENV: TWILIO_ACCOUNT_SID=${process.env.TWILIO_ACCOUNT_SID ? 'SET' : 'FALTA'} TWILIO_AUTH_TOKEN=${process.env.TWILIO_AUTH_TOKEN ? 'SET' : 'FALTA'} NEXT_PUBLIC_APP_URL=${process.env.NEXT_PUBLIC_APP_URL ?? '(no seteada, usará default)'}`)
 
   // Verificar interruptor global
   const { data: cfgActivo } = await sup
     .from('configuracion').select('valor').eq('clave', 'first_contact_activo').maybeSingle()
+  console.log(`[DBG cron] first_contact_activo=${cfgActivo?.valor}`)
   if (cfgActivo?.valor !== 'true') {
     return NextResponse.json({ ok: true, skipped: 'first_contact_inactivo' })
   }
