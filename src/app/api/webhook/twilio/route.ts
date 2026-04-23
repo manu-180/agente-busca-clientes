@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { createHmac, timingSafeEqual } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
+import { waitUntil } from '@vercel/functions'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { buildAgentPrompt, buildUserMessageWithLeadContext } from '@/lib/prompts'
 import {
@@ -30,6 +31,7 @@ import { enviarMensajeTwilio } from '@/lib/twilio'
 import { normalizarTelefonoArg, soloDigitos, variantesTelefonoMismaLinea } from '@/lib/phone'
 import { debePersistirBocetoAceptado } from '@/lib/boceto-aceptacion'
 
+// maxDuration = 30s → da margen para el background tras devolver TwiML
 export const maxDuration = 30
 
 // Twilio espera TwiML (XML) como respuesta, no JSON.
@@ -62,9 +64,17 @@ const END_CONVERSATION_TOOL: Anthropic.Tool = {
   },
 }
 
+// ─── Constantes de tiempo ──────────────────────────────────────────────────────
+// Twilio WhatsApp webhook timeout = 10s → devolvemos TwiML en < 3s y procesamos en BG.
 const VENTANA_RESPUESTA_MANUAL_MS = 5 * 60 * 1000
-const DEBOUNCE_MS = 6000
+// Debounce reducido: 4s (en background ya no importa bloquear el TwiML).
+const DEBOUNCE_MS = 4000
 const LOCK_TTL_MS = 35_000
+// Mensaje de fallback cuando Claude falla (en vez de silencio total).
+const FALLBACK_CUANDO_CLAUDE_FALLA =
+  'Gracias por tu mensaje. Te respondemos a la brevedad.'
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function enviarTwilioYGuardar(
   supabase: ReturnType<typeof createSupabaseServer>,
@@ -128,6 +138,623 @@ function verifyTwilioSignature(
   }
 }
 
+/**
+ * Registra un error fatal en conversational_events para que sea visible
+ * en la tabla de telemetría (ya que no hay UI de logs propia).
+ */
+async function registrarErrorWebhook(
+  supabase: ReturnType<typeof createSupabaseServer>,
+  leadId: string,
+  telefono: string,
+  etapa: string,
+  error: unknown
+) {
+  const msg = error instanceof Error ? error.message : String(error)
+  const stack = error instanceof Error ? (error.stack ?? '').slice(0, 800) : ''
+  console.error(`[Twilio Webhook] ERROR en etapa "${etapa}":`, msg, stack)
+  try {
+    await registrarEventoConversacional({
+      leadId,
+      telefono,
+      eventName: 'webhook_error',
+      decisionAction: 'no_reply',
+      decisionReason: 'empty',
+      confidence: 0,
+      metadata: { etapa, error: msg, stack },
+    })
+  } catch {
+    // No bloquear si falla el log mismo
+  }
+}
+
+// ─── Parámetros para el procesamiento en background ───────────────────────────
+interface BgParams {
+  telefono: string
+  nuestroNumero: string
+  mensaje: string
+  tipoMensaje: 'texto' | 'audio' | 'imagen' | 'otro'
+  leadId: string
+  leadOrigen: string
+  leadAgentActivo: boolean
+  senderId: string | null
+  senderPhone: string
+  miMsgTimestamp: string | undefined
+}
+
+// ─── Procesamiento pesado en background ───────────────────────────────────────
+// Corre DESPUÉS de que el TwiML ya fue devuelto a Twilio (gracias a waitUntil).
+async function procesarEnBackground(p: BgParams): Promise<void> {
+  const supabase = createSupabaseServer()
+
+  // Imagen/audio: guardados en DB (fast path). El agente no responde sin visión.
+  if (p.tipoMensaje !== 'texto') {
+    console.log('[BG] Media distinto de texto → sin respuesta automática')
+    return
+  }
+
+  // ── 1. Verificar agente global ──
+  const { data: configAgente } = await supabase
+    .from('configuracion')
+    .select('valor')
+    .eq('clave', 'agente_activo')
+    .single()
+
+  const agenteGlobalOn = configAgente?.valor === 'true'
+  const agenteLeadOn = p.leadAgentActivo
+
+  if (!agenteGlobalOn || !agenteLeadOn) {
+    console.log(
+      `[BG] Agente desactivado → global=${agenteGlobalOn} lead=${agenteLeadOn}`
+    )
+    return
+  }
+
+  // ── 2. ¿Hubo respuesta manual reciente? ──
+  const desdeManual = new Date(Date.now() - VENTANA_RESPUESTA_MANUAL_MS).toISOString()
+  const { data: recienteManual } = await supabase
+    .from('conversaciones')
+    .select('id')
+    .eq('lead_id', p.leadId)
+    .eq('rol', 'agente')
+    .eq('manual', true)
+    .gte('timestamp', desdeManual)
+    .limit(1)
+    .maybeSingle()
+
+  if (recienteManual) {
+    console.log('[BG] Respuesta manual reciente → no intervenimos')
+    return
+  }
+
+  // ── 3. Debounce: esperar y verificar si llegó otro mensaje ──
+  await new Promise<void>(resolve => setTimeout(resolve, DEBOUNCE_MS))
+
+  if (p.miMsgTimestamp) {
+    const { data: msgPosterior } = await supabase
+      .from('conversaciones')
+      .select('id')
+      .eq('lead_id', p.leadId)
+      .eq('rol', 'cliente')
+      .gt('timestamp', p.miMsgTimestamp)
+      .limit(1)
+      .maybeSingle()
+
+    if (msgPosterior) {
+      console.log('[BG] Llegó mensaje posterior durante debounce → dejamos al siguiente')
+      return
+    }
+  }
+
+  // ── 4. Lock para evitar respuestas dobles ──
+  const lockAdquirido = await adquirirLock(supabase, p.leadId)
+  if (!lockAdquirido) {
+    console.log('[BG] Lock no disponible para lead', p.leadId, '— skipping')
+    return
+  }
+
+  try {
+    await procesarConLock(supabase, p)
+  } catch (error) {
+    await registrarErrorWebhook(supabase, p.leadId, p.telefono, 'procesarConLock', error)
+    // Fallback: si Claude falló completamente, enviar mensaje de espera
+    try {
+      await enviarTwilioYGuardar(
+        supabase,
+        p.telefono,
+        p.leadId,
+        FALLBACK_CUANDO_CLAUDE_FALLA,
+        p.senderPhone,
+        p.senderId
+      )
+      await registrarEventoConversacional({
+        leadId: p.leadId,
+        telefono: p.telefono,
+        eventName: 'fallback_message_sent',
+        decisionAction: 'full_reply',
+        decisionReason: 'default_full_reply',
+        confidence: 0,
+        metadata: { motivo: 'claude_error_fallback' },
+      })
+    } catch (fallbackErr) {
+      console.error('[BG] Falló incluso el fallback:', fallbackErr)
+    }
+  } finally {
+    await liberarLock(supabase, p.leadId)
+  }
+}
+
+async function procesarConLock(
+  supabase: ReturnType<typeof createSupabaseServer>,
+  p: BgParams
+): Promise<void> {
+  const { data: ultimoAgenteMensaje } = await supabase
+    .from('conversaciones')
+    .select('timestamp')
+    .eq('lead_id', p.leadId)
+    .eq('rol', 'agente')
+    .order('timestamp', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const desdeUltimoAgente = ultimoAgenteMensaje?.timestamp ?? '1970-01-01T00:00:00.000Z'
+
+  const { data: pendientes } = await supabase
+    .from('conversaciones')
+    .select('mensaje')
+    .eq('lead_id', p.leadId)
+    .eq('rol', 'cliente')
+    .eq('tipo_mensaje', 'texto')
+    .gt('timestamp', desdeUltimoAgente)
+    .order('timestamp', { ascending: true })
+
+  const mensajeCombinado =
+    (pendientes ?? [])
+      .map(m => m.mensaje)
+      .filter(Boolean)
+      .join('\n') || p.mensaje
+
+  const { data: historialRows } = await supabase
+    .from('conversaciones')
+    .select('rol, mensaje, timestamp')
+    .eq('lead_id', p.leadId)
+    .order('timestamp', { ascending: true })
+    .limit(60)
+
+  const filasHistorial = historialRows ?? []
+
+  // ── Blindaje: outbound sin mensaje humano real ──
+  const outboundSinHumanoReal =
+    p.leadOrigen === 'outbound' && !clienteYaMandoAlgoNoAutomatico(filasHistorial)
+
+  if (outboundSinHumanoReal) {
+    const mensajesAgente = filasHistorial.filter(h => h.rol === 'agente')
+    const mensajesAgentePitch = mensajesAgente.filter(
+      h => !esPlantillaRespuestaOutboundAuto(h.mensaje as string | null | undefined)
+    )
+
+    console.log(
+      `[BG] outboundSinHumanoReal → pitches=${mensajesAgentePitch.length} agente_msgs=${mensajesAgente.length}`
+    )
+
+    if (mensajesAgentePitch.length >= 2) {
+      await registrarEventoConversacional({
+        leadId: p.leadId,
+        telefono: p.telefono,
+        eventName: 'outbound_cap_sin_humano',
+        decisionAction: 'no_reply',
+        decisionReason: 'default_full_reply',
+        confidence: 1,
+        metadata: {
+          motivo: 'max_mensajes_agente_sin_cliente_real',
+          n_agente: mensajesAgente.length,
+          n_pitch: mensajesAgentePitch.length,
+        },
+      })
+      return
+    }
+
+    const esAutoCliente =
+      pareceMensajeAutomaticoNegocio(mensajeCombinado) || esAutoReplyCortoNegocio(mensajeCombinado)
+
+    console.log(`[BG] esAutoCliente=${esAutoCliente} mensaje="${mensajeCombinado.slice(0, 80)}"`)
+
+    if (esAutoCliente) {
+      const yaMandoRespuestaFija = mensajesAgente.some(m =>
+        esPlantillaRespuestaOutboundAuto(m.mensaje as string | null | undefined)
+      )
+      if (yaMandoRespuestaFija) {
+        console.log('[BG] Ya mandó respuesta fija → skip')
+        return
+      }
+      await enviarTwilioYGuardar(
+        supabase,
+        p.telefono,
+        p.leadId,
+        RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
+        p.senderPhone,
+        p.senderId
+      )
+      await registrarEventoConversacional({
+        leadId: p.leadId,
+        telefono: p.telefono,
+        eventName: 'outbound_auto_business_reply_early',
+        decisionAction: 'full_reply',
+        decisionReason: 'default_full_reply',
+        confidence: 1,
+        metadata: { source: 'twilio_webhook_bg' },
+      })
+      return
+    }
+  }
+
+  // ── Motor de decisión ──
+  const configConversacional = await obtenerConfigConversacional()
+  const historialParaDecision = filasHistorial.map(h => ({
+    rol: h.rol as 'agente' | 'cliente',
+    mensaje: h.mensaje,
+  }))
+  const decision = decidirRespuestaConversacional({
+    message: mensajeCombinado,
+    history: historialParaDecision,
+    config: configConversacional,
+  })
+
+  console.log(
+    `[BG] Decision → action=${decision.action} reason=${decision.reason} confidence=${decision.confidence}`
+  )
+
+  await registrarEventoConversacional({
+    leadId: p.leadId,
+    telefono: p.telefono,
+    eventName: decision.eventName,
+    decisionAction: decision.action,
+    decisionReason: decision.reason,
+    confidence: decision.confidence,
+    metadata: { origen: p.leadOrigen, tipo_mensaje: p.tipoMensaje },
+  })
+
+  // Desactivar agente si opt-out explícito
+  if (decision.disableAgent) {
+    await supabase
+      .from('leads')
+      .update({
+        estado: 'no_interesado',
+        agente_activo: false,
+        conversacion_cerrada: true,
+        conversacion_cerrada_at: new Date().toISOString(),
+      })
+      .eq('id', p.leadId)
+    return
+  }
+
+  // Cerrar / reabrir conversación según decisión
+  if (decision.closeConversation) {
+    await supabase
+      .from('leads')
+      .update({
+        conversacion_cerrada: true,
+        conversacion_cerrada_at: new Date().toISOString(),
+      })
+      .eq('id', p.leadId)
+  }
+
+  // Override: auto-reply de negocio outbound que llegó después de la decisión
+  const comboAutoCliente =
+    pareceMensajeAutomaticoNegocio(mensajeCombinado) || esAutoReplyCortoNegocio(mensajeCombinado)
+  if (
+    p.leadOrigen === 'outbound' &&
+    !clienteYaMandoAlgoNoAutomatico(filasHistorial) &&
+    comboAutoCliente &&
+    !decision.disableAgent &&
+    !decision.closeConversation &&
+    decision.action === 'no_reply'
+  ) {
+    const mensajesAgenteLista = filasHistorial.filter(h => h.rol === 'agente')
+    const yaMandoPlantillaTwilio = mensajesAgenteLista.some(m =>
+      esPlantillaRespuestaOutboundAuto(m.mensaje as string | null | undefined)
+    )
+    if (!yaMandoPlantillaTwilio) {
+      await enviarTwilioYGuardar(
+        supabase,
+        p.telefono,
+        p.leadId,
+        RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
+        p.senderPhone,
+        p.senderId
+      )
+      await registrarEventoConversacional({
+        leadId: p.leadId,
+        telefono: p.telefono,
+        eventName: 'outbound_auto_business_reply_decision_override',
+        decisionAction: 'full_reply',
+        decisionReason: decision.reason,
+        confidence: decision.confidence,
+        metadata: { source: 'twilio_webhook_bg', prev_action: 'no_reply' },
+      })
+      return
+    }
+  }
+
+  if (decision.action === 'no_reply' || decision.action === 'close_conversation') {
+    return
+  }
+
+  if (decision.action === 'micro_ack') {
+    const microAck = 'Gracias por el mensaje. Si querés, te paso el siguiente paso en 1 línea.'
+    await enviarTwilioYGuardar(supabase, p.telefono, p.leadId, microAck, p.senderPhone, p.senderId)
+    return
+  }
+
+  if (decision.action === 'handoff_human') {
+    const handoffMsg =
+      'Perfecto. Te deriva una persona del equipo de APEX para seguir esto con vos. Si querés, te toman el caso por acá.'
+    await enviarTwilioYGuardar(supabase, p.telefono, p.leadId, handoffMsg, p.senderPhone, p.senderId)
+    return
+  }
+
+  if (decision.action === 'gatekeeper_relay') {
+    await enviarTwilioYGuardar(
+      supabase,
+      p.telefono,
+      p.leadId,
+      RESPUESTA_GATEKEEPER,
+      p.senderPhone,
+      p.senderId
+    )
+    return
+  }
+
+  if (decision.action === 'confirm_close') {
+    const closeMsg = 'Genial. Te escribe alguien del equipo a la brevedad para coordinar los detalles.'
+    const ultAgent = [...filasHistorial].reverse().find(h => h.rol === 'agente')?.mensaje
+    const marcarBoceto = debePersistirBocetoAceptado(decision.eventName, ultAgent)
+    const ahora = new Date().toISOString()
+    await enviarTwilioYGuardar(supabase, p.telefono, p.leadId, closeMsg, p.senderPhone, p.senderId)
+    await supabase
+      .from('leads')
+      .update({
+        estado: 'interesado',
+        conversacion_cerrada: true,
+        conversacion_cerrada_at: ahora,
+        ...(marcarBoceto
+          ? { boceto_aceptado: true, boceto_aceptado_at: ahora }
+          : {}),
+      })
+      .eq('id', p.leadId)
+    return
+  }
+
+  // ── Claude (full_reply) ──
+  const anthropicKey = process.env.ANTHROPIC_API_KEY
+  if (!anthropicKey) {
+    throw new Error('ANTHROPIC_API_KEY no configurada')
+  }
+
+  const [{ data: apexInfo }, { data: demosActivos }] = await Promise.all([
+    supabase.from('apex_info').select('categoria, titulo, contenido').eq('activo', true),
+    supabase.from('demos_rubro').select('url, strong_keywords').eq('active', true),
+  ])
+
+  // Re-cargar lead actualizado (puede haber cambiado conversacion_cerrada, etc.)
+  const { data: leadActualizado } = await supabase
+    .from('leads')
+    .select('*')
+    .eq('id', p.leadId)
+    .single()
+
+  const rubroLead = String(leadActualizado?.rubro ?? '')
+  const descripcionLead = leadActualizado?.descripcion as string | null | undefined
+  const nombreLead = String(leadActualizado?.nombre ?? '')
+  const zonaLead = String(leadActualizado?.zona ?? '')
+  const mensajeInicialLead = leadActualizado?.mensaje_inicial as string | null | undefined
+  const isClosingState = leadActualizado?.conversacion_cerrada === true
+
+  const verticalLead = detectarVertical(rubroLead, descripcionLead)
+
+  const rubroNorm = rubroLead.toLowerCase()
+  const demoMatch = (demosActivos ?? []).find(d =>
+    (d.strong_keywords as string[]).some(kw => rubroNorm.includes(kw.toLowerCase().trim()))
+  )
+  const demoBloque = demoMatch
+    ? `[DEMO] Demo de sitio web para mostrar al cliente\nURL: ${demoMatch.url}\nUsá esta URL cuando el cliente quiera ver un ejemplo o pida la demo. Mostrala de forma natural, sin forzar.`
+    : ''
+
+  const apexInfoTextoRaw = [
+    ...(apexInfo ?? []).map(info => `[${info.categoria.toUpperCase()}] ${info.titulo}\n${info.contenido}`),
+    ...(demoBloque ? [demoBloque] : []),
+  ].join('\n\n')
+
+  const apexInfoSanitizado = sanitizarApexInfoPorVertical(apexInfoTextoRaw, verticalLead)
+  const apexInfoTexto = apexInfoSanitizado.texto
+
+  const ultimosMensajesAgente = filasHistorial
+    .filter(h => h.rol === 'agente')
+    .slice(-3)
+    .reverse()
+    .map(h => h.mensaje)
+    .filter(Boolean) as string[]
+
+  const resultadoEco = extraerContenidoNuevo(mensajeCombinado, ultimosMensajesAgente)
+  if (resultadoEco.eraEco && !resultadoEco.texto) {
+    console.log('[BG] Eco detectado y sin contenido nuevo → skip')
+    return
+  }
+  const mensajeEfectivo = resultadoEco.eraEco ? resultadoEco.texto : mensajeCombinado
+
+  const contextoLead = {
+    nombre: nombreLead,
+    rubro: rubroLead,
+    zona: zonaLead,
+    descripcion: descripcionLead,
+    mensajeInicial: mensajeInicialLead,
+  }
+
+  const systemPrompt = buildAgentPrompt(
+    p.leadOrigen as 'outbound' | 'inbound',
+    apexInfoTexto,
+    '',
+    contextoLead
+  )
+  const userContent = buildUserMessageWithLeadContext(mensajeEfectivo, contextoLead)
+
+  const historialPrevio = filasHistorial.filter(h => {
+    if (h.rol === 'cliente' && h.timestamp > desdeUltimoAgente) return false
+    return true
+  })
+
+  const mensajesHistorial: Anthropic.MessageParam[] = []
+  for (const h of historialPrevio) {
+    const role: 'user' | 'assistant' = h.rol === 'agente' ? 'assistant' : 'user'
+    const last = mensajesHistorial[mensajesHistorial.length - 1]
+    if (last && last.role === role) {
+      last.content = (last.content as string) + '\n' + h.mensaje
+    } else {
+      mensajesHistorial.push({ role, content: h.mensaje as string })
+    }
+  }
+
+  while (mensajesHistorial.length > 0 && mensajesHistorial[0].role === 'assistant') {
+    mensajesHistorial.shift()
+  }
+
+  const mensajesCompletos: Anthropic.MessageParam[] = [
+    ...mensajesHistorial,
+    { role: 'user', content: userContent },
+  ]
+
+  const client = new Anthropic({ apiKey: anthropicKey })
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-5',
+    max_tokens: isClosingState ? 60 : 500,
+    ...(isClosingState && { temperature: 0.2 }),
+    system: systemPrompt,
+    messages: mensajesCompletos,
+    tools: [END_CONVERSATION_TOOL],
+    tool_choice: { type: 'auto' },
+  })
+
+  let respuestaRaw: string
+  let dealClosedByTool = false
+
+  if (response.stop_reason === 'tool_use') {
+    const toolUse = response.content.find(
+      (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use'
+    )
+    if (toolUse?.name === 'end_conversation') {
+      const input = toolUse.input as { final_message: string; reason: string }
+      respuestaRaw = input.final_message ?? ''
+      dealClosedByTool = true
+      if (input.reason === 'deal_closed') {
+        await supabase
+          .from('leads')
+          .update({
+            estado: 'cerrado',
+            conversacion_cerrada: true,
+            conversacion_cerrada_at: new Date().toISOString(),
+          })
+          .eq('id', p.leadId)
+      } else if (input.reason === 'goodbye') {
+        await supabase
+          .from('leads')
+          .update({
+            conversacion_cerrada: true,
+            conversacion_cerrada_at: new Date().toISOString(),
+          })
+          .eq('id', p.leadId)
+      }
+    } else {
+      respuestaRaw = ''
+    }
+  } else {
+    respuestaRaw = response.content[0]?.type === 'text' ? response.content[0].text : ''
+  }
+
+  if (isClosingState && !dealClosedByTool && respuestaRaw.includes('?')) {
+    respuestaRaw = 'Cualquier cosa por acá estamos.'
+  }
+
+  let chequeo: ReturnType<typeof auditarCoherenciaRubro>
+
+  if (dealClosedByTool) {
+    chequeo = { texto: respuestaRaw, verticalLead: 'generico' as const, intrusa: null, ok: true }
+  } else {
+    chequeo = auditarCoherenciaRubro(respuestaRaw, rubroLead, descripcionLead)
+
+    if (chequeo.texto && chequeo.intrusa) {
+      const regenInstruccion = instruccionRegeneracion({
+        verticalLead: chequeo.verticalLead,
+        intrusa: chequeo.intrusa,
+        textoAnterior: chequeo.texto,
+        rubroLiteral: rubroLead,
+        nombre: nombreLead,
+      })
+
+      try {
+        const retry = await client.messages.create({
+          model: 'claude-sonnet-4-5',
+          max_tokens: 500,
+          system: systemPrompt,
+          messages: [
+            ...mensajesCompletos,
+            { role: 'assistant', content: chequeo.texto },
+            { role: 'user', content: regenInstruccion },
+          ],
+        })
+        const retryRaw = retry.content[0].type === 'text' ? retry.content[0].text : ''
+        const retryChequeo = auditarCoherenciaRubro(retryRaw, rubroLead, descripcionLead)
+        chequeo = retryChequeo.ok
+          ? retryChequeo
+          : {
+              texto: fallbackSeguroPorVertical(chequeo.verticalLead, nombreLead),
+              verticalLead: chequeo.verticalLead,
+              intrusa: null,
+              ok: true,
+            }
+      } catch {
+        chequeo = {
+          texto: fallbackSeguroPorVertical(chequeo.verticalLead, nombreLead),
+          verticalLead: chequeo.verticalLead,
+          intrusa: null,
+          ok: true,
+        }
+      }
+    }
+  }
+
+  let respuesta = sanitizarRespuestaModelo(chequeo.texto)
+
+  if (!respuesta) {
+    console.log('[BG] Respuesta vacía tras guardrails → no enviamos')
+    return
+  }
+
+  if (!dealClosedByTool) {
+    const huboMensajeAgentePrevio = filasHistorial.some(h => h.rol === 'agente')
+    if (huboMensajeAgentePrevio) {
+      const guard = validateContinuationMessage(respuesta)
+      if (!guard.ok) {
+        const reparado = stripContinuationViolations(respuesta)
+        if (reparado) respuesta = reparado
+      }
+    }
+  }
+
+  await enviarTwilioYGuardar(supabase, p.telefono, p.leadId, respuesta, p.senderPhone, p.senderId)
+  await registrarEventoConversacional({
+    leadId: p.leadId,
+    telefono: p.telefono,
+    eventName: 'full_reply_sent',
+    decisionAction: 'full_reply',
+    decisionReason: decision.reason,
+    confidence: decision.confidence,
+    metadata: { length: respuesta.length, from_background: true },
+  })
+
+  console.log(`[BG] Respuesta enviada OK (${respuesta.length} chars) al lead ${p.leadId}`)
+}
+
+// ─── Handler principal ─────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   let form: FormData
   try {
@@ -137,13 +764,23 @@ export async function POST(req: NextRequest) {
     return twimlOk()
   }
 
+  // ── Verificación de firma Twilio ──
   if (process.env.NODE_ENV === 'production') {
     const twilioSignature = req.headers.get('x-twilio-signature') ?? ''
     const authToken = process.env.TWILIO_AUTH_TOKEN ?? ''
-    const url = req.url
+
+    // Usar el header X-Forwarded-Proto y Host para reconstruir la URL correcta
+    // cuando Vercel está detrás de un proxy (evita firma inválida por URL distinta).
+    const proto = req.headers.get('x-forwarded-proto') ?? 'https'
+    const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? ''
+    const path = new URL(req.url).pathname + new URL(req.url).search
+    const urlParaFirma = host ? `${proto}://${host}${path}` : req.url
+
     const params: Record<string, string> = {}
     form.forEach((value, key) => { params[key] = String(value) })
-    if (!twilioSignature || !verifyTwilioSignature(authToken, twilioSignature, url, params)) {
+
+    if (!twilioSignature || !verifyTwilioSignature(authToken, twilioSignature, urlParaFirma, params)) {
+      console.warn('[Twilio Webhook] Firma inválida — url usada para verificar:', urlParaFirma)
       return new Response('<Response/>', { status: 403, headers: { 'Content-Type': 'text/xml' } })
     }
   }
@@ -155,9 +792,6 @@ export async function POST(req: NextRequest) {
   const mediaContentType = (form.get('MediaContentType0') as string | null) ?? ''
   const mediaUrl0 = (form.get('MediaUrl0') as string | null)?.trim() ?? ''
 
-  // Twilio format: "whatsapp:+5491124843094" → "5491124843094"
-  // Ambos se normalizan sin "+": así el lookup en senders siempre coincide
-  // independientemente de si phone_number en DB tiene o no el prefijo "+".
   const telefono = rawFrom?.replace('whatsapp:', '').replace(/^\+/, '') ?? ''
   const nuestroNumero = rawTo?.replace('whatsapp:', '').replace(/^\+/, '') ?? process.env.TWILIO_WHATSAPP_NUMBER!
 
@@ -169,7 +803,7 @@ export async function POST(req: NextRequest) {
 
   const supabase = createSupabaseServer()
 
-  // Lookup sender — también usamos para filtrar mensajes propios
+  // Lookup sender
   const { data: senderData } = await supabase
     .from('senders')
     .select('id, alias, phone_number, activo')
@@ -180,8 +814,7 @@ export async function POST(req: NextRequest) {
   const senderId = senderData?.id ?? null
   const senderPhone = senderData?.phone_number ?? nuestroNumero
 
-  // Solo ignorar eco real (mismo remitente y destino en dígitos) — no bloquear
-  // campañas de prueba entre dos líneas WABA distintas registradas en senders.
+  // Ignorar eco (mismo From y To en dígitos)
   const fromD = soloDigitos(telefono)
   const toD = soloDigitos(nuestroNumero)
   if (fromD && toD && fromD === toD) {
@@ -201,6 +834,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Buscar lead
   const telsMismaLinea = variantesTelefonoMismaLinea(telefono)
   const { data: candsMismaLinea } = await supabase
     .from('leads')
@@ -246,13 +880,13 @@ export async function POST(req: NextRequest) {
     return twimlOk()
   }
 
-  // Anclar el sender al lead si todavía no tiene uno asignado.
-  // Esto garantiza que todas las respuestas futuras salgan por el mismo canal.
+  // Anclar sender al lead si corresponde
   if (senderId && !lead.sender_id) {
     await supabase.from('leads').update({ sender_id: senderId }).eq('id', lead.id)
     lead = { ...lead, sender_id: senderId }
   }
 
+  // ── Guardar mensaje entrante en DB ──
   const { data: insertadoMsg } = await supabase
     .from('conversaciones')
     .insert({
@@ -274,547 +908,28 @@ export async function POST(req: NextRequest) {
     await supabase.from('leads').update({ estado: 'respondio' }).eq('id', lead.id)
   }
 
-  const { data: configAgente } = await supabase
-    .from('configuracion')
-    .select('valor')
-    .eq('clave', 'agente_activo')
-    .single()
-
-  const agenteGlobalOn = configAgente?.valor === 'true'
-  const agenteLeadOn = !!lead.agente_activo
-
-  if (!agenteGlobalOn || !agenteLeadOn) {
-    return twimlOk()
+  // ── RESPUESTA INMEDIATA A TWILIO (antes del timeout de 10s) ──
+  // El procesamiento pesado (debounce + Claude) corre en background via waitUntil.
+  const bgParams: BgParams = {
+    telefono,
+    nuestroNumero,
+    mensaje,
+    tipoMensaje,
+    leadId: lead.id,
+    leadOrigen: lead.origen ?? 'outbound',
+    leadAgentActivo: !!lead.agente_activo,
+    senderId,
+    senderPhone,
+    miMsgTimestamp,
   }
 
-  const desdeManual = new Date(Date.now() - VENTANA_RESPUESTA_MANUAL_MS).toISOString()
-  const { data: recienteManual } = await supabase
-    .from('conversaciones')
-    .select('id')
-    .eq('lead_id', lead.id)
-    .eq('rol', 'agente')
-    .eq('manual', true)
-    .gte('timestamp', desdeManual)
-    .limit(1)
-    .maybeSingle()
-
-  if (recienteManual) {
-    return twimlOk()
-  }
-
-  // Imagen/audio: se muestran en Inbox (media_url + proxy). No respondemos con el agente
-  // (evita alucinar sin visión) ni enviamos un fallback automático al cliente.
-  if (tipoMensaje !== 'texto') {
-    return twimlOk()
-  }
-
-  // Debounce 6s para agrupar mensajes consecutivos
-  await new Promise<void>(resolve => setTimeout(resolve, DEBOUNCE_MS))
-
-  if (miMsgTimestamp) {
-    const { data: msgPosterior } = await supabase
-      .from('conversaciones')
-      .select('id')
-      .eq('lead_id', lead.id)
-      .eq('rol', 'cliente')
-      .gt('timestamp', miMsgTimestamp)
-      .limit(1)
-      .maybeSingle()
-
-    if (msgPosterior) {
-      return twimlOk()
-    }
-  }
-
-  const lockAdquirido = await adquirirLock(supabase, lead.id)
-  if (!lockAdquirido) {
-    console.log('[Twilio] Lock no disponible para lead', lead.id, '— skipping')
-    return twimlOk()
-  }
-
-  try {
-    const { data: ultimoAgenteMensaje } = await supabase
-      .from('conversaciones')
-      .select('timestamp')
-      .eq('lead_id', lead.id)
-      .eq('rol', 'agente')
-      .order('timestamp', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    const desdeUltimoAgente = ultimoAgenteMensaje?.timestamp ?? '1970-01-01T00:00:00.000Z'
-
-    const { data: pendientes } = await supabase
-      .from('conversaciones')
-      .select('mensaje')
-      .eq('lead_id', lead.id)
-      .eq('rol', 'cliente')
-      .eq('tipo_mensaje', 'texto')
-      .gt('timestamp', desdeUltimoAgente)
-      .order('timestamp', { ascending: true })
-
-    const mensajeCombinado =
-      (pendientes ?? [])
-        .map(m => m.mensaje)
-        .filter(Boolean)
-        .join('\n') || mensaje
-
-    const { data: historialRows } = await supabase
-      .from('conversaciones')
-      .select('rol, mensaje, timestamp')
-      .eq('lead_id', lead.id)
-      .order('timestamp', { ascending: true })
-      .limit(60)
-
-    const filasHistorial = historialRows ?? []
-
-    // Outbound sin mensaje "humano" real: un solo mensaje nuestro extra (plantilla + 1 respuesta).
-    // Evita 5–10 pitches LLM cuando WA Business manda burbujas con "?" o menús en trozos.
-    const outboundSinHumanoReal =
-      lead.origen === 'outbound' && !clienteYaMandoAlgoNoAutomatico(filasHistorial)
-
-    if (outboundSinHumanoReal) {
-      const mensajesAgente = filasHistorial.filter(h => h.rol === 'agente')
-      const mensajesAgentePitch = mensajesAgente.filter(
-        h => !esPlantillaRespuestaOutboundAuto(h.mensaje as string | null | undefined)
-      )
-      if (mensajesAgentePitch.length >= 2) {
-        await registrarEventoConversacional({
-          leadId: lead.id,
-          telefono,
-          eventName: 'outbound_cap_sin_humano',
-          decisionAction: 'no_reply',
-          decisionReason: 'default_full_reply',
-          confidence: 1,
-          metadata: {
-            motivo: 'max_mensajes_agente_sin_cliente_real',
-            n_agente: mensajesAgente.length,
-            n_pitch: mensajesAgentePitch.length,
-          },
-        })
-        return twimlOk()
-      }
-
-      const esAutoCliente =
-        pareceMensajeAutomaticoNegocio(mensajeCombinado) || esAutoReplyCortoNegocio(mensajeCombinado)
-      if (esAutoCliente) {
-        const yaMandoRespuestaFija = mensajesAgente.some(m =>
-          esPlantillaRespuestaOutboundAuto(m.mensaje as string | null | undefined)
-        )
-        if (yaMandoRespuestaFija) {
-          return twimlOk()
-        }
-        try {
-          await enviarTwilioYGuardar(
-            supabase,
-            telefono,
-            lead.id,
-            RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
-            senderPhone,
-            senderId
-          )
-          await registrarEventoConversacional({
-            leadId: lead.id,
-            telefono,
-            eventName: 'outbound_auto_business_reply_early',
-            decisionAction: 'full_reply',
-            decisionReason: 'default_full_reply',
-            confidence: 1,
-            metadata: { source: 'twilio_webhook_pre_decision' },
-          })
-        } catch (e) {
-          console.error('[Twilio] outbound auto early error:', e)
-        }
-        return twimlOk()
-      }
-    }
-
-    const configConversacional = await obtenerConfigConversacional()
-    // Incluir agente+cliente: isCommitToProposal necesita el último mensaje del agente.
-    const historialParaDecision = filasHistorial.map(h => ({
-      rol: h.rol as 'agente' | 'cliente',
-      mensaje: h.mensaje,
-    }))
-    const decision = decidirRespuestaConversacional({
-      message: mensajeCombinado,
-      history: historialParaDecision,
-      config: configConversacional,
+  waitUntil(
+    procesarEnBackground(bgParams).catch(err => {
+      console.error('[Twilio] Error no capturado en procesarEnBackground:', err)
     })
+  )
 
-    await registrarEventoConversacional({
-      leadId: lead.id,
-      telefono,
-      eventName: decision.eventName,
-      decisionAction: decision.action,
-      decisionReason: decision.reason,
-      confidence: decision.confidence,
-      metadata: { origen: lead.origen, tipo_mensaje: tipoMensaje },
-    })
-
-    if (decision.disableAgent) {
-      await supabase
-        .from('leads')
-        .update({
-          estado: 'no_interesado',
-          agente_activo: false,
-          conversacion_cerrada: true,
-          conversacion_cerrada_at: new Date().toISOString(),
-        })
-        .eq('id', lead.id)
-      return twimlOk()
-    }
-
-    if (decision.closeConversation) {
-      await supabase
-        .from('leads')
-        .update({
-          conversacion_cerrada: true,
-          conversacion_cerrada_at: new Date().toISOString(),
-        })
-        .eq('id', lead.id)
-    } else if (lead.conversacion_cerrada) {
-      await supabase
-        .from('leads')
-        .update({ conversacion_cerrada: false, conversacion_cerrada_at: null })
-        .eq('id', lead.id)
-    }
-
-    const comboAutoCliente =
-      pareceMensajeAutomaticoNegocio(mensajeCombinado) || esAutoReplyCortoNegocio(mensajeCombinado)
-    if (
-      lead.origen === 'outbound' &&
-      !clienteYaMandoAlgoNoAutomatico(filasHistorial) &&
-      comboAutoCliente &&
-      !decision.disableAgent &&
-      !decision.closeConversation &&
-      decision.action === 'no_reply'
-    ) {
-      const mensajesAgenteLista = filasHistorial.filter(h => h.rol === 'agente')
-      const yaMandoPlantillaTwilio = mensajesAgenteLista.some(m =>
-        esPlantillaRespuestaOutboundAuto(m.mensaje as string | null | undefined)
-      )
-      if (!yaMandoPlantillaTwilio) {
-        try {
-          await enviarTwilioYGuardar(
-            supabase,
-            telefono,
-            lead.id,
-            RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
-            senderPhone,
-            senderId
-          )
-          await registrarEventoConversacional({
-            leadId: lead.id,
-            telefono,
-            eventName: 'outbound_auto_business_reply_decision_override',
-            decisionAction: 'full_reply',
-            decisionReason: decision.reason,
-            confidence: decision.confidence,
-            metadata: { source: 'twilio_webhook', prev_action: 'no_reply' },
-          })
-        } catch (e) {
-          console.error('[Twilio] outbound auto override error:', e)
-        }
-        return twimlOk()
-      }
-    }
-
-    if (decision.action === 'no_reply' || decision.action === 'close_conversation') {
-      return twimlOk()
-    }
-
-    if (decision.action === 'micro_ack') {
-      const microAck = 'Gracias por el mensaje. Si querés, te paso el siguiente paso en 1 línea.'
-      try {
-        await enviarTwilioYGuardar(supabase, telefono, lead.id, microAck, senderPhone, senderId)
-      } catch (e) {
-        console.error('[Twilio] micro_ack error:', e)
-      }
-      return twimlOk()
-    }
-
-    if (decision.action === 'handoff_human') {
-      const handoffMsg =
-        'Perfecto. Te deriva una persona del equipo de APEX para seguir esto con vos. Si querés, te toman el caso por acá.'
-      try {
-        await enviarTwilioYGuardar(supabase, telefono, lead.id, handoffMsg, senderPhone, senderId)
-      } catch (e) {
-        console.error('[Twilio] handoff error:', e)
-      }
-      return twimlOk()
-    }
-
-    if (decision.action === 'gatekeeper_relay') {
-      try {
-        await enviarTwilioYGuardar(
-          supabase,
-          telefono,
-          lead.id,
-          RESPUESTA_GATEKEEPER,
-          senderPhone,
-          senderId
-        )
-      } catch (e) {
-        console.error('[Twilio] gatekeeper_relay error:', e)
-      }
-      return twimlOk()
-    }
-
-    if (decision.action === 'confirm_close') {
-      const closeMsg = 'Genial. Te escribe alguien del equipo a la brevedad para coordinar los detalles.'
-      const ultAgent = [...filasHistorial].reverse().find(h => h.rol === 'agente')?.mensaje
-      const marcarBoceto = debePersistirBocetoAceptado(decision.eventName, ultAgent)
-      const ahora = new Date().toISOString()
-      try {
-        await enviarTwilioYGuardar(supabase, telefono, lead.id, closeMsg, senderPhone, senderId)
-        await supabase
-          .from('leads')
-          .update({
-            estado: 'interesado',
-            conversacion_cerrada: true,
-            conversacion_cerrada_at: ahora,
-            ...(marcarBoceto
-              ? { boceto_aceptado: true, boceto_aceptado_at: ahora }
-              : {}),
-          })
-          .eq('id', lead.id)
-      } catch (e) {
-        console.error('[Twilio] confirm_close error:', e)
-      }
-      return twimlOk()
-    }
-
-    const anthropicKey = process.env.ANTHROPIC_API_KEY
-    if (!anthropicKey) {
-      console.error('[Twilio] Falta ANTHROPIC_API_KEY')
-      return twimlOk()
-    }
-
-    const [{ data: apexInfo }, { data: demosActivos }] = await Promise.all([
-      supabase.from('apex_info').select('categoria, titulo, contenido').eq('activo', true),
-      supabase.from('demos_rubro').select('url, strong_keywords').eq('active', true),
-    ])
-
-    const verticalLead = detectarVertical(
-      String(lead.rubro ?? ''),
-      lead.descripcion as string | null | undefined
-    )
-
-    // Buscar demo que matchee el rubro del lead
-    const rubroNorm = String(lead.rubro ?? '').toLowerCase()
-    const demoMatch = (demosActivos ?? []).find(d =>
-      (d.strong_keywords as string[]).some(kw => rubroNorm.includes(kw.toLowerCase().trim()))
-    )
-    const demoBloque = demoMatch
-      ? `[DEMO] Demo de sitio web para mostrar al cliente\nURL: ${demoMatch.url}\nUsá esta URL cuando el cliente quiera ver un ejemplo o pida la demo. Mostrala de forma natural, sin forzar.`
-      : ''
-
-    const apexInfoTextoRaw = [
-      ...(apexInfo ?? []).map(info => `[${info.categoria.toUpperCase()}] ${info.titulo}\n${info.contenido}`),
-      ...(demoBloque ? [demoBloque] : []),
-    ].join('\n\n')
-
-    const apexInfoSanitizado = sanitizarApexInfoPorVertical(apexInfoTextoRaw, verticalLead)
-    const apexInfoTexto = apexInfoSanitizado.texto
-
-    const ultimosMensajesAgente = filasHistorial
-      .filter(h => h.rol === 'agente')
-      .slice(-3)
-      .reverse()
-      .map(h => h.mensaje)
-      .filter(Boolean) as string[]
-
-    const resultadoEco = extraerContenidoNuevo(mensajeCombinado, ultimosMensajesAgente)
-    if (resultadoEco.eraEco && !resultadoEco.texto) {
-      return twimlOk()
-    }
-    const mensajeEfectivo = resultadoEco.eraEco ? resultadoEco.texto : mensajeCombinado
-
-    const contextoLead = {
-      nombre: String(lead.nombre ?? ''),
-      rubro: String(lead.rubro ?? ''),
-      zona: String(lead.zona ?? ''),
-      descripcion: lead.descripcion as string | null | undefined,
-      mensajeInicial: lead.mensaje_inicial as string | null | undefined,
-    }
-
-    const systemPrompt = buildAgentPrompt(
-      lead.origen as 'outbound' | 'inbound',
-      apexInfoTexto,
-      '',
-      contextoLead
-    )
-    const userContent = buildUserMessageWithLeadContext(mensajeEfectivo, contextoLead)
-
-    const historialPrevio = filasHistorial.filter(h => {
-      if (h.rol === 'cliente' && h.timestamp > desdeUltimoAgente) return false
-      return true
-    })
-
-    const mensajesHistorial: Anthropic.MessageParam[] = []
-    for (const h of historialPrevio) {
-      const role: 'user' | 'assistant' = h.rol === 'agente' ? 'assistant' : 'user'
-      const last = mensajesHistorial[mensajesHistorial.length - 1]
-      if (last && last.role === role) {
-        last.content = (last.content as string) + '\n' + h.mensaje
-      } else {
-        mensajesHistorial.push({ role, content: h.mensaje as string })
-      }
-    }
-
-    while (mensajesHistorial.length > 0 && mensajesHistorial[0].role === 'assistant') {
-      mensajesHistorial.shift()
-    }
-
-    const mensajesCompletos: Anthropic.MessageParam[] = [
-      ...mensajesHistorial,
-      { role: 'user', content: userContent },
-    ]
-
-    const client = new Anthropic({ apiKey: anthropicKey })
-
-    const isClosingState = lead.conversacion_cerrada === true
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-5',
-      max_tokens: isClosingState ? 60 : 500,
-      ...(isClosingState && { temperature: 0.2 }),
-      system: systemPrompt,
-      messages: mensajesCompletos,
-      tools: [END_CONVERSATION_TOOL],
-      tool_choice: { type: 'auto' },
-    })
-
-    let respuestaRaw: string
-    let dealClosedByTool = false
-
-    if (response.stop_reason === 'tool_use') {
-      const toolUse = response.content.find(
-        (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use'
-      )
-      if (toolUse?.name === 'end_conversation') {
-        const input = toolUse.input as { final_message: string; reason: string }
-        respuestaRaw = input.final_message ?? ''
-        dealClosedByTool = true
-        if (input.reason === 'deal_closed') {
-          await supabase
-            .from('leads')
-            .update({
-              estado: 'cerrado',
-              conversacion_cerrada: true,
-              conversacion_cerrada_at: new Date().toISOString(),
-            })
-            .eq('id', lead.id)
-        } else if (input.reason === 'goodbye') {
-          await supabase
-            .from('leads')
-            .update({
-              conversacion_cerrada: true,
-              conversacion_cerrada_at: new Date().toISOString(),
-            })
-            .eq('id', lead.id)
-        }
-      } else {
-        respuestaRaw = ''
-      }
-    } else {
-      respuestaRaw = response.content[0]?.type === 'text' ? response.content[0].text : ''
-    }
-
-    if (isClosingState && !dealClosedByTool && respuestaRaw.includes('?')) {
-      respuestaRaw = 'Cualquier cosa por acá estamos.'
-    }
-
-    let chequeo: ReturnType<typeof auditarCoherenciaRubro>
-
-    if (dealClosedByTool) {
-      chequeo = { texto: respuestaRaw, verticalLead: 'generico' as const, intrusa: null, ok: true }
-    } else {
-      chequeo = auditarCoherenciaRubro(
-        respuestaRaw,
-        String(lead.rubro ?? ''),
-        lead.descripcion as string | null | undefined
-      )
-
-      if (chequeo.texto && chequeo.intrusa) {
-        const regenInstruccion = instruccionRegeneracion({
-          verticalLead: chequeo.verticalLead,
-          intrusa: chequeo.intrusa,
-          textoAnterior: chequeo.texto,
-          rubroLiteral: String(lead.rubro ?? ''),
-          nombre: String(lead.nombre ?? ''),
-        })
-
-        try {
-          const retry = await client.messages.create({
-            model: 'claude-sonnet-4-5',
-            max_tokens: 500,
-            system: systemPrompt,
-            messages: [
-              ...mensajesCompletos,
-              { role: 'assistant', content: chequeo.texto },
-              { role: 'user', content: regenInstruccion },
-            ],
-          })
-          const retryRaw = retry.content[0].type === 'text' ? retry.content[0].text : ''
-          const retryChequeo = auditarCoherenciaRubro(
-            retryRaw,
-            String(lead.rubro ?? ''),
-            lead.descripcion as string | null | undefined
-          )
-          chequeo = retryChequeo.ok
-            ? retryChequeo
-            : {
-                texto: fallbackSeguroPorVertical(chequeo.verticalLead, String(lead.nombre ?? '')),
-                verticalLead: chequeo.verticalLead,
-                intrusa: null,
-                ok: true,
-              }
-        } catch {
-          chequeo = {
-            texto: fallbackSeguroPorVertical(chequeo.verticalLead, String(lead.nombre ?? '')),
-            verticalLead: chequeo.verticalLead,
-            intrusa: null,
-            ok: true,
-          }
-        }
-      }
-    }
-
-    let respuesta = sanitizarRespuestaModelo(chequeo.texto)
-
-    if (!respuesta) {
-      return twimlOk()
-    }
-
-    if (!dealClosedByTool) {
-      const huboMensajeAgentePrevio = filasHistorial.some(h => h.rol === 'agente')
-      if (huboMensajeAgentePrevio) {
-        const guard = validateContinuationMessage(respuesta)
-        if (!guard.ok) {
-          const reparado = stripContinuationViolations(respuesta)
-          if (reparado) respuesta = reparado
-        }
-      }
-    }
-
-    await enviarTwilioYGuardar(supabase, telefono, lead.id, respuesta, senderPhone, senderId)
-    await registrarEventoConversacional({
-      leadId: lead.id,
-      telefono,
-      eventName: 'full_reply_sent',
-      decisionAction: 'full_reply',
-      decisionReason: decision.reason,
-      confidence: decision.confidence,
-      metadata: { length: respuesta.length },
-    })
-
-    return twimlOk()
-  } catch (error) {
-    console.error('[Twilio] Error en agente:', error)
-    return twimlOk()
-  } finally {
-    await liberarLock(supabase, lead.id)
-  }
+  return twimlOk()
 }
 
 export async function GET() {
