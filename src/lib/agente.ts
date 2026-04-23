@@ -16,6 +16,7 @@ import {
   sanitizarRespuestaModelo,
 } from '@/lib/response-guardrails'
 import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
+import { MENSAJE_COMPROMISO_BOCETO_24H } from '@/lib/mensaje-boceto-24h'
 import { detectarVertical, sanitizarApexInfoPorVertical } from '@/lib/verticales'
 
 export async function generarRespuestaAgente({
@@ -167,10 +168,7 @@ export async function generarRespuestaAgente({
     }
 
     if (decision.action === 'handoff_human') {
-      return {
-        respuesta:
-          'Dale, ya tengo lo que necesito. En menos de 24 horas te mando el boceto para que lo veas, y si te gusta avanzamos.',
-      }
+      return { respuesta: MENSAJE_COMPROMISO_BOCETO_24H }
     }
 
     if (decision.action === 'confirm_close') {

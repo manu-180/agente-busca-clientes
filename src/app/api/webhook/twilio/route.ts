@@ -31,6 +31,7 @@ import {
 import { enviarMensajeTwilio } from '@/lib/twilio'
 import { normalizarTelefonoArg, soloDigitos, variantesTelefonoMismaLinea } from '@/lib/phone'
 import { debePersistirBocetoAceptado } from '@/lib/boceto-aceptacion'
+import { MENSAJE_COMPROMISO_BOCETO_24H } from '@/lib/mensaje-boceto-24h'
 
 // maxDuration = 30s → da margen para el background tras devolver TwiML
 export const maxDuration = 30
@@ -487,9 +488,31 @@ async function procesarConLock(
   }
 
   if (decision.action === 'handoff_human') {
-    const handoffMsg =
-      'Perfecto. Te deriva una persona del equipo de APEX para seguir esto con vos. Si querés, te toman el caso por acá.'
-    await enviarTwilioYGuardar(supabase, p.telefono, p.leadId, handoffMsg, p.senderPhone, p.senderId)
+    const ahora = new Date().toISOString()
+    await enviarTwilioYGuardar(
+      supabase,
+      p.telefono,
+      p.leadId,
+      MENSAJE_COMPROMISO_BOCETO_24H,
+      p.senderPhone,
+      p.senderId
+    )
+    await supabase
+      .from('leads')
+      .update({
+        boceto_prometido_24h: true,
+        boceto_prometido_24h_at: ahora,
+      })
+      .eq('id', p.leadId)
+    await registrarEventoConversacional({
+      leadId: p.leadId,
+      telefono: p.telefono,
+      eventName: 'handoff_human_sent',
+      decisionAction: 'handoff_human',
+      decisionReason: decision.reason,
+      confidence: decision.confidence,
+      metadata: { source: 'twilio_webhook_bg', boceto_24h: true },
+    })
     return
   }
 

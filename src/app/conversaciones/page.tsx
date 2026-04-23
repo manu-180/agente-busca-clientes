@@ -26,17 +26,11 @@ interface ConversacionGrupo {
   inicio_rol?: string | null
 }
 
-/** Cola "Enviar bocetos": marcado en DB o último mensaje del hilo = agente ofreciendo boceto (pendiente de envío/seguimiento). */
+/** Cola "Enviar bocetos": el webhook marcó `boceto_prometido_24h` al enviar el mensaje de compromiso 24h. */
 function enColaBocetos(g: ConversacionGrupo): boolean {
-  if (g.lead.boceto_aceptado === true) return true
-  const ult = g.mensajes?.length
-    ? [...g.mensajes].sort(
-        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-      ).pop()
-    : undefined
-  if (ult?.rol !== 'agente') return false
-  const t = (ult.mensaje || '').toLowerCase()
-  return t.includes('boceto') || t.includes('bocetos')
+  if (g.lead.boceto_prometido_24h !== true) return false
+  if (g.lead.conversacion_cerrada === true) return false
+  return true
 }
 
 function ts(msj: MensajeConSender | undefined): number {
@@ -141,9 +135,10 @@ export default function ConversacionesPage() {
   const [soloWeb, setSoloWeb] = useState(false)
   /** Leads cuyo estado ya indica respuesta del cliente. */
   const [soloRespond, setSoloRespond] = useState(false)
-  /** Cola operativa: boceto aceptado en DB o agente ofreciendo boceto en el último mensaje */
+  /** Cola operativa: compromiso de boceto 24h (flag en DB) */
   const [soloBocetos, setSoloBocetos] = useState(false)
   const [soloFavoritos, setSoloFavoritos] = useState(false)
+  const [marcandoBocetoEnviado, setMarcandoBocetoEnviado] = useState(false)
   const [favoritoIds, setFavoritoIds] = useState<Set<string>>(readFavoritoIdsFromStorage)
   const [menuCtx, setMenuCtx] = useState<{ leadId: string; x: number; y: number } | null>(null)
   const menuCtxRef = useRef<HTMLDivElement | null>(null)
@@ -463,6 +458,23 @@ export default function ConversacionesPage() {
     await cargarConversaciones()
   }
 
+  const marcarBocetoEnviado = async (leadId: string) => {
+    setMarcandoBocetoEnviado(true)
+    try {
+      const res = await fetch('/api/leads', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: leadId, boceto_prometido_24h: false }),
+      })
+      if (!res.ok) console.error('[Inbox] PATCH boceto enviado', res.status)
+      await cargarConversaciones()
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setMarcandoBocetoEnviado(false)
+    }
+  }
+
   const countBocetoPendientes = useMemo(
     () => grupos.filter(enColaBocetos).length,
     [grupos]
@@ -689,7 +701,7 @@ export default function ConversacionesPage() {
                   {busquedaNombre.trim()
                     ? 'Ninguna conversación coincide con tu búsqueda'
                     : soloBocetos
-                      ? 'No hay nada pendiente en la cola de bocetos'
+                      ? 'Nadie con boceto prometido (~24h) pendiente de enviar'
                       : soloWeb
                         ? 'No hay chats que empiecen con un mensaje del cliente'
                         : soloRespond
@@ -848,7 +860,18 @@ export default function ConversacionesPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap justify-end">
+                  {grupoActivo.lead.boceto_prometido_24h === true && (
+                    <button
+                      type="button"
+                      onClick={() => void marcarBocetoEnviado(grupoActivo.lead.id)}
+                      disabled={marcandoBocetoEnviado}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-apex-lime/20 text-apex-lime border border-apex-lime/50 hover:bg-apex-lime/30 transition-colors disabled:opacity-50"
+                    >
+                      {marcandoBocetoEnviado ? <Loader2 size={13} className="animate-spin" /> : <CheckCheck size={13} />}
+                      Boceto enviado
+                    </button>
+                  )}
                   <button
                     onClick={() => toggleAgente(grupoActivo.lead.id, !grupoActivo.lead.agente_activo)}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
