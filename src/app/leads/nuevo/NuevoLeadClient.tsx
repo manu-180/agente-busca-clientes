@@ -427,15 +427,16 @@ export default function NuevoLeadClient() {
         <div>
           <h1 className="font-syne font-bold text-3xl tracking-tight">Nuevo Lead</h1>
           <p className="text-apex-muted text-sm mt-1">
-            Cola automática de primer contacto: sin tope diario; solo ventana horaria Argentina{' '}
+            Cola automática de primer contacto: sin tope diario; el cron puede enviar las 24 h (hora
+            Argentina)
             {queueStats ? (
               <>
-                {queueStats.ventana_horaria.inicio}:00–{queueStats.ventana_horaria.fin}:59
+                {' '}
+                ({queueStats.ventana_horaria.inicio}:00–{queueStats.ventana_horaria.fin}:59).
               </>
             ) : (
-              '8:00–20:59'
+              ' (0:00–23:59).'
             )}
-            .
           </p>
         </div>
       </div>
@@ -452,7 +453,7 @@ export default function NuevoLeadClient() {
             <div className="text-2xl font-bold mt-1">{queueStats.enviados_hoy}</div>
           </div>
           <div className="bg-apex-card border border-apex-border rounded-lg p-3">
-            <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Ventana AR</div>
+            <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Horario envío</div>
             <div className="text-2xl font-bold mt-1">
               {queueStats.ventana_horaria.inicio}:00–{queueStats.ventana_horaria.fin}:59
               <span className="text-sm text-apex-muted font-mono ml-1">hs</span>
@@ -681,7 +682,8 @@ export default function NuevoLeadClient() {
                 </p>
               )}
               <p className="text-apex-muted text-xs mt-0.5">
-                Con el sistema activo y en horario (8:00–20:59 AR), el cron envía en cuanto haya cola; no hay tope diario de cantidad.
+                Con el sistema activo, el cron envía en cuanto haya cola (las 24 h); no hay tope diario de
+                cantidad.
               </p>
             </div>
           </div>

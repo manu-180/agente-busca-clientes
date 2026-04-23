@@ -5,8 +5,9 @@ export const dynamic = 'force-dynamic'
 
 const LEADS_TABLE = 'leads'
 const TZ_OFFSET_HOURS_AR = -3
-const HORA_INICIO_AR = 8
-const HORA_FIN_AR = 20
+/** Inicio/fin de la “ventana” solo para mostrar en UI: 24 h (sin límite en el cron). */
+const HORA_INICIO_AR = 0
+const HORA_FIN_AR = 23
 
 function inicioDelDiaArUtc(): Date {
   const ahoraUtcMs = Date.now()

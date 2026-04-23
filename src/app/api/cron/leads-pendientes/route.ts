@@ -9,13 +9,10 @@ export const maxDuration = 60
 const TZ_OFFSET_HOURS_AR = -3
 const LEADS_TABLE = 'leads'
 const MAX_REINTENTOS = 3
-const HORA_INICIO_AR = 8
-/** Última hora permitida (inclusive): se envía durante 8:00–20:59 AR. */
-const HORA_FIN_AR = 20
 
 // ─── Senders Twilio (primer contacto) ────────────────────────────────────────
-// Cadencia intMin/intMax en minutos; si ambos ≤ 0 no hay espera entre envíos
-// (solo aplica la ventana horaria). Sin tope diario de cantidad.
+// Cadencia intMin/intMax en minutos; si ambos ≤ 0 no hay espera entre envíos.
+// Sin ventana horaria (24 h) ni tope diario de cantidad.
 interface SenderDef {
   key: string
   provider: 'twilio'
@@ -369,17 +366,6 @@ export async function GET(req: NextRequest) {
     .from('configuracion').select('valor').eq('clave', 'first_contact_activo').maybeSingle()
   if (cfgActivo?.valor !== 'true') {
     return NextResponse.json({ ok: true, skipped: 'first_contact_inactivo' })
-  }
-
-  // Ventana horaria AR: 08:00–20:59 (inclusive; sin tope de cantidad).
-  const horaAr = new Date(Date.now() + TZ_OFFSET_HOURS_AR * 3600_000).getUTCHours()
-  if (horaAr < HORA_INICIO_AR || horaAr > HORA_FIN_AR) {
-    return NextResponse.json({
-      ok: true,
-      skipped: 'fuera_ventana_horaria',
-      hora_ar: horaAr,
-      ventana: `${String(HORA_INICIO_AR).padStart(2, '0')}:00–${String(HORA_FIN_AR).padStart(2, '0')}:59`,
-    })
   }
 
   // Cada sender corre de forma independiente y secuencial.
