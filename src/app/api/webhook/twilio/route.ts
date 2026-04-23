@@ -6,6 +6,7 @@ import { buildAgentPrompt, buildUserMessageWithLeadContext } from '@/lib/prompts
 import {
   clienteYaMandoAlgoNoAutomatico,
   esAutoReplyCortoNegocio,
+  esPlantillaRespuestaOutboundAuto,
   pareceMensajeAutomaticoNegocio,
   RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
 } from '@/lib/outbound-auto-reply'
@@ -25,8 +26,7 @@ import {
   validateContinuationMessage,
 } from '@/lib/message-guards'
 import { enviarMensajeTwilio } from '@/lib/twilio'
-import { normalizarTelefonoArg, variantesTelefonoMismaLinea } from '@/lib/phone'
-import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
+import { normalizarTelefonoArg, soloDigitos, variantesTelefonoMismaLinea } from '@/lib/phone'
 import { debePersistirBocetoAceptado } from '@/lib/boceto-aceptacion'
 
 export const maxDuration = 30
@@ -61,7 +61,6 @@ const END_CONVERSATION_TOOL: Anthropic.Tool = {
   },
 }
 
-const OWNER_PHONE = '5491124843094'
 const VENTANA_RESPUESTA_MANUAL_MS = 5 * 60 * 1000
 const DEBOUNCE_MS = 6000
 const LOCK_TTL_MS = 35_000
@@ -74,7 +73,7 @@ async function enviarTwilioYGuardar(
   senderPhone?: string,
   senderId?: string | null
 ) {
-  await enviarMensajeTwilio(telefono, texto, senderPhone)
+  await enviarMensajeTwilio(telefono, texto, senderPhone, { skipBlockCheck: true })
 
   await supabase.from('conversaciones').insert({
     lead_id: leadId,
@@ -165,11 +164,6 @@ export async function POST(req: NextRequest) {
     return twimlOk()
   }
 
-  if (isTelefonoHardBlocked(telefono)) {
-    console.warn('[Twilio Webhook] Ignorado — tel en lista de bloqueo (sin respuesta automática):', telefono)
-    return twimlOk()
-  }
-
   const supabase = createSupabaseServer()
 
   // Lookup sender — también usamos para filtrar mensajes propios
@@ -183,10 +177,12 @@ export async function POST(req: NextRequest) {
   const senderId = senderData?.id ?? null
   const senderPhone = senderData?.phone_number ?? nuestroNumero
 
-  // Filtrar mensajes propios usando todos los números sender conocidos
-  const { data: ownSenders } = await supabase.from('senders').select('phone_number')
-  const ownNumbers = ownSenders?.map(s => s.phone_number.replace(/^\+/, '').replace(/\D/g, '')) ?? [OWNER_PHONE]
-  if (ownNumbers.some(n => telefono.includes(n))) {
+  // Solo ignorar eco real (mismo remitente y destino en dígitos) — no bloquear
+  // campañas de prueba entre dos líneas WABA distintas registradas en senders.
+  const fromD = soloDigitos(telefono)
+  const toD = soloDigitos(nuestroNumero)
+  if (fromD && toD && fromD === toD) {
+    console.log('[Twilio Webhook] Ignorado — From y To idénticos (eco):', fromD)
     return twimlOk()
   }
 
@@ -369,7 +365,10 @@ export async function POST(req: NextRequest) {
 
     if (outboundSinHumanoReal) {
       const mensajesAgente = filasHistorial.filter(h => h.rol === 'agente')
-      if (mensajesAgente.length >= 2) {
+      const mensajesAgentePitch = mensajesAgente.filter(
+        h => !esPlantillaRespuestaOutboundAuto(h.mensaje as string | null | undefined)
+      )
+      if (mensajesAgentePitch.length >= 2) {
         await registrarEventoConversacional({
           leadId: lead.id,
           telefono,
@@ -377,7 +376,11 @@ export async function POST(req: NextRequest) {
           decisionAction: 'no_reply',
           decisionReason: 'default_full_reply',
           confidence: 1,
-          metadata: { motivo: 'max_mensajes_agente_sin_cliente_real', n_agente: mensajesAgente.length },
+          metadata: {
+            motivo: 'max_mensajes_agente_sin_cliente_real',
+            n_agente: mensajesAgente.length,
+            n_pitch: mensajesAgentePitch.length,
+          },
         })
         return twimlOk()
       }
@@ -385,10 +388,8 @@ export async function POST(req: NextRequest) {
       const esAutoCliente =
         pareceMensajeAutomaticoNegocio(mensajeCombinado) || esAutoReplyCortoNegocio(mensajeCombinado)
       if (esAutoCliente) {
-        const yaMandoRespuestaFija = mensajesAgente.some(
-          m =>
-            typeof m.mensaje === 'string' &&
-            (m.mensaje.includes('theapexweb.com') || m.mensaje.includes('Gracias por la info'))
+        const yaMandoRespuestaFija = mensajesAgente.some(m =>
+          esPlantillaRespuestaOutboundAuto(m.mensaje as string | null | undefined)
         )
         if (yaMandoRespuestaFija) {
           return twimlOk()
@@ -466,6 +467,46 @@ export async function POST(req: NextRequest) {
         .from('leads')
         .update({ conversacion_cerrada: false, conversacion_cerrada_at: null })
         .eq('id', lead.id)
+    }
+
+    const comboAutoCliente =
+      pareceMensajeAutomaticoNegocio(mensajeCombinado) || esAutoReplyCortoNegocio(mensajeCombinado)
+    if (
+      lead.origen === 'outbound' &&
+      !clienteYaMandoAlgoNoAutomatico(filasHistorial) &&
+      comboAutoCliente &&
+      !decision.disableAgent &&
+      !decision.closeConversation &&
+      decision.action === 'no_reply'
+    ) {
+      const mensajesAgenteLista = filasHistorial.filter(h => h.rol === 'agente')
+      const yaMandoPlantillaTwilio = mensajesAgenteLista.some(m =>
+        esPlantillaRespuestaOutboundAuto(m.mensaje as string | null | undefined)
+      )
+      if (!yaMandoPlantillaTwilio) {
+        try {
+          await enviarTwilioYGuardar(
+            supabase,
+            telefono,
+            lead.id,
+            RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
+            senderPhone,
+            senderId
+          )
+          await registrarEventoConversacional({
+            leadId: lead.id,
+            telefono,
+            eventName: 'outbound_auto_business_reply_decision_override',
+            decisionAction: 'full_reply',
+            decisionReason: decision.reason,
+            confidence: decision.confidence,
+            metadata: { source: 'twilio_webhook', prev_action: 'no_reply' },
+          })
+        } catch (e) {
+          console.error('[Twilio] outbound auto override error:', e)
+        }
+        return twimlOk()
+      }
     }
 
     if (decision.action === 'no_reply' || decision.action === 'close_conversation') {

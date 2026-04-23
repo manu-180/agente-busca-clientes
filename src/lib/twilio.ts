@@ -6,8 +6,22 @@ function getTwilioAuth() {
   return 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64')
 }
 
-export async function enviarMensajeTwilio(telefono: string, mensaje: string, fromNumber?: string) {
-  if (isTelefonoHardBlocked(telefono)) {
+export type EnviarMensajeTwilioOptions = {
+  /**
+   * Respuestas del webhook a conversación entrante: permitir aunque el destino
+   * esté en la lista de no-contacto (evita self-tests entre líneas propias y bloqueo 2720).
+   * El cold outreach (cron, followup) sigue consultando el bloqueo antes de enviar.
+   */
+  skipBlockCheck?: boolean
+}
+
+export async function enviarMensajeTwilio(
+  telefono: string,
+  mensaje: string,
+  fromNumber?: string,
+  options?: EnviarMensajeTwilioOptions
+) {
+  if (!options?.skipBlockCheck && isTelefonoHardBlocked(telefono)) {
     throw new Error('TELEFONO_BLOQUEADO')
   }
   const accountSid = process.env.TWILIO_ACCOUNT_SID!
