@@ -1,7 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
-import { MessageSquare, Send, Bot, BotOff, UserCheck, CheckCircle, ArrowLeft, Sparkles, Loader2, CheckCheck, Search, X } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { MessageSquare, Send, Bot, BotOff, UserCheck, CheckCircle, ArrowLeft, Sparkles, Loader2, CheckCheck, Search, X, Star } from 'lucide-react'
 import type { Lead, Conversacion } from '@/types'
 
 interface SenderInfo {
@@ -85,6 +86,22 @@ function ContenidoMensajeChat({ msg, isAgente }: { msg: MensajeConSender; isAgen
   return <p className="whitespace-pre-wrap leading-relaxed">{msg.mensaje}</p>
 }
 
+const FAVORITOS_STORAGE_KEY = 'apex-inbox-favoritos'
+const LONG_PRESS_MS = 550
+
+function readFavoritoIdsFromStorage(): Set<string> {
+  if (typeof window === 'undefined') return new Set()
+  try {
+    const raw = localStorage.getItem(FAVORITOS_STORAGE_KEY)
+    if (!raw) return new Set()
+    const arr = JSON.parse(raw) as unknown
+    if (!Array.isArray(arr)) return new Set()
+    return new Set(arr.filter((x): x is string => typeof x === 'string'))
+  } catch {
+    return new Set()
+  }
+}
+
 /**
  * Evita que una respuesta atrasada del backend "retroceda" el hilo visible.
  * Si lo entrante es más viejo que lo ya mostrado, conservamos el estado local.
@@ -126,11 +143,17 @@ export default function ConversacionesPage() {
   const [enviando, setEnviando] = useState(false)
   const [sugiriendo, setSugiriendo] = useState(false)
   const [cargandoMensajes, setCargandoMensajes] = useState(false)
-  const [filtroSender, setFiltroSender] = useState<string | null>(null)
   /** Primer mensaje del hilo = cliente (no arrancó con template / outbound Twilio) */
   const [soloWeb, setSoloWeb] = useState(false)
   /** Cola operativa: boceto aceptado en DB o agente ofreciendo boceto en el último mensaje */
   const [soloBocetos, setSoloBocetos] = useState(false)
+  const [soloFavoritos, setSoloFavoritos] = useState(false)
+  const [favoritoIds, setFavoritoIds] = useState<Set<string>>(readFavoritoIdsFromStorage)
+  const [menuCtx, setMenuCtx] = useState<{ leadId: string; x: number; y: number } | null>(null)
+  const menuCtxRef = useRef<HTMLDivElement | null>(null)
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** Tras abrir el menú con long-press, ignora un clic fantasma al soltar. */
+  const ignoreListClickUntilRef = useRef(0)
   const [busquedaNombre, setBusquedaNombre] = useState('')
   const chatRef = useRef<HTMLDivElement>(null)
   const seleccionadoRef = useRef<string | null>(null)
@@ -241,6 +264,45 @@ export default function ConversacionesPage() {
       chatRef.current.scrollTop = chatRef.current.scrollHeight
     }
   }, [seleccionado, grupos])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      localStorage.setItem(FAVORITOS_STORAGE_KEY, JSON.stringify(Array.from(favoritoIds)))
+    } catch {
+      /* ignore */
+    }
+  }, [favoritoIds])
+
+  useEffect(() => {
+    if (!menuCtx) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuCtx(null)
+    }
+    const onPointer = (e: PointerEvent) => {
+      if (menuCtxRef.current?.contains(e.target as Node)) return
+      setMenuCtx(null)
+    }
+    // Evita que el levantar el dedo tras long-press cierre el menú al instante
+    const t = setTimeout(() => {
+      document.addEventListener('pointerdown', onPointer, true)
+      document.addEventListener('keydown', onKey, true)
+    }, 200)
+    return () => {
+      clearTimeout(t)
+      document.removeEventListener('pointerdown', onPointer, true)
+      document.removeEventListener('keydown', onKey, true)
+    }
+  }, [menuCtx])
+
+  const toggleFavorito = useCallback((leadId: string) => {
+    setFavoritoIds(prev => {
+      const n = new Set(prev)
+      if (n.has(leadId)) n.delete(leadId)
+      else n.add(leadId)
+      return n
+    })
+  }, [])
 
   const grupoActivo = grupos.find(g => g.lead.id === seleccionado)
 
@@ -405,14 +467,6 @@ export default function ConversacionesPage() {
     await cargarConversaciones()
   }
 
-  const sendersUnicos = Array.from(
-    new Map(
-      grupos
-        .filter(g => g.sender)
-        .map(g => [g.sender!.id, g.sender!])
-    ).values()
-  )
-
   const countBocetoPendientes = useMemo(
     () => grupos.filter(enColaBocetos).length,
     [grupos]
@@ -430,15 +484,16 @@ export default function ConversacionesPage() {
       return primerMensaje(g)?.rol === 'cliente'
     }
 
-    let list = filtroSender ? grupos.filter(g => g.sender?.id === filtroSender) : grupos
+    let list = grupos
     if (soloBocetos) list = list.filter(enColaBocetos)
     if (soloWeb) list = list.filter(inicioDesdeCliente)
+    if (soloFavoritos) list = list.filter(g => favoritoIds.has(g.lead.id))
     const q = busquedaNombre.trim().toLowerCase()
     if (q) {
       list = list.filter(g => (g.lead.nombre || '').toLowerCase().includes(q))
     }
     return list
-  }, [grupos, filtroSender, soloBocetos, soloWeb, busquedaNombre])
+  }, [grupos, soloBocetos, soloWeb, soloFavoritos, favoritoIds, busquedaNombre])
 
   const gruposOrdenados = useMemo(() => {
     return [...gruposFiltrados].sort((a, b) => {
@@ -517,13 +572,13 @@ export default function ConversacionesPage() {
             <button
               type="button"
               onClick={() => {
-                setFiltroSender(null)
                 setSoloBocetos(false)
                 setSoloWeb(false)
+                setSoloFavoritos(false)
                 setBusquedaNombre('')
               }}
               className={`text-[10px] font-medium px-2.5 py-1 rounded-full transition-all ${
-                !filtroSender && !soloBocetos && !soloWeb
+                !soloBocetos && !soloWeb && !soloFavoritos
                   ? 'bg-apex-lime text-apex-black'
                   : 'bg-apex-card border border-apex-border text-apex-muted hover:bg-apex-border'
               }`}
@@ -532,7 +587,13 @@ export default function ConversacionesPage() {
             </button>
             <button
               type="button"
-              onClick={() => setSoloWeb(s => !s)}
+              onClick={() => {
+                setSoloWeb(s => {
+                  const next = !s
+                  if (next) setSoloFavoritos(false)
+                  return next
+                })
+              }}
               className={`text-[10px] font-medium px-2.5 py-1 rounded-full transition-all ${
                 soloWeb
                   ? 'bg-apex-lime text-apex-black'
@@ -541,21 +602,20 @@ export default function ConversacionesPage() {
             >
               web
             </button>
-            {sendersUnicos.map(s => (
-              <button
-                type="button"
-                key={s.id}
-                onClick={() => setFiltroSender(filtroSender === s.id ? null : s.id)}
-                className="text-[10px] font-medium px-2.5 py-1 rounded-full border transition-all"
-                style={
-                  filtroSender === s.id
-                    ? { backgroundColor: s.color, borderColor: s.color, color: '#111' }
-                    : { backgroundColor: '#161616', borderColor: '#222222', color: '#888888' }
-                }
-              >
-                {s.alias}
-              </button>
-            ))}
+            <button
+              type="button"
+              onClick={() => {
+                if (!soloFavoritos) setSoloWeb(false)
+                setSoloFavoritos(f => !f)
+              }}
+              className={`text-[10px] font-medium px-2.5 py-1 rounded-full transition-all ${
+                soloFavoritos
+                  ? 'bg-apex-lime text-apex-black'
+                  : 'bg-apex-card border border-apex-border text-apex-muted hover:bg-apex-border'
+              }`}
+            >
+              Fav.
+            </button>
           </div>
 
           {/* Búsqueda por nombre (debajo de categorías) */}
@@ -608,17 +668,56 @@ export default function ConversacionesPage() {
                       ? 'No hay nada pendiente en la cola de bocetos'
                       : soloWeb
                         ? 'No hay chats que empiecen con un mensaje del cliente'
-                        : 'No hay conversaciones'}
+                        : soloFavoritos
+                          ? 'No tenés favoritos. Mantené presionada una conversación o usá el clic derecho'
+                          : 'No hay conversaciones'}
                 </p>
               </div>
             ) : (
               gruposOrdenados.map(grupo => {
                 const activo = seleccionado === grupo.lead.id
+                const esFav = favoritoIds.has(grupo.lead.id)
                 return (
                   <button
                     key={grupo.lead.id}
-                    onClick={() => seleccionarLead(grupo.lead.id)}
-                    className={`w-full text-left px-4 py-3 border-b border-apex-border transition-colors relative ${
+                    onClick={() => {
+                      if (Date.now() < ignoreListClickUntilRef.current) return
+                      void seleccionarLead(grupo.lead.id)
+                    }}
+                    onContextMenu={e => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setMenuCtx({ leadId: grupo.lead.id, x: e.clientX, y: e.clientY })
+                    }}
+                    onPointerDown={e => {
+                      if (e.button === 2) return
+                      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current)
+                      const leadId = grupo.lead.id
+                      const { clientX, clientY } = e
+                      longPressTimerRef.current = setTimeout(() => {
+                        ignoreListClickUntilRef.current = Date.now() + 500
+                        setMenuCtx({ leadId, x: clientX, y: clientY })
+                      }, LONG_PRESS_MS)
+                    }}
+                    onPointerUp={() => {
+                      if (longPressTimerRef.current) {
+                        clearTimeout(longPressTimerRef.current)
+                        longPressTimerRef.current = null
+                      }
+                    }}
+                    onPointerCancel={() => {
+                      if (longPressTimerRef.current) {
+                        clearTimeout(longPressTimerRef.current)
+                        longPressTimerRef.current = null
+                      }
+                    }}
+                    onPointerMove={() => {
+                      if (longPressTimerRef.current) {
+                        clearTimeout(longPressTimerRef.current)
+                        longPressTimerRef.current = null
+                      }
+                    }}
+                    className={`w-full text-left px-4 py-3 border-b border-apex-border transition-colors relative select-none ${
                       activo ? 'bg-apex-lime-dim/40' : 'hover:bg-apex-card'
                     }`}
                   >
@@ -632,8 +731,16 @@ export default function ConversacionesPage() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center justify-between gap-1 mb-0.5">
-                          <span className={`text-sm truncate ${grupo.no_leidos > 0 ? 'font-semibold text-white' : 'font-medium text-neutral-400'}`}>
-                            {grupo.lead.nombre}
+                          <span className={`text-sm truncate flex items-center gap-1 min-w-0 ${grupo.no_leidos > 0 ? 'font-semibold text-white' : 'font-medium text-neutral-400'}`}>
+                            {esFav && (
+                              <Star
+                                className="h-3.5 w-3.5 flex-shrink-0 text-apex-lime"
+                                fill="currentColor"
+                                strokeWidth={1.5}
+                                aria-hidden
+                              />
+                            )}
+                            <span className="truncate">{grupo.lead.nombre}</span>
                           </span>
                           <span className="text-[10px] text-apex-muted flex-shrink-0 tabular-nums">
                             {formatDate(grupo.ultimo_timestamp)}
@@ -805,6 +912,34 @@ export default function ConversacionesPage() {
           )}
         </div>
       </div>
+
+      {menuCtx && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              ref={menuCtxRef}
+              role="menu"
+              className="fixed z-[200] min-w-[200px] rounded-lg border border-apex-border bg-[#161616] py-1 shadow-2xl"
+              style={{
+                left: Math.min(menuCtx.x, window.innerWidth - 220),
+                top: Math.min(menuCtx.y, window.innerHeight - 52),
+              }}
+              onPointerDown={e => e.stopPropagation()}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="w-full px-3 py-2.5 text-left text-sm text-neutral-200 hover:bg-apex-lime/15 hover:text-apex-lime"
+                onClick={() => {
+                  toggleFavorito(menuCtx.leadId)
+                  setMenuCtx(null)
+                }}
+              >
+                {favoritoIds.has(menuCtx.leadId) ? 'Quitar de favoritos' : 'Añadir a favoritos'}
+              </button>
+            </div>,
+            document.body
+          )
+        : null}
     </div>
   )
 }
