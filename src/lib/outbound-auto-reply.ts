@@ -28,6 +28,9 @@ const RE_FRANJA_HORARIA_DIA =
   /\b(de\s+)?\d{1,2}(:\d{2})?\s*(hs?\.?|h\.?)?\s*(a|-|hasta)\s*\d{1,2}/i
 const RE_DISCLAIMER_WA_NEGOCIO =
   /\b(NO\s+ATENDEMOS|NO\s+ENVIAMOS|NO\s+CONTESTAMOS\s+LLAMADOS|SOLO\s+WHATSAPP)\b/i
+const RE_RESPONDEREMOS_BREVEDAD =
+  /\b(te\s+)?responderemos\s+(a\s+la\s+)?brevedad\b|\ba\s+la\s+brevedad\s+te\s+responderemos\b/i
+const RE_HORARIO_ATENCION_LITERAL = /\b(nuestro\s+)?horario\s+de\s+atenci[oó]n\b/i
 
 function tieneBloquesEmojisDecorativos(texto: string): boolean {
   // 3+ emojis consecutivos (pares sustitutos) — decoración típica de auto-replies de negocios
@@ -58,6 +61,8 @@ export function esAutoReplyCortoNegocio(texto: string): boolean {
   if (!t) return false
   if (RE_EN_QUE_AYUDAR.test(t)) return true
   if (RE_COMUNICARTE_CON.test(t)) return true
+  if (RE_RESPONDEREMOS_BREVEDAD.test(t)) return true
+  if (RE_HORARIO_ATENCION_LITERAL.test(t) && t.length < 220) return true
   if (RE_GRACIAS_CONTACTO.test(t) && t.length < 160) return true
   return false
 }
@@ -84,6 +89,8 @@ export function pareceMensajeAutomaticoNegocio(texto: string): boolean {
     RE_FRANJA_HORARIA_DIA.test(texto),
     RE_DIRECCION_TIPICA.test(texto),
     RE_DISCLAIMER_WA_NEGOCIO.test(texto),
+    RE_RESPONDEREMOS_BREVEDAD.test(texto),
+    RE_HORARIO_ATENCION_LITERAL.test(texto),
     tieneBloquesEmojisDecorativos(texto),
   ]
   const n = señales.filter(Boolean).length

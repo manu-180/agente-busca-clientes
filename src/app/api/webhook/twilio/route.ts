@@ -8,6 +8,7 @@ import {
   esAutoReplyCortoNegocio,
   esPlantillaRespuestaOutboundAuto,
   pareceMensajeAutomaticoNegocio,
+  RESPUESTA_GATEKEEPER,
   RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
 } from '@/lib/outbound-auto-reply'
 import { decidirRespuestaConversacional } from '@/lib/response-decision'
@@ -539,6 +540,22 @@ export async function POST(req: NextRequest) {
         await enviarTwilioYGuardar(supabase, telefono, lead.id, handoffMsg, senderPhone, senderId)
       } catch (e) {
         console.error('[Twilio] handoff error:', e)
+      }
+      return twimlOk()
+    }
+
+    if (decision.action === 'gatekeeper_relay') {
+      try {
+        await enviarTwilioYGuardar(
+          supabase,
+          telefono,
+          lead.id,
+          RESPUESTA_GATEKEEPER,
+          senderPhone,
+          senderId
+        )
+      } catch (e) {
+        console.error('[Twilio] gatekeeper_relay error:', e)
       }
       return twimlOk()
     }

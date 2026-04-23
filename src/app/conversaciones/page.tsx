@@ -145,6 +145,8 @@ export default function ConversacionesPage() {
   const [cargandoMensajes, setCargandoMensajes] = useState(false)
   /** Primer mensaje del hilo = cliente (no arrancó con template / outbound Twilio) */
   const [soloWeb, setSoloWeb] = useState(false)
+  /** Leads cuyo estado ya indica respuesta del cliente. */
+  const [soloRespond, setSoloRespond] = useState(false)
   /** Cola operativa: boceto aceptado en DB o agente ofreciendo boceto en el último mensaje */
   const [soloBocetos, setSoloBocetos] = useState(false)
   const [soloFavoritos, setSoloFavoritos] = useState(false)
@@ -487,13 +489,14 @@ export default function ConversacionesPage() {
     let list = grupos
     if (soloBocetos) list = list.filter(enColaBocetos)
     if (soloWeb) list = list.filter(inicioDesdeCliente)
+    if (soloRespond) list = list.filter(g => g.lead.estado === 'respondio')
     if (soloFavoritos) list = list.filter(g => favoritoIds.has(g.lead.id))
     const q = busquedaNombre.trim().toLowerCase()
     if (q) {
       list = list.filter(g => (g.lead.nombre || '').toLowerCase().includes(q))
     }
     return list
-  }, [grupos, soloBocetos, soloWeb, soloFavoritos, favoritoIds, busquedaNombre])
+  }, [grupos, soloBocetos, soloWeb, soloRespond, soloFavoritos, favoritoIds, busquedaNombre])
 
   const gruposOrdenados = useMemo(() => {
     return [...gruposFiltrados].sort((a, b) => {
@@ -574,11 +577,12 @@ export default function ConversacionesPage() {
               onClick={() => {
                 setSoloBocetos(false)
                 setSoloWeb(false)
+                setSoloRespond(false)
                 setSoloFavoritos(false)
                 setBusquedaNombre('')
               }}
               className={`text-[10px] font-medium px-2.5 py-1 rounded-full transition-all ${
-                !soloBocetos && !soloWeb && !soloFavoritos
+                !soloBocetos && !soloWeb && !soloRespond && !soloFavoritos
                   ? 'bg-apex-lime text-apex-black'
                   : 'bg-apex-card border border-apex-border text-apex-muted hover:bg-apex-border'
               }`}
@@ -590,7 +594,10 @@ export default function ConversacionesPage() {
               onClick={() => {
                 setSoloWeb(s => {
                   const next = !s
-                  if (next) setSoloFavoritos(false)
+                  if (next) {
+                    setSoloRespond(false)
+                    setSoloFavoritos(false)
+                  }
                   return next
                 })
               }}
@@ -605,7 +612,30 @@ export default function ConversacionesPage() {
             <button
               type="button"
               onClick={() => {
-                if (!soloFavoritos) setSoloWeb(false)
+                setSoloRespond(s => {
+                  const next = !s
+                  if (next) {
+                    setSoloWeb(false)
+                    setSoloFavoritos(false)
+                  }
+                  return next
+                })
+              }}
+              className={`text-[10px] font-medium px-2.5 py-1 rounded-full transition-all ${
+                soloRespond
+                  ? 'bg-apex-lime text-apex-black'
+                  : 'bg-apex-card border border-apex-border text-apex-muted hover:bg-apex-border'
+              }`}
+            >
+              respond
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!soloFavoritos) {
+                  setSoloWeb(false)
+                  setSoloRespond(false)
+                }
                 setSoloFavoritos(f => !f)
               }}
               className={`text-[10px] font-medium px-2.5 py-1 rounded-full transition-all ${
@@ -668,6 +698,8 @@ export default function ConversacionesPage() {
                       ? 'No hay nada pendiente en la cola de bocetos'
                       : soloWeb
                         ? 'No hay chats que empiecen con un mensaje del cliente'
+                        : soloRespond
+                          ? 'No hay chats de leads que hayan respondido'
                         : soloFavoritos
                           ? 'No tenés favoritos. Mantené presionada una conversación o usá el clic derecho'
                           : 'No hay conversaciones'}
