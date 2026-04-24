@@ -6,9 +6,9 @@
 
 ## Estado actual
 
-**Última sesión completada:** SESSION-MIG-02 — Subtree merge + cleanup submodule roto (2026-04-24)
-**Próxima sesión:** SESSION-MIG-03 — Monorepo hygiene + limpieza archivos pesados
-**Siguiente prompt:** `docs/migration/prompts/SESSION-MIG-03.md`
+**Última sesión completada:** SESSION-MIG-03 — Monorepo hygiene + limpieza archivos pesados (2026-04-24)
+**Próxima sesión:** SESSION-MIG-04 — Rename GitHub + reconfigurar deployments
+**Siguiente prompt:** `docs/migration/prompts/SESSION-MIG-04.md`
 
 ---
 
@@ -16,7 +16,7 @@
 
 - [x] SESSION-MIG-01 (Sonnet) · Pre-flight audit + backup + sincronización
 - [x] SESSION-MIG-02 (Opus) · Subtree merge + cleanup submodule roto
-- [ ] SESSION-MIG-03 (Sonnet) · Monorepo hygiene + limpieza archivos pesados
+- [x] SESSION-MIG-03 (Sonnet) · Monorepo hygiene + limpieza archivos pesados
 - [ ] SESSION-MIG-04 (Sonnet) · Rename GitHub + reconfigurar deployments
 - [ ] SESSION-MIG-05 (Sonnet) · Archive repo viejo + verificación final
 
@@ -61,6 +61,30 @@
 ---
 
 ## Decisiones tomadas
+
+### SESSION-MIG-03 (2026-04-24)
+
+**apex-leads.zip NO estaba en git history**
+- `git log --all --oneline -- apex-leads.zip` devolvio output vacio.
+- Pack size = 742 KB (confirma que ningun binario de 163 MB entro al repo).
+- Eliminado del disco. No se requiere SESSION-MIG-03b (git filter-repo).
+
+**scheduler/ root eliminado — era duplicado exacto de sidecar/scheduler/**
+- `diff -rq scheduler/ sidecar/scheduler/` no mostro diferencias.
+- Version canonica: `sidecar/scheduler/` (la que deploya Railway).
+- `git rm -r scheduler/` ejecutado. 4 archivos removidos del indice.
+
+**Estructura de docs final**
+- `README.md` root creado con tabla de servicios, arranque rapido, links a docs.
+- `docs/ARCHITECTURE.md` creado con diagrama ASCII + flujos criticos.
+- `apex-leads/README.md` reemplazado (era generico WA-only, ahora cubre tambien IG y monorepo context).
+- `sidecar/README.md` creado desde cero.
+- `.gitignore` unificado: cubre Node + Python + Docker + IDE + OS + secretos IG + assets grandes.
+- `.editorconfig` creado: UTF-8, LF, indent por tipo de archivo.
+
+**Commit hygiene**: `722f31e` — `docs(monorepo): add root README, ARCHITECTURE, per-service READMEs, unified gitignore`
+
+---
 
 ### SESSION-MIG-01 (2026-04-24)
 
