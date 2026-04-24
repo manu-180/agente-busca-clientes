@@ -6,9 +6,9 @@
 
 ## Estado actual
 
-**Última sesión completada:** SESSION-MIG-03 — Monorepo hygiene + limpieza archivos pesados (2026-04-24)
-**Próxima sesión:** SESSION-MIG-04 — Rename GitHub + reconfigurar deployments
-**Siguiente prompt:** `docs/migration/prompts/SESSION-MIG-04.md`
+**Última sesión completada:** SESSION-MIG-04 — Rename GitHub + reconfigurar deployments (2026-04-24)
+**Próxima sesión:** SESSION-MIG-05 — Archive repo viejo + verificación final
+**Siguiente prompt:** `docs/migration/prompts/SESSION-MIG-05.md`
 
 ---
 
@@ -17,7 +17,7 @@
 - [x] SESSION-MIG-01 (Sonnet) · Pre-flight audit + backup + sincronización
 - [x] SESSION-MIG-02 (Opus) · Subtree merge + cleanup submodule roto
 - [x] SESSION-MIG-03 (Sonnet) · Monorepo hygiene + limpieza archivos pesados
-- [ ] SESSION-MIG-04 (Sonnet) · Rename GitHub + reconfigurar deployments
+- [x] SESSION-MIG-04 (Sonnet) · Rename GitHub + reconfigurar deployments
 - [ ] SESSION-MIG-05 (Sonnet) · Archive repo viejo + verificación final
 
 ---
@@ -113,9 +113,52 @@
 - Remote `apex-leads-origin` eliminado post-merge.
 - Carpeta temporal `../apex-leads-TEMP` eliminada (solo contenía archivos locales no trackeados).
 
+## Decisiones tomadas
+
+### SESSION-MIG-04 (2026-04-24)
+
+**GitHub rename completado antes del inicio de sesion**
+- Repo accesible en `github.com/manu-180/agente-busca-clientes`.
+- `git remote -v` ya apuntaba al nuevo nombre al inicio de sesion (cambio previo).
+- `git fetch origin` + `git pull` funcionan sin errores.
+
+**Remote local**
+- `origin` → `https://github.com/manu-180/agente-busca-clientes.git` (fetch + push).
+
+**Railway ig-sidecar reconfigurado**
+- Source Repo: `manu-180/agente-busca-clientes`
+- Root Directory: `/sidecar`
+- Branch: `master`
+- Redeploy exitoso. Volumen `/data` intacto. Session loaded from `/data/session.json`.
+- Smoke test: `GET /health` → `{"status":"ok","session_valid":true}` ✅
+
+**Railway ig-scheduler reconfigurado**
+- Source Repo: `manu-180/agente-busca-clientes`
+- Root Directory: `/sidecar/scheduler`
+- Branch: `master`
+- Status: Online ✅
+
+**Railway apex-leads reconfigurado**
+- Source Repo: `manu-180/agente-busca-clientes`
+- Root Directory: `/apex-leads`
+- Branch: `master`
+- Status: Online ✅
+
+**Railway cron-pringer — path corregido (bonus fix)**
+- Root Directory corregido de `/apex-leads/railway-cron-pringer` (typo) a `/apex-leads/railway-cron-pinger`.
+- Fallos previos eran por typo + problema externo de WhatsApp/Meta (fuera de scope de migracion).
+
+**Vercel apex-leads**
+- Confirmado por Manuel: build verde, apuntando a `agente-busca-clientes`.
+
+**URLs productivas verificadas post-migracion**
+- `https://ig-sidecar-production.up.railway.app/health` → `{"status":"ok","session_valid":true}` ✅
+
+---
+
 ## Bloqueos / pendientes humanos
 
-_(ninguno para SESSION-MIG-03 — todo listo)_
+_(ninguno para SESSION-MIG-04 — todo listo)_
 
 ---
 
