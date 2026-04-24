@@ -21,6 +21,10 @@ export function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
+  if (pathname.startsWith('/api/ig/')) {
+    return NextResponse.next()
+  }
+
   if (pathname === '/api/auth') {
     return NextResponse.next()
   }
