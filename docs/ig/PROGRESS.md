@@ -1,5 +1,7 @@
 # PROGRESS — Agente Instagram APEX
 
+> **Nota (2026-04-24):** A partir de esta fecha el proyecto vive en el monorepo `agente-busca-clientes`. El repo `apex-leads` fue archivado en GitHub. La estructura interna (`apex-leads/src/`, `sidecar/`, etc.) y las URLs productivas no cambiaron. Detalles en `docs/migration/`.
+
 > **Documento vivo.** Actualizado al final de cada sesión. Esta es la "memoria" del proyecto entre sesiones limpias.
 
 ---
@@ -169,7 +171,7 @@
 - `IG_SIDECAR_URL` = `https://ig-sidecar-production.up.railway.app`
 - `IG_SIDECAR_SECRET` = `5fc09c661fef80402d773e7d10a1e2ff9d478aeaf12129feba2b273202a84160`
 - `IG_SENDER_USERNAME` = `apex.stack`
-- `CRON_SECRET` = `cba5184565ea5a17e01da6391dd9caf323e4fc97e2083f26c80c2b2f56f81bab`
+- `CRON_SECRET` = `ac9ef7c163513baa1045c9f1c6858fe726edf4b1d2fbf9c4bd818dfdf8835272`
 - `APIFY_TOKEN` = `__stub__` (placeholder hasta SESSION-07)
 - `APIFY_WEBHOOK_SECRET` = `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` (placeholder hasta SESSION-07)
 - `DRY_RUN` = `true` hasta SESSION-10
@@ -188,7 +190,7 @@
 
 ### Railway — ig-scheduler
 - `NEXT_APP_URL` = **pendiente (URL de Vercel una vez deployado)**
-- `CRON_SECRET` = `cba5184565ea5a17e01da6391dd9caf323e4fc97e2083f26c80c2b2f56f81bab`
+- `CRON_SECRET` = `ac9ef7c163513baa1045c9f1c6858fe726edf4b1d2fbf9c4bd818dfdf8835272`
 - `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` = (copiar)
 
 ---

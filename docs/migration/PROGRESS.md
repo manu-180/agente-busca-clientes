@@ -18,7 +18,7 @@
 - [x] SESSION-MIG-02 (Opus) · Subtree merge + cleanup submodule roto
 - [x] SESSION-MIG-03 (Sonnet) · Monorepo hygiene + limpieza archivos pesados
 - [x] SESSION-MIG-04 (Sonnet) · Rename GitHub + reconfigurar deployments
-- [ ] SESSION-MIG-05 (Sonnet) · Archive repo viejo + verificación final
+- [x] SESSION-MIG-05 (Sonnet) · Archive repo viejo + verificación final
 
 ---
 
@@ -150,6 +150,8 @@
 
 **Vercel apex-leads**
 - Confirmado por Manuel: build verde, apuntando a `agente-busca-clientes`.
+- URL productiva: `https://leads.theapexweb.com`
+- Smoke test SESSION-MIG-05: `POST /api/ig/run-cycle` → `{"ok":true,"dry_run":true,"leads_processed":0}` ✅
 
 **URLs productivas verificadas post-migracion**
 - `https://ig-sidecar-production.up.railway.app/health` → `{"status":"ok","session_valid":true}` ✅
@@ -164,12 +166,16 @@ _(ninguno para SESSION-MIG-04 — todo listo)_
 
 ## Post-migration checklist
 
-_(Se completa en SESSION-MIG-05)_
+- [x] Repo único: `agente-busca-clientes` — `github.com/manu-180/agente-busca-clientes`.
+- [x] Vercel build verde desde root `apex-leads/` — `https://leads.theapexweb.com` ✅
+- [x] Sidecar `/health` verde — `{"status":"ok","session_valid":true}` ✅
+- [x] Scheduler última run exitosa — Railway Online ✅
+- [x] Repo `apex-leads` archivado en GitHub (2026-04-24).
+- [x] Docs finales actualizadas — `docs/ig/PROGRESS.md` con nota de migración, `CRON_SECRET` corregido.
+- [ ] Backups movidos fuera del repo — pendiente decisión Manuel (`backup/*.bundle`).
 
-- [ ] Repo único: `agente-busca-clientes`.
-- [ ] Vercel build verde desde root `apex-leads/`.
-- [ ] Sidecar `/health` verde.
-- [ ] Scheduler última run exitosa.
-- [ ] Repo `apex-leads` archivado.
-- [ ] Docs finales actualizadas.
-- [ ] Backups movidos fuera del repo.
+## Cierre
+
+- **Fecha de cierre:** 2026-04-24
+- **Commits totales del monorepo post-migración:** 124 (incluye 112 de apex-leads preservados via subtree)
+- **Migración completa.** El proyecto vive en `agente-busca-clientes`.
