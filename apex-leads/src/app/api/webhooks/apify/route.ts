@@ -9,23 +9,19 @@ export const maxDuration = 60
 const APIFY_WEBHOOK_SECRET = igConfig.APIFY_WEBHOOK_SECRET
 const APIFY_TOKEN = igConfig.APIFY_TOKEN
 
-function verifyApifySignature(req: NextRequest, rawBody: string): boolean {
-  const signature = req.headers.get('apify-webhook-signature')
-  if (!signature || !APIFY_WEBHOOK_SECRET) return false
-  const expected = crypto
-    .createHmac('sha256', APIFY_WEBHOOK_SECRET)
-    .update(rawBody)
-    .digest('hex')
-  const sigBuf = Buffer.from(signature)
-  const expBuf = Buffer.from(expected)
-  if (sigBuf.length !== expBuf.length) return false
-  return crypto.timingSafeEqual(sigBuf, expBuf)
+function verifyApifyToken(req: NextRequest): boolean {
+  const token = req.nextUrl.searchParams.get('token')
+  if (!token || !APIFY_WEBHOOK_SECRET) return false
+  const tokBuf = Buffer.from(token)
+  const secBuf = Buffer.from(APIFY_WEBHOOK_SECRET)
+  if (tokBuf.length !== secBuf.length) return false
+  return crypto.timingSafeEqual(tokBuf, secBuf)
 }
 
 export async function POST(req: NextRequest) {
   const rawBody = await req.text()
 
-  if (!verifyApifySignature(req, rawBody)) {
+  if (!verifyApifyToken(req)) {
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
   }
 
@@ -36,7 +32,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
-  // Apify sends eventType='ACTOR.RUN.SUCCEEDED' with eventData.actorRunId
   const eventType = payload.eventType as string
   if (eventType !== 'ACTOR.RUN.SUCCEEDED') {
     return NextResponse.json({ ok: true, skipped: true, eventType })
@@ -47,7 +42,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Missing actorRunId' }, { status: 400 })
   }
 
-  // Fetch dataset items from Apify
   const datasetRes = await fetch(
     `https://api.apify.com/v2/actor-runs/${runId}/dataset/items?format=json&clean=true&limit=1000`,
     { headers: { Authorization: `Bearer ${APIFY_TOKEN}` } },
@@ -65,7 +59,6 @@ export async function POST(req: NextRequest) {
 
   const supabase = createSupabaseServer()
 
-  // Upsert raw profiles — deduplicate by ig_username
   const rows = items
     .filter((item) => item.username || item.ownerUsername)
     .map((item) => ({

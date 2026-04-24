@@ -47,16 +47,14 @@ export async function GET(req: NextRequest) {
             hashtags: [hashtag],
             resultsLimit: 300,
             addParentData: false,
-            // Webhook back to Next.js when run completes
             webhooks: [
               {
                 eventTypes: ['ACTOR.RUN.SUCCEEDED'],
-                requestUrl: `${APP_URL}/api/webhooks/apify`,
+                requestUrl: `${APP_URL}/api/webhooks/apify?token=${APIFY_WEBHOOK_SECRET}`,
                 payloadTemplate: JSON.stringify({
                   eventType: '{{eventType}}',
                   eventData: { actorRunId: '{{actorRunId}}' },
                   sourceRef: hashtag,
-                  signature: APIFY_WEBHOOK_SECRET,
                 }),
               },
             ],
