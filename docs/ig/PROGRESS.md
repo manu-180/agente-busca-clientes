@@ -6,9 +6,9 @@
 
 ## Estado actual
 
-**Última sesión completada:** SESSION-03 — Sidecar instagrapi integration + circuit breaker (2026-04-24)
-**Próxima sesión:** SESSION-04 — Sidecar deploy Railway + login real
-**Siguiente prompt a usar:** `docs/ig/prompts/SESSION-04.md`
+**Última sesión completada:** SESSION-04 — Sidecar deploy Railway + sesión Instagram persistida (2026-04-24)
+**Próxima sesión:** SESSION-05 — Scheduler Python en Railway
+**Siguiente prompt a usar:** `docs/ig/prompts/SESSION-05.md`
 
 ---
 
@@ -20,7 +20,7 @@
 ### TANDA 1 — Core Infraestructura
 - [x] SESSION-02 (Opus) · Sidecar scaffolding + HMAC + stubs
 - [x] SESSION-03 (Opus) · Sidecar instagrapi integration + circuit breaker
-- [ ] SESSION-04 (Opus) · Sidecar deploy Railway + login real
+- [x] SESSION-04 (Opus) · Sidecar deploy Railway + sesión Instagram persistida
 - [ ] SESSION-05 (Sonnet) · Scheduler Python en Railway
 - [ ] SESSION-06 (Sonnet) · Deploy Next.js a Vercel
 
@@ -38,6 +38,31 @@
 ---
 
 ## Decisiones tomadas
+
+### SESSION-04 (2026-04-24)
+
+**Deploy exitoso en Railway — sidecar 100% operativo**
+- Repo: `github.com/manu-180/ig-sidecar` (branch `main`, local `master`)
+- Builder: `DOCKERFILE` (uppercase requerido por Railway; lowercase causa fallback a Railpack)
+- Volume: `/data` montado como `ig-sidecar-volume` (persiste `session.json` entre reboots)
+- Puerto: Railway inyecta `$PORT` — Dockerfile CMD usa `sh -c` para expansión correcta. `startCommand` en `railway.toml` removido (no pasa por shell, `$PORT` se pasa literal)
+
+**Pillow agregado como dependencia**
+- `instagrapi` requiere `Pillow>=8.1.1` para procesar imágenes de challenge. Sin Pillow, el login falla en boot con error no fatal.
+
+**Solución IP blacklist: session bootstrap desde env var**
+- Railway IPs están en la blacklist de Instagram → login directo falla con `400`.
+- Solución: login desde IP residencial local → `session_export.json` → codificado en base64 → variable `IG_SESSION_B64` en Railway.
+- `session_store.py` detecta archivo ausente → lee `IG_SESSION_B64` → escribe `/data/session.json` → los reboots posteriores usan el archivo directamente (ya no necesita la env var una vez escrita al volumen).
+- Script de bootstrap: `sidecar/tools/login_local.py`
+
+**pydantic pinned a `==2.10.1`**
+- `instagrapi==2.1.3` requiere exactamente `pydantic==2.10.1`. Versiones anteriores (2.9.2) causan conflicto de dependencias en pip.
+
+**Railway sidecar URL**: pendiente confirmar — ver Settings → Networking en Railway dashboard
+**IG_SIDECAR_SECRET usado**: `5fc09c661fef80402d773e7d10a1e2ff9d478aeaf12129feba2b273202a84160`
+
+---
 
 ### SESSION-03 (2026-04-24)
 
@@ -108,9 +133,9 @@
 - `NEXT_PUBLIC_SUPABASE_URL` = `https://hpbxscfbnhspeckdmkvu.supabase.co`
 - `SUPABASE_SERVICE_ROLE_KEY` = (ya existente)
 - `ANTHROPIC_API_KEY` = (ya existente, validado via `igConfig`)
-- `IG_SIDECAR_URL` = **pendiente (SESSION-04)**
-- `IG_SIDECAR_SECRET` = **pendiente (generar valor REAL de 32+ chars antes de SESSION-04; SESSION-02 usó `testsecreto1234567890123456789012` solo para tests locales)**
-- `IG_SENDER_USERNAME` = **pendiente (Manuel proveer)**
+- `IG_SIDECAR_URL` = **pendiente confirmar URL pública Railway ig-sidecar**
+- `IG_SIDECAR_SECRET` = `5fc09c661fef80402d773e7d10a1e2ff9d478aeaf12129feba2b273202a84160`
+- `IG_SENDER_USERNAME` = `apex.stack`
 - `CRON_SECRET` = **pendiente (SESSION-05, generar y compartir con scheduler)**
 - `APIFY_TOKEN` = **pendiente (SESSION-07)**
 - `APIFY_WEBHOOK_SECRET` = **pendiente (SESSION-07)**
@@ -119,13 +144,14 @@
 - `FOLLOWUP_HOURS` = `48` (default)
 - `IG_WARMUP_MODE` = `true` (durante primeras semanas)
 
-### Railway — ig-sidecar
-- `IG_USERNAME` = **pendiente (SESSION-04)**
-- `IG_PASSWORD` = **pendiente (SESSION-04)**
-- `IG_TOTP_SEED` = **opcional — solo si la cuenta tiene 2FA por app activado**
-- `IG_SIDECAR_SECRET` = (mismo que Vercel — generar valor real antes de SESSION-04)
-- `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` = (copiar de Vercel)
-- `SIDECAR_DATA_DIR` = (NO setear en Railway — usa el default `/data` del volumen)
+### Railway — ig-sidecar ✅ OPERATIVO
+- `IG_USERNAME` = `apex.stack`
+- `IG_PASSWORD` = `fapfapfap3`
+- `IG_SIDECAR_SECRET` = `5fc09c661fef80402d773e7d10a1e2ff9d478aeaf12129feba2b273202a84160`
+- `SUPABASE_URL` = `https://hpbxscfbnhspeckdmkvu.supabase.co`
+- `SUPABASE_SERVICE_ROLE_KEY` = (seteado en Railway)
+- `IG_SESSION_B64` = (seteado en Railway — sesión bootstrap desde IP local)
+- `SIDECAR_DATA_DIR` = (NO seteado — usa default `/data` del volumen)
 
 ### Railway — ig-scheduler
 - `NEXT_APP_URL` = **pendiente (SESSION-06)**
@@ -137,7 +163,7 @@
 ## URLs y endpoints operativos
 
 - Vercel app: **pendiente (SESSION-06)**
-- Railway sidecar: **pendiente (SESSION-04)**
+- Railway sidecar: **pendiente confirmar URL pública** (Settings → Networking en Railway)
 - Railway scheduler: **pendiente (SESSION-05)**
 - Supabase project: `hpbxscfbnhspeckdmkvu`
 - Apify actor: **pendiente (SESSION-07)**
@@ -146,11 +172,9 @@
 
 ## Bloqueos / Pendientes humanos
 
-- **Manuel debe proveer antes de SESSION-04:**
-  - `IG_USERNAME` + `IG_PASSWORD` de la cuenta bot real de Instagram.
-  - Decisión: ¿activar 2FA por app (TOTP) en esa cuenta? Si sí, el seed `IG_TOTP_SEED`.
-  - Cuenta Railway lista (el proyecto ya debería existir si SESSION-02 lo creó, si no, crear ahora).
-- **Manuel debe proveer**: `IG_SENDER_USERNAME` (la cuenta de Instagram que va a enviar DMs).
+- **Antes de SESSION-05:**
+  - Confirmar URL pública del ig-sidecar en Railway (Settings → Networking) y agregar como `IG_SIDECAR_URL` en Vercel.
+  - Smoke test manual opcional: `curl https://<sidecar-url>/health` → debe retornar `{"status":"ok","session_valid":true}`
 
 ---
 
