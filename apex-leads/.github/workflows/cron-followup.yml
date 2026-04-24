@@ -1,0 +1,33 @@
+name: Cron Followup
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # Cada 5 min (GitHub ejecuta ~cada 5-10 min en práctica)
+  workflow_dispatch:         # Disparo manual desde GitHub UI
+
+jobs:
+  trigger-followup:
+    name: Trigger followup cron
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger followup endpoint
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 90 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "https://apex-leads-six.vercel.app/api/cron/followup")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+
+          echo "HTTP: $HTTP_CODE"
+          echo "Body: $BODY"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "⚠ Cron respondió $HTTP_CODE"
+            exit 1
+          fi
+
+          echo "✓ OK"

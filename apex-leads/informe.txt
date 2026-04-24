@@ -1,0 +1,159 @@
+Informe técnico: APEX Lead Engine (apex-leads)
+1. Resumen ejecutivo
+APEX Lead Engine es una aplicación web interna de prospección y ventas por WhatsApp, orientada a la agencia APEX (desarrollo web y apps, Buenos Aires). Combina un panel en Next.js 14 con Supabase (PostgreSQL), generación de texto con Anthropic Claude, envío y recepción de mensajes vía Wassenger, y búsqueda de negocios con Google Places API (Text Search). El producto cubre dos caminos: outbound (vos contactás negocios) e inbound (te escriben primero), con un agente conversacional que aplica reglas de tono, formato WhatsApp y conocimiento de negocio almacenado en base de datos.
+
+2. Propósito y alcance funcional
+Área	Descripción
+Leads
+Alta, listado, estados del embudo (pendiente → contactado → respondio → …), origen outbound / inbound, flag agente_activo por lead.
+Primer contacto
+Generación de mensaje inicial con IA a partir de datos del negocio (/api/leads/generar-mensaje).
+Prospección en mapa
+Búsqueda de negocios por rubro/zona y deduplicación por teléfono (/api/leads/buscar).
+Inbox
+Vista tipo conversaciones agrupadas por lead (/api/conversaciones).
+Agente
+Respuestas automáticas en webhook + envío manual desde API; conocimiento editable vía tabla apex_info y toggles en configuracion.
+Dashboard
+Conteos y leads recientes (/api/dashboard).
+Config
+Clave/valor en Supabase; login con contraseña de administrador (ADMIN_PASSWORD).
+El README.md describe el flujo operativo (nuevo lead → mensaje → wa.me; inbound → webhook → lead + agente).
+
+3. Stack tecnológico
+Capa	Tecnología
+Framework
+Next.js 14.2 (App Router), React 18, TypeScript
+Estilo
+Tailwind CSS, lucide-react, recharts (dashboard)
+Datos
+Supabase (@supabase/supabase-js + cliente servidor con service role)
+IA
+@anthropic-ai/sdk, modelo claude-sonnet-4-20250514
+WhatsApp
+Wassenger REST (/v1/messages, devices)
+Búsqueda
+Google Places API (Places API v1 places:searchText)
+Deploy
+Vercel (vercel.json mínimo: framework Next, build/install npm)
+Scripts: dev, build, start, lint — sin tests automatizados en package.json.
+
+4. Arquitectura de la aplicación
+4.1 Frontend (App Router)
+src/app/layout.tsx: layout global con sidebar fijo (desktop) y menú móvil; tema oscuro (apex-* en clases).
+Rutas de página relevantes: /login, /dashboard, /leads, /leads/nuevo, /conversaciones, /agente, /configuracion.
+src/components/layout/sidebar.tsx: navegación principal (Dashboard, Leads, Nuevo Lead, Inbox, Agente IA, Config).
+4.2 API Routes (src/app/api/)
+Ruta	Rol
+POST /api/auth
+Login: compara password con ADMIN_PASSWORD, setea cookie apex_auth=true (httpOnly, 30 días).
+GET/POST/PATCH /api/leads
+CRUD con fallback entre tablas leads y leads_apex_next.
+POST /api/leads/generar-mensaje
+Genera primer mensaje WhatsApp con Claude.
+POST /api/leads/buscar
+Google Places + cruce con teléfonos ya en BD.
+GET /api/dashboard
+Métricas agregadas sobre tabla leads.
+GET /api/conversaciones
+Une conversaciones + leads, agrupa y ordena por último mensaje.
+POST /api/agente/responder
+Wrapper de generarRespuestaAgente en lib/agente.ts.
+POST /api/agente/enviar
+Envío manual vía enviarMensajeAgente.
+GET/POST /api/agente/config
+Lee/escribe configuracion.
+Otros agente/*
+info, test (no detallados en este informe; existen en el árbol).
+POST /api/webhook/wassenger
+Entrada principal inbound: crea/actualiza lead, guarda mensaje, lógica de agente, anti-duplicado con respuestas manuales recientes.
+4.3 Capa de dominio (src/lib/)
+agente.ts: orquesta lead, flags globales/por lead, apex_info, historial (últimos 20 mensajes), prompt según origen, llamada Anthropic; enviarMensajeAgente usa Wassenger e inserta en conversaciones con manual: true.
+prompts.ts: prompts extensos outbound/inbound (tono rioplatense, formato WhatsApp, límites de caracteres, emojis, BANT suave, no inventar datos). buildAgentPrompt concatena info APEX + historial.
+wassenger.ts: cliente HTTP reutilizable; verificarConexionWassenger para health check de devices.
+supabase-server.ts: cliente con service role (bypass RLS desde el servidor).
+supabase-client.ts: cliente anon (poco uso si la UI consume solo APIs propias).
+4.4 Middleware (src/middleware.ts)
+Público: /api/webhook/*, POST /api/auth.
+Resto: exige cookie apex_auth === 'true'; APIs sin cookie → 401, páginas → redirect a /login.
+No hay verificación de firma del webhook de Wassenger en código revisado (riesgo si la URL es pública).
+5. Modelo de datos (Supabase)
+Definido en supabase-schema.sql (script idempotente):
+
+Enums: estado_lead, origen_lead, rol_mensaje, tipo_mensaje.
+Tabla principal en SQL: leads_apex_next (campos alineados con el tipo Lead en src/types/index.ts).
+conversaciones: FK a leads_apex_next, manual para distinguir envíos humanos vs automáticos.
+apex_info: base de conocimiento por categoría/título/contenido.
+configuracion: clave/valor (p. ej. agente_activo).
+RLS habilitado; políticas que permiten todo a service_role (coherente con uso solo desde servidor con service key).
+Realtime: publicación de conversaciones para actualizaciones en tiempo real (si el front lo suscribe).
+Seeds: filas iniciales en configuracion y apex_info (precios de ejemplo, proceso, FAQs, etc.).
+Inconsistencia importante: el esquema SQL crea leads_apex_next, pero gran parte del código usa la tabla leads (webhook, dashboard, agente.ts, conversaciones). Solo /api/leads y /api/leads/buscar contemplan ambos nombres. En un despliegue “solo schema del repo”, faltaría crear una vista leads → leads_apex_next o renombrar/unificar tablas; de lo contrario, varias rutas fallarán.
+
+6. Flujos de negocio detallados
+6.1 Outbound (nuevo lead)
+Usuario carga datos en UI (/leads/nuevo).
+Opcional: POST /api/leads/buscar para encontrar negocios (rubro + zona); marca ya_registrado si el teléfono existe en leads o leads_apex_next.
+POST /api/leads/generar-mensaje: Claude genera mensaje 80–300 caracteres alineado al tono APEX.
+Creación del lead vía POST /api/leads.
+Envío humano típico: enlace wa.me (según README); el agente puede tomar la conversación cuando el cliente responde por el mismo número en Wassenger.
+6.2 Inbound (webhook Wassenger)
+Evento message:in:new:
+
+Normaliza teléfono; ignora mensajes del número “dueño” hardcodeado (OWNER_PHONE).
+Busca lead por teléfono; si no existe, crea lead inbound con datos genéricos (Lead XXXX, rubro/zona “Por definir”).
+Inserta mensaje en conversaciones (marca tipo audio/imagen).
+Actualiza estado a respondio si estaba contactado o pendiente.
+Si agente global o por lead está off → termina sin responder.
+Ventana 5 min: si hubo respuesta manual del agente (manual: true), no auto-responde (evita pisar al humano).
+Audio/imagen: respuesta fija pidiendo texto.
+Frases de “no interés”: marca no_interesado y desactiva agente_activo.
+Texto: construye el mismo prompt que agente.ts, llama Claude, envía por Wassenger y guarda mensaje automático.
+Hay duplicación de lógica entre generarRespuestaAgente (lib/agente.ts) y el bloque largo del webhook (mismo modelo, mismo armado de prompt). Cualquier cambio de reglas conviene centralizar.
+
+6.3 Dashboard
+Cuenta totales y filtros por estado/fecha sobre leads; lista los 10 leads más recientes.
+
+7. Integraciones externas
+Servicio	Uso	Variables
+Anthropic
+Mensajes iniciales, respuestas del agente
+ANTHROPIC_API_KEY
+Wassenger
+Envío y webhook de entrada
+WASSENGER_API_KEY, WASSENGER_DEVICE_ID
+Google Places
+Búsqueda de negocios
+GOOGLE_PLACES_API_KEY (no listada en el README de env; necesaria para /buscar)
+App
+URLs absolutas (webhooks, etc.)
+NEXT_PUBLIC_APP_URL
+8. Seguridad y cumplimiento (visión técnica)
+Autenticación: cookie compartida por contraseña única; no es multi-usuario ni OAuth. Adecuado para uso interno cerrado; no es modelo SaaS multi-tenant.
+API: protegida por middleware salvo webhook y login.
+Webhook: superficie expuesta; convendría validar origen (token en query/header, IP allowlist, o firma si Wassenger la ofrece) — no aparece en el código leído.
+Secretos: service role en servidor; nunca exponer al cliente.
+Datos en prompts: el agente está instruido a no inventar fuera de apex_info; el cumplimiento real depende del modelo y del contenido cargado en BD.
+9. Calidad de código y mantenibilidad
+Fortalezas
+
+Tipos TypeScript claros (src/types/index.ts).
+Prompts muy documentados y alineados al canal WhatsApp.
+Webhook con reglas productivas (manual reciente, opt-out, fallback multimedia).
+API de leads resiliente a dos nombres de tabla (leads vs leads_apex_next).
+Deuda / riesgos
+
+Nombre de tabla leads vs leads_apex_next: riesgo de fallo en producción si el esquema no incluye vista o tabla leads.
+Duplicación Anthropic + prompt entre agente.ts y webhook/wassenger/route.ts.
+Teléfono del dueño fijo en código (OWNER_PHONE) — debería ser variable de entorno.
+Sin tests automatizados visibles.
+GOOGLE_PLACES_API_KEY usada pero no documentada en el README de variables.
+Layout raíz: el login podría mostrar el sidebar del RootLayout (depende de si se considera deseable en UX).
+10. Despliegue y operación
+Local: npm install, .env.local con todas las keys, npm run dev.
+Producción: Vercel + variables de entorno; webhook Wassenger apuntando a https://<dominio>/api/webhook/wassenger, evento message:in:new.
+Base: ejecutar supabase-schema.sql en SQL Editor; revisar coherencia del nombre de tabla leads.
+11. Conclusión
+El proyecto es un CRM ligero + agente de WhatsApp bien enfocado en el caso APEX: prospección asistida, conversación con tono regional y reglas de venta, e integración real con proveedor de mensajería. La arquitectura es directa (Next API routes + Supabase + Claude). Los puntos críticos para evolución estable son unificar el esquema de tabla de leads, reducir duplicación del agente, endurecer el webhook y documentar/probar las variables opcionales (Google Places).
+
+Si querés, el siguiente paso puede ser un informe solo de riesgos con prioridades (P0/P1) o un diagrama de secuencia (webhook ↔ Supabase ↔ Claude ↔ Wassenger) en Mermaid.

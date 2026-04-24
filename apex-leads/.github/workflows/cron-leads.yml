@@ -1,0 +1,52 @@
+name: Cron — Leads Pendientes (MIGRADO A RAILWAY)
+
+# SCHEDULE DESACTIVADO: migrado a Railway Cron Job.
+# Ver: railway-cron-pinger/README.md
+# Para disparo manual de emergencia usar el botón "Run workflow" en GitHub Actions.
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Motivo del disparo manual"
+        required: false
+        default: "Disparo manual de emergencia"
+
+# El schedule fue migrado a Railway Cron. NO reactivar sin antes
+# deshabilitar el pinger en Railway para evitar doble disparo.
+# on:
+#   schedule:
+#     - cron: '*/5 * * * *'  # Cada 5 min (límite mínimo útil; GitHub puede demorar un poco más)
+
+# Un solo run a la vez: evita dos instancias forzando envíos a la vez (ver docs/DEBUG_GUIDE.md)
+concurrency:
+  group: leads-pendientes-cron
+  cancel-in-progress: false
+
+jobs:
+  trigger-cron:
+    name: Trigger leads-pendientes
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger cron endpoint
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          # force=true: mismo comportamiento que "Trigger Cron After Deploy" (post push).
+          # Sin esto, el schedule suele devolver 200 con slot/ventana y no manda aunque el workflow sea verde.
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            "https://apex-leads-six.vercel.app/api/cron/leads-pendientes?force=true")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -1)
+
+          echo "HTTP: $HTTP_CODE"
+          echo "Body: $BODY"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "⚠ Cron respondió $HTTP_CODE"
+            exit 1
+          fi
+
+          echo "✓ OK"

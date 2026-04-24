@@ -1,0 +1,64 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color: #0a0a0a;
+  color: #e5e5e5;
+  font-family: 'DM Sans', sans-serif;
+}
+
+/* Scrollbar personalizado */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #111111;
+}
+::-webkit-scrollbar-thumb {
+  background: #333333;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #444444;
+}
+
+/* Animaciones */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-lime {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(200, 241, 53, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(200, 241, 53, 0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+.pulse-lime {
+  animation: pulse-lime 2s ease-in-out infinite;
+}
+
+/* Badge de estado */
+.badge-pendiente    { background-color: #333; color: #999; }
+.badge-contactado   { background-color: #1a3a5c; color: #60a5fa; }
+.badge-respondio    { background-color: #1a3a1a; color: #4ade80; }
+.badge-interesado   { background-color: #3a3a1a; color: #c8f135; }
+.badge-cerrado      { background-color: #1a3a2a; color: #34d399; }
+.badge-descartado   { background-color: #3a1a1a; color: #f87171; }
+.badge-no_interesado { background-color: #2a2a2a; color: #888; }
