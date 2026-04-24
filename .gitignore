@@ -1,10 +1,70 @@
-apex-leads.zip
-sidecar/.venv/
-sidecar/data/
+# Dependencies
+node_modules/
+**/node_modules/
+.venv/
+**/.venv/
+venv/
+**/venv/
+__pycache__/
 **/__pycache__/
-**/*.pyc
-.env.local
+*.py[cod]
+*.egg-info/
+
+# Build outputs
+.next/
+**/.next/
+out/
+**/out/
+dist/
+**/dist/
+build/
+**/build/
+*.tsbuildinfo
+
+# Environment files
 .env
-*.env
-.remember/
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+
+# Instagram sidecar — secretos de sesión, NUNCA commitear
+sidecar/session_b64.txt
+sidecar/session_export.json
+sidecar/data/
+**/data/session.json
+
+# Backups locales de migración
 backup/
+*.bundle
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Testing / coverage
+coverage/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swn
+.DS_Store
+Thumbs.db
+
+# Vercel
+.vercel
+
+# Claude / local memory
+.remember/
+.claude/
+
+# Large assets (explícitos)
+apex-leads.zip
+*.zip
