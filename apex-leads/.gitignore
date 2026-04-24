@@ -14,3 +14,5 @@ railway-cron-pinger/.pytest_cache/
 railway-cron-pinger/venv/
 railway-cron-pinger/.venv/
 railway-cron-pinger/env/
+
+.vercel

@@ -36,17 +36,9 @@ interface SenderDef {
 
 const SENDERS: SenderDef[] = [
   {
-    key: 'twilio_1',
+    key: 'assistify_respaldo',
     provider: 'twilio',
-    phoneNumber: '+5491124843094',
-    contentSid: TWILIO_CONTENT_SID,
-    intMin: 0,
-    intMax: 0,
-  },
-  {
-    key: 'twilio_2',
-    provider: 'twilio',
-    phoneNumber: '+5491124842720',
+    phoneNumber: '+5491125303794',
     contentSid: TWILIO_CONTENT_SID,
     intMin: 0,
     intMax: 0,
