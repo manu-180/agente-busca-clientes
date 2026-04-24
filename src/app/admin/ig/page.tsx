@@ -7,7 +7,7 @@ import {
   Pause, Play, RefreshCw, Eye, Activity, Send,
 } from 'lucide-react'
 
-// ── Typessss ─────────────────────────────────────────────────────────────────────
+// ── Types ────────────────────────────────────────────────────────────────────────
 
 interface IgStats {
   status_counts: Record<string, number>

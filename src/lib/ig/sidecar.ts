@@ -3,9 +3,10 @@
  * Signs every request with HMAC-SHA256 so the sidecar can verify origin.
  */
 import crypto from 'crypto'
+import { igConfig } from './config'
 
-const SIDECAR_URL = process.env.IG_SIDECAR_URL!
-const SIDECAR_SECRET = process.env.IG_SIDECAR_SECRET!
+const SIDECAR_URL = igConfig.IG_SIDECAR_URL
+const SIDECAR_SECRET = igConfig.IG_SIDECAR_SECRET
 
 function sign(body: string): string {
   return (

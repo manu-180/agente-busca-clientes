@@ -8,14 +8,13 @@ import { createSupabaseServer } from '@/lib/supabase-server'
 import { pollInbox } from '@/lib/ig/sidecar'
 import { handleIncomingReply } from '@/lib/ig/handle-reply'
 import { alertLowReplyRate } from '@/lib/ig/alerts'
+import { igConfig } from '@/lib/ig/config'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 function authCron(req: NextRequest): boolean {
-  const secret = process.env.CRON_SECRET
-  if (!secret) return false
-  return req.headers.get('authorization') === `Bearer ${secret}`
+  return req.headers.get('authorization') === `Bearer ${igConfig.CRON_SECRET}`
 }
 
 export async function GET(req: NextRequest) {

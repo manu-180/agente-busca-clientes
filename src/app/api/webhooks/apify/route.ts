@@ -1,12 +1,13 @@
 import crypto from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
+import { igConfig } from '@/lib/ig/config'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
-const APIFY_WEBHOOK_SECRET = process.env.APIFY_WEBHOOK_SECRET!
-const APIFY_TOKEN = process.env.APIFY_TOKEN!
+const APIFY_WEBHOOK_SECRET = igConfig.APIFY_WEBHOOK_SECRET
+const APIFY_TOKEN = igConfig.APIFY_TOKEN
 
 function verifyApifySignature(req: NextRequest, rawBody: string): boolean {
   const signature = req.headers.get('apify-webhook-signature')

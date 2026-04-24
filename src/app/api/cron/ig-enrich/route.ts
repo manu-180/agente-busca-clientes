@@ -7,7 +7,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { classifyLink, isTargetLead } from '@/lib/ig/classify'
 import { scoreLead } from '@/lib/ig/score'
-import { enrichProfiles } from '@/lib/ig/sidecar'
+import { enrichProfiles, type ProfileData } from '@/lib/ig/sidecar'
+import { igConfig } from '@/lib/ig/config'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -15,9 +16,7 @@ export const maxDuration = 120
 const BATCH_SIZE = 20
 
 function authCron(req: NextRequest): boolean {
-  const secret = process.env.CRON_SECRET
-  if (!secret) return false
-  return req.headers.get('authorization') === `Bearer ${secret}`
+  return req.headers.get('authorization') === `Bearer ${igConfig.CRON_SECRET}`
 }
 
 export async function GET(req: NextRequest) {
@@ -42,7 +41,7 @@ export async function GET(req: NextRequest) {
   const usernames = rawRows.map((r) => r.ig_username).filter(Boolean) as string[]
 
   // Enrich via sidecar (falls back to raw_profile data if sidecar unavailable)
-  let enrichedMap: Record<string, ReturnType<typeof enrichProfiles> extends Promise<{ profiles: (infer P)[] }> ? P : never> = {}
+  let enrichedMap: Record<string, ProfileData> = {}
   try {
     const { profiles } = await enrichProfiles(usernames)
     for (const p of profiles) enrichedMap[p.ig_username] = p

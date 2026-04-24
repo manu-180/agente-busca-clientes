@@ -4,13 +4,14 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
+import { igConfig } from '@/lib/ig/config'
 
 export const dynamic = 'force-dynamic'
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}))
   const supabase = createSupabaseServer()
-  const IG_SENDER = process.env.IG_SENDER_USERNAME ?? ''
+  const IG_SENDER = igConfig.IG_SENDER_USERNAME
 
   if (body.resume) {
     const { error } = await supabase

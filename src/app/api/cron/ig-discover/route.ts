@@ -3,13 +3,14 @@
  * Launches Apify instagram-scraper actor for target hashtags.
  */
 import { NextRequest, NextResponse } from 'next/server'
+import { igConfig } from '@/lib/ig/config'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
 
-const APIFY_TOKEN = process.env.APIFY_TOKEN!
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL!
-const APIFY_WEBHOOK_SECRET = process.env.APIFY_WEBHOOK_SECRET!
+const APIFY_TOKEN = igConfig.APIFY_TOKEN
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? ''
+const APIFY_WEBHOOK_SECRET = igConfig.APIFY_WEBHOOK_SECRET
 
 const TARGET_HASHTAGS = [
   'modaargentina',
@@ -22,9 +23,7 @@ const TARGET_HASHTAGS = [
 ]
 
 function authCron(req: NextRequest): boolean {
-  const secret = process.env.CRON_SECRET
-  if (!secret) return false
-  return req.headers.get('authorization') === `Bearer ${secret}`
+  return req.headers.get('authorization') === `Bearer ${igConfig.CRON_SECRET}`
 }
 
 export async function GET(req: NextRequest) {

@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
+import { igConfig } from '@/lib/ig/config'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET() {
   const supabase = createSupabaseServer()
-  const IG_SENDER = process.env.IG_SENDER_USERNAME ?? ''
-  const DAILY_LIMIT = parseInt(process.env.DAILY_DM_LIMIT ?? '10', 10)
+  const IG_SENDER = igConfig.IG_SENDER_USERNAME
+  const DAILY_LIMIT = igConfig.DAILY_DM_LIMIT
   const today = new Date().toISOString().split('T')[0]
   const ago7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
   const ago24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
@@ -100,7 +101,7 @@ export async function GET() {
     reply_rate_7d: replyRate7d,
     shadowban_suspected: shadowbanSuspected,
     recent_leads: recentLeads,
-    warmup_mode: process.env.IG_WARMUP_MODE === 'true',
-    dry_run: process.env.DRY_RUN === 'true',
+    warmup_mode: igConfig.IG_WARMUP_MODE,
+    dry_run: igConfig.DRY_RUN,
   })
 }

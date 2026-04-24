@@ -5,14 +5,15 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
+import { igConfig } from '@/lib/ig/config'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
 
-const DAILY_LIMIT = parseInt(process.env.DAILY_DM_LIMIT ?? '3', 10)
-const IG_SENDER = process.env.IG_SENDER_USERNAME!
+const DAILY_LIMIT = igConfig.DAILY_DM_LIMIT
+const IG_SENDER = igConfig.IG_SENDER_USERNAME
 // Warmup mode: cap at 3 DMs during first 14 days of operation
-const WARMUP_MODE = process.env.IG_WARMUP_MODE === 'true'
+const WARMUP_MODE = igConfig.IG_WARMUP_MODE
 const WARMUP_LIMIT = 3
 
 // Window: 09:30–21:30 ART = 12:30–00:30 UTC
@@ -21,9 +22,7 @@ const WINDOW_START_UTC_MIN = 30
 const WINDOW_DURATION_MINUTES = 12 * 60 // 12 hours
 
 function authCron(req: NextRequest): boolean {
-  const secret = process.env.CRON_SECRET
-  if (!secret) return false
-  return req.headers.get('authorization') === `Bearer ${secret}`
+  return req.headers.get('authorization') === `Bearer ${igConfig.CRON_SECRET}`
 }
 
 function gaussianRandom(mean: number, stdDev: number): number {

@@ -11,17 +11,16 @@ import { SYSTEM_PROMPT } from '@/lib/ig/prompts/system'
 import { pickOpeningTemplate } from '@/lib/ig/prompts/templates'
 import { alertCircuitOpen } from '@/lib/ig/alerts'
 import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
+import { igConfig } from '@/lib/ig/config'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 90
 
-const IG_SENDER = process.env.IG_SENDER_USERNAME!
-const DRY_RUN = process.env.DRY_RUN === 'true'
+const IG_SENDER = igConfig.IG_SENDER_USERNAME
+const DRY_RUN = igConfig.DRY_RUN
 
 function authCron(req: NextRequest): boolean {
-  const secret = process.env.CRON_SECRET
-  if (!secret) return false
-  return req.headers.get('authorization') === `Bearer ${secret}`
+  return req.headers.get('authorization') === `Bearer ${igConfig.CRON_SECRET}`
 }
 
 export async function GET(req: NextRequest) {
