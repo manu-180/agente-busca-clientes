@@ -1,0 +1,6 @@
+[build]
+builder = "DOCKERFILE"
+
+[deploy]
+cronSchedule = "0 12 * * *"
+restartPolicyType = "never"

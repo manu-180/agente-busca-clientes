@@ -1,0 +1,12 @@
+.venv/
+data/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.local
+*.env
+
+# Instagram session artefacts - contienen cookies reales, nunca commitear
+session_b64.txt
+session_export.json

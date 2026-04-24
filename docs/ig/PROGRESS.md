@@ -6,9 +6,10 @@
 
 ## Estado actual
 
-**Última sesión completada:** SESSION-04 — Sidecar deploy Railway + sesión Instagram persistida (2026-04-24)
-**Próxima sesión:** SESSION-05 — Scheduler Python en Railway
-**Siguiente prompt a usar:** `docs/ig/prompts/SESSION-05.md`
+**Última sesión completada:** SESSION-06 — Deploy Next.js a Vercel (2026-04-24)
+**Próxima sesión:** SESSION-07 — Apify setup + webhook fix + test E2E
+**Siguiente prompt a usar:** `docs/ig/prompts/SESSION-07.md` ✅ (listo)
+**Después de SESSION-07:** `docs/ig/prompts/SESSION-08.md` ✅ (listo)
 
 ---
 
@@ -21,8 +22,8 @@
 - [x] SESSION-02 (Opus) · Sidecar scaffolding + HMAC + stubs
 - [x] SESSION-03 (Opus) · Sidecar instagrapi integration + circuit breaker
 - [x] SESSION-04 (Opus) · Sidecar deploy Railway + sesión Instagram persistida
-- [ ] SESSION-05 (Sonnet) · Scheduler Python en Railway
-- [ ] SESSION-06 (Sonnet) · Deploy Next.js a Vercel
+- [x] SESSION-05 (Sonnet) · Scheduler Python en Railway
+- [x] SESSION-06 (Sonnet) · Deploy Next.js a Vercel
 
 ### TANDA 2 — Integración + Agente
 - [ ] SESSION-07 (Sonnet) · Apify setup + webhook test
@@ -38,6 +39,38 @@
 ---
 
 ## Decisiones tomadas
+
+### SESSION-06 (2026-04-24)
+
+**Fix config.ts — BUILD_DEFAULTS overrideados por strings vacías**
+- El build local fallaba en `/api/cron/ig-discover` porque `process.env` tenía keys vacías que overrideaban BUILD_DEFAULTS.
+- Fix: filtrar strings vacías/undefined antes del spread en `loadConfig()`.
+- `npm run build` → ✅ build limpio post-fix.
+
+**CRON_SECRET generado**
+- Valor: `cba5184565ea5a17e01da6391dd9caf323e4fc97e2083f26c80c2b2f56f81bab`
+- Setear en Vercel + Railway ig-scheduler antes de deploy.
+
+**APIFY_TOKEN y APIFY_WEBHOOK_SECRET — placeholders hasta SESSION-07**
+- `igConfig` los requiere en runtime pero `run-cycle` no los usa directamente.
+- Placeholder en Vercel: `APIFY_TOKEN=__stub__`, `APIFY_WEBHOOK_SECRET=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`
+- SESSION-07 los reemplaza con valores reales de Apify.
+
+**Vercel deploy — pendiente acción manual**
+- URL de Vercel: **pendiente (usuario debe deployar y compartir URL)**
+- Smoke test esperado: `POST /api/ig/run-cycle` → `{"ok": true, "dry_run": true, "leads_processed": 0}`
+
+---
+
+### SESSION-05 (2026-04-24)
+
+**Scheduler Python creado en `sidecar/scheduler/`**
+- `scheduler.py`: HTTP call a `POST /api/ig/run-cycle` con `Authorization: Bearer <CRON_SECRET>`, timeout 120s, exit 0/1.
+- `Dockerfile`: `python:3.11-slim`, solo instala `httpx`.
+- `railway.toml`: `cronSchedule = "0 12 * * *"` (9 AM ART = 12 UTC), `restartPolicyType = "never"`.
+- Fail-fast si `NEXT_APP_URL` o `CRON_SECRET` no están seteados.
+
+---
 
 ### SESSION-04 (2026-04-24)
 
@@ -136,9 +169,9 @@
 - `IG_SIDECAR_URL` = `https://ig-sidecar-production.up.railway.app`
 - `IG_SIDECAR_SECRET` = `5fc09c661fef80402d773e7d10a1e2ff9d478aeaf12129feba2b273202a84160`
 - `IG_SENDER_USERNAME` = `apex.stack`
-- `CRON_SECRET` = **pendiente (SESSION-05, generar y compartir con scheduler)**
-- `APIFY_TOKEN` = **pendiente (SESSION-07)**
-- `APIFY_WEBHOOK_SECRET` = **pendiente (SESSION-07)**
+- `CRON_SECRET` = `cba5184565ea5a17e01da6391dd9caf323e4fc97e2083f26c80c2b2f56f81bab`
+- `APIFY_TOKEN` = `__stub__` (placeholder hasta SESSION-07)
+- `APIFY_WEBHOOK_SECRET` = `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` (placeholder hasta SESSION-07)
 - `DRY_RUN` = `true` hasta SESSION-10
 - `DAILY_DM_LIMIT` = `3` (warmup inicial)
 - `FOLLOWUP_HOURS` = `48` (default)
@@ -154,17 +187,17 @@
 - `SIDECAR_DATA_DIR` = (NO seteado — usa default `/data` del volumen)
 
 ### Railway — ig-scheduler
-- `NEXT_APP_URL` = **pendiente (SESSION-06)**
-- `CRON_SECRET` = (mismo que Vercel)
+- `NEXT_APP_URL` = **pendiente (URL de Vercel una vez deployado)**
+- `CRON_SECRET` = `cba5184565ea5a17e01da6391dd9caf323e4fc97e2083f26c80c2b2f56f81bab`
 - `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` = (copiar)
 
 ---
 
 ## URLs y endpoints operativos
 
-- Vercel app: **pendiente (SESSION-06)**
+- Vercel app: **pendiente (usuario debe deployar y compartir URL)**
 - Railway sidecar: `https://ig-sidecar-production.up.railway.app` ✅
-- Railway scheduler: **pendiente (SESSION-05)**
+- Railway scheduler: **pendiente de deploy** (código listo en `sidecar/scheduler/`)
 - Supabase project: `hpbxscfbnhspeckdmkvu`
 - Apify actor: **pendiente (SESSION-07)**
 
@@ -172,9 +205,12 @@
 
 ## Bloqueos / Pendientes humanos
 
-- **Antes de SESSION-05:**
-  - Confirmar URL pública del ig-sidecar en Railway (Settings → Networking) y agregar como `IG_SIDECAR_URL` en Vercel.
-  - Smoke test manual opcional: `curl https://<sidecar-url>/health` → debe retornar `{"status":"ok","session_valid":true}`
+- **Antes de SESSION-07:**
+  - Deployar `apex-leads` a Vercel con las env vars de SESSION-06.md.
+  - Smoke test: `POST /api/ig/run-cycle` → `{"ok": true, "dry_run": true}`.
+  - Setear `NEXT_APP_URL` en Railway ig-scheduler con la URL real de Vercel.
+  - Setear `CRON_SECRET` en Railway ig-scheduler: `cba5184565ea5a17e01da6391dd9caf323e4fc97e2083f26c80c2b2f56f81bab`.
+  - Hacer el primer deploy del ig-scheduler en Railway (conectar `sidecar/scheduler/` como nuevo servicio).
 
 ---
 

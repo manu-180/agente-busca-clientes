@@ -7,3 +7,4 @@ sidecar/data/
 .env
 *.env
 .remember/
+backup/
