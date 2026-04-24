@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { igConfig } from '@/lib/ig/config'
-import { sendDM, enrichProfiles, SidecarError } from '@/lib/ig/sidecar'
+import { sendDM, enrichProfiles, SidecarError, type ProfileData } from '@/lib/ig/sidecar'
 import { isTargetLead, classifyLink } from '@/lib/ig/classify'
 import { scoreLead } from '@/lib/ig/score'
 import { pickOpeningTemplate } from '@/lib/ig/prompts/templates'
@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
 
   // Enrich candidates in batches of 20 via sidecar
   const BATCH = 20
-  const enrichedMap = new Map<string, ReturnType<typeof enrichProfiles> extends Promise<{ profiles: infer P[] }> ? P : never>()
+  const enrichedMap = new Map<string, ProfileData>()
 
   let circuitOpen = false
 
