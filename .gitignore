@@ -1,0 +1,9 @@
+apex-leads.zip
+sidecar/.venv/
+sidecar/data/
+**/__pycache__/
+**/*.pyc
+.env.local
+.env
+*.env
+.remember/
