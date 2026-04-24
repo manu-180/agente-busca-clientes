@@ -15,7 +15,7 @@ Estamos construyendo un agente de Instagram para boutiques de moda en Argentina.
 - **Python scheduler** (ig-scheduler) en Railway — dispara el ciclo de outreach diario
 
 El sidecar (`github.com/manu-180/ig-sidecar`) está 100% operativo:
-- URL pública: `<CONFIRMAR en Railway Settings → Networking>`
+- URL pública: `https://ig-sidecar-production.up.railway.app`
 - `GET /health` → `{"status":"ok","session_valid":true}`
 - Secret HMAC: `5fc09c661fef80402d773e7d10a1e2ff9d478aeaf12129feba2b273202a84160`
 

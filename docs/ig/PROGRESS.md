@@ -59,7 +59,7 @@
 **pydantic pinned a `==2.10.1`**
 - `instagrapi==2.1.3` requiere exactamente `pydantic==2.10.1`. Versiones anteriores (2.9.2) causan conflicto de dependencias en pip.
 
-**Railway sidecar URL**: pendiente confirmar — ver Settings → Networking en Railway dashboard
+**Railway sidecar URL**: `https://ig-sidecar-production.up.railway.app` ✅
 **IG_SIDECAR_SECRET usado**: `5fc09c661fef80402d773e7d10a1e2ff9d478aeaf12129feba2b273202a84160`
 
 ---
@@ -133,7 +133,7 @@
 - `NEXT_PUBLIC_SUPABASE_URL` = `https://hpbxscfbnhspeckdmkvu.supabase.co`
 - `SUPABASE_SERVICE_ROLE_KEY` = (ya existente)
 - `ANTHROPIC_API_KEY` = (ya existente, validado via `igConfig`)
-- `IG_SIDECAR_URL` = **pendiente confirmar URL pública Railway ig-sidecar**
+- `IG_SIDECAR_URL` = `https://ig-sidecar-production.up.railway.app`
 - `IG_SIDECAR_SECRET` = `5fc09c661fef80402d773e7d10a1e2ff9d478aeaf12129feba2b273202a84160`
 - `IG_SENDER_USERNAME` = `apex.stack`
 - `CRON_SECRET` = **pendiente (SESSION-05, generar y compartir con scheduler)**
@@ -163,7 +163,7 @@
 ## URLs y endpoints operativos
 
 - Vercel app: **pendiente (SESSION-06)**
-- Railway sidecar: **pendiente confirmar URL pública** (Settings → Networking en Railway)
+- Railway sidecar: `https://ig-sidecar-production.up.railway.app` ✅
 - Railway scheduler: **pendiente (SESSION-05)**
 - Supabase project: `hpbxscfbnhspeckdmkvu`
 - Apify actor: **pendiente (SESSION-07)**
