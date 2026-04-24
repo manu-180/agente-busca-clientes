@@ -48,7 +48,11 @@ const BUILD_DEFAULTS: Record<string, string> = {
 }
 
 function loadConfig(): IgConfig {
-  const input = BUILD ? { ...BUILD_DEFAULTS, ...process.env } : process.env
+  // Filter empty strings so BUILD_DEFAULTS aren't overridden by unset local env vars
+  const nonEmptyEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([, v]) => v !== undefined && v !== ''),
+  )
+  const input = BUILD ? { ...BUILD_DEFAULTS, ...nonEmptyEnv } : process.env
 
   const result = schema.safeParse(input)
   if (!result.success) {

@@ -20,7 +20,7 @@ export const maxDuration = 60
 const TZ_OFFSET_HOURS_AR = -3
 const LEADS_TABLE = 'leads'
 const MAX_REINTENTOS = 3
-const TWILIO_CONTENT_SID = 'HXd09b087b8ee1390b5c8aacff30598281'
+const TWILIO_CONTENT_SID = 'HX77f10bb7597eb3ef4a0422e9f033859a'
 
 // ─── Senders Twilio (primer contacto) ────────────────────────────────────────
 // Cadencia intMin/intMax en minutos; si ambos ≤ 0 no hay espera entre envíos.
