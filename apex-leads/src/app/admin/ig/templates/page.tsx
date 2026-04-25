@@ -1,6 +1,7 @@
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { getTemplateStats } from '@/lib/ig/metrics/queries'
 import type { TemplateStatRow } from '@/lib/ig/metrics/queries'
+import { TemplateActions } from '../_components/TemplateActions'
 
 export const dynamic = 'force-dynamic'
 
@@ -41,6 +42,7 @@ export default async function TemplatesPage() {
               <th className="text-right px-4 py-3">CTR</th>
               <th className="text-left px-4 py-3">CI 95%</th>
               <th className="text-left px-4 py-3">Estado</th>
+              <th className="text-left px-4 py-3">Acciones</th>
             </tr>
           </thead>
           <tbody>
@@ -71,12 +73,15 @@ export default async function TemplatesPage() {
                       {t.status}
                     </span>
                   </td>
+                  <td className="px-4 py-3">
+                    <TemplateActions id={t.template_id} status={t.status} />
+                  </td>
                 </tr>
               )
             })}
             {!rows.length && (
               <tr>
-                <td colSpan={6} className="px-5 py-8 text-center text-apex-muted text-sm">
+                <td colSpan={7} className="px-5 py-8 text-center text-apex-muted text-sm">
                   Sin templates aún. Se crean en D11 (A/B testing).
                 </td>
               </tr>

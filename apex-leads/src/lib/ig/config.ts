@@ -35,6 +35,7 @@ const schema = z.object({
   FOLLOWUP_HOURS: intEnv(48),
   IG_WARMUP_MODE: boolEnv(false),
   DISCOVERY_ENABLED: boolEnv(true),
+  DISCORD_ALERT_WEBHOOK: z.string().url().optional(),
 })
 
 export type IgConfig = z.infer<typeof schema>

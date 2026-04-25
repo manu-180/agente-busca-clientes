@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { createSupabaseServer } from '@/lib/supabase-server'
+import { LeadActions } from '../_components/LeadActions'
 
 export const dynamic = 'force-dynamic'
 
@@ -182,6 +183,7 @@ export default async function LeadsPage({
                 <th className="text-left px-4 py-3">Último DM</th>
                 <th className="text-left px-4 py-3">Respondió</th>
                 <th className="text-left px-4 py-3">Descubierto</th>
+                <th className="text-left px-4 py-3">Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -235,11 +237,14 @@ export default async function LeadsPage({
                   <td className="px-4 py-2.5 text-xs font-mono text-apex-muted">
                     {formatDate(l.created_at)}
                   </td>
+                  <td className="px-4 py-2.5">
+                    <LeadActions username={l.ig_username} status={l.status} />
+                  </td>
                 </tr>
               ))}
               {!rows.length && (
                 <tr>
-                  <td colSpan={8} className="px-5 py-8 text-center text-apex-muted text-sm">
+                  <td colSpan={9} className="px-5 py-8 text-center text-apex-muted text-sm">
                     Sin leads con los filtros aplicados.
                   </td>
                 </tr>

@@ -1,4 +1,5 @@
 import { createSupabaseServer } from '@/lib/supabase-server'
+import { ToggleSourceButton } from '../_components/ToggleSourceButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -73,6 +74,7 @@ export default async function SourcesPage() {
               <th className="text-left px-4 py-3">Último run</th>
               <th className="text-left px-4 py-3">Estado</th>
               <th className="text-left px-4 py-3">Notas</th>
+              <th className="text-left px-4 py-3">Acción</th>
             </tr>
           </thead>
           <tbody>
@@ -119,12 +121,15 @@ export default async function SourcesPage() {
                   <td className="px-4 py-3 text-xs text-apex-muted max-w-[180px] truncate">
                     {s.notes ?? '—'}
                   </td>
+                  <td className="px-4 py-3">
+                    <ToggleSourceButton id={s.id} active={s.active} />
+                  </td>
                 </tr>
               )
             })}
             {!rows.length && (
               <tr>
-                <td colSpan={8} className="px-5 py-8 text-center text-apex-muted text-sm">
+                <td colSpan={9} className="px-5 py-8 text-center text-apex-muted text-sm">
                   Sin fuentes configuradas.
                 </td>
               </tr>

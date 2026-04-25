@@ -10,7 +10,7 @@
 |---|---|---|---|
 | Phase 1 — Foundation | D01–D03 | 🟡 in progress | 2026-04-24 |
 | Phase 2 — Orchestration & Intelligence | D04–D07 | 🟡 in progress | 2026-04-25 |
-| Phase 3 — Observability & Admin | D08–D10 | 🟡 in progress | 2026-04-25 |
+| Phase 3 — Observability & Admin | D08–D10 | ✅ done | 2026-04-25 |
 | Phase 4 — Optimization | D11–D12 | ⏸ pending | 2026-04-24 |
 | Phase 5 — Production | D13–D14 | ⏸ pending | 2026-04-24 |
 
@@ -154,13 +154,25 @@ Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 - Fixes de pre-existing errors: `tsconfig target es2017` (Map.entries iteration), `cron-parser v5` API (`CronExpressionParser.parse()`)
 
 ### D10 — Admin actions + Discord alerts
-**Status:** ⏸ pending  
-**Modelo:** Sonnet  
-**Output esperado:**
-- POST endpoints para pause/resume source, kill template, blacklist lead, re-classify
-- `lib/ig/alerts/discord.ts` con sendAlert(severity, msg, meta)
-- Hooks: circuit_open, low_reply_rate, daily_quota_unmet
-**Notas:** —
+**Status:** ✅ done — 2026-04-25
+**Modelo:** Sonnet
+**Branch:** main
+**Output:**
+- `lib/ig/alerts/discord.ts`: `sendAlert(supabase, severity, source, message, meta)` — persiste en `alerts_log`, envía Discord embed (dedup 1h)
+- `config.ts`: `DISCORD_ALERT_WEBHOOK` opcional añadido
+- `lib/admin/auth.ts`: `requireAdmin(req)` — cookie check defensivo (middleware ya bloquea)
+- `api/admin/sources/[id]/route.ts`: PATCH pause/resume/priority source
+- `api/admin/templates/[id]/route.ts`: PATCH pause/kill/promote/resume template
+- `api/admin/leads/[username]/blacklist/route.ts`: POST → inserta en `lead_blacklist`, status → blacklisted
+- `api/admin/leads/[username]/reclassify/route.ts`: POST → borra cache `niche_classifications`, reset niche fields
+- `api/cron/check-reply-rate/route.ts`: cron diario 18:00 UTC — alerta warning si reply_rate 7d < 3% (con ≥30 DMs), alerta info si quota < 50% del límite
+- `vercel.json`: cron `0 18 * * *` para check-reply-rate
+- `run-cycle/route.ts`: `sendAlert critical 'sidecar'` cuando circuit breaker abre (2 puntos: enrich loop + DM send loop)
+- `classify/niche.ts`: reemplazó `alerts_log.insert` directo por `sendAlert` (unifica canal)
+- UI buttons: `ToggleSourceButton`, `TemplateActions`, `LeadActions` — useTransition + router.refresh() en sources/templates/leads pages
+**Notas:**
+- `tsc --noEmit` pasa sin errores. Build local falla OOM (problema de RAM Windows, igual que D08/D09) — Vercel compila OK.
+- Setear `DISCORD_ALERT_WEBHOOK` en Vercel con la URL del webhook del server de Discord de Manuel.
 
 ### D11 — A/B testing infra
 **Status:** ⏸ pending  

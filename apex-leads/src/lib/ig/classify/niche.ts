@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { igConfig } from '../config'
 import { NICHE_SYSTEM_PROMPT, buildUserPrompt } from './prompts'
 import type { ProfileData } from '../sidecar'
+import { sendAlert } from '../alerts/discord'
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -148,10 +149,11 @@ export async function checkDailyCostAlert(supabase: any): Promise<void> {
 
   if (existing) return
 
-  await supabase.from('alerts_log').insert({
-    source: 'niche_classifier',
-    severity: 'warning',
-    message: `Daily classification spend ~$${estimatedSpend.toFixed(3)} (${count} calls). Review if unexpected.`,
-    metadata: { count, estimated_spend_usd: estimatedSpend, date: todayStr },
-  })
+  await sendAlert(
+    supabase,
+    'warning',
+    'niche_classifier',
+    `Daily classification spend ~$${estimatedSpend.toFixed(3)} (${count} calls). Review if unexpected.`,
+    { count, estimated_spend_usd: estimatedSpend, date: todayStr },
+  )
 }

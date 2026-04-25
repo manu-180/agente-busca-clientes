@@ -7,6 +7,7 @@ import { scoreLead } from '@/lib/ig/score'
 import { pickOpeningTemplate } from '@/lib/ig/prompts/templates'
 import { preFilter, loadBlacklist } from '@/lib/ig/discover/pre-filter'
 import { classifyNiche, checkDailyCostAlert, NICHE_VALUES, type ClassificationResult } from '@/lib/ig/classify/niche'
+import { sendAlert } from '@/lib/ig/alerts/discord'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -156,6 +157,9 @@ export async function POST(req: NextRequest) {
   }
 
   if (circuitOpen) {
+    sendAlert(supabase, 'critical', 'sidecar', 'Circuit breaker open — sidecar blocked IG actions', {}).catch(
+      (err) => console.error('[run-cycle] sendAlert circuit_open failed', err),
+    )
     return NextResponse.json({ ok: false, error: 'circuit_open', leads_processed: 0 }, { status: 503 })
   }
 
@@ -373,6 +377,9 @@ export async function POST(req: NextRequest) {
     } catch (err) {
       if (err instanceof SidecarError && err.isCircuitOpen) {
         console.warn('[run-cycle] circuit open mid-send — stopping')
+        sendAlert(supabase, 'critical', 'sidecar', 'Circuit breaker open mid-send — DM loop halted', {
+          last_username: username,
+        }).catch((e) => console.error('[run-cycle] sendAlert failed', e))
         break
       }
       console.error(`[run-cycle] DM failed for @${username}`, err)
