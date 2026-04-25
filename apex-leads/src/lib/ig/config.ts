@@ -34,6 +34,7 @@ const schema = z.object({
   DAILY_DM_LIMIT: intEnv(3),
   FOLLOWUP_HOURS: intEnv(48),
   IG_WARMUP_MODE: boolEnv(false),
+  DISCOVERY_ENABLED: boolEnv(true),
 })
 
 export type IgConfig = z.infer<typeof schema>

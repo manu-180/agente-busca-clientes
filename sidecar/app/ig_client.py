@@ -283,6 +283,88 @@ class IGClient:
 
         return profiles, errors
 
+    # ── public: discover_by_hashtag ───────────────────────────────────────────
+
+    def discover_by_hashtag(self, tag: str, limit: int = 50) -> dict:
+        cl = self._client()
+        medias = cl.hashtag_medias_recent(tag, amount=limit)
+        seen_users: dict[str, dict] = {}
+        for m in medias:
+            u = m.user
+            if u.username in seen_users:
+                continue
+            seen_users[u.username] = {
+                "ig_username": u.username,
+                "ig_user_id": str(u.pk),
+                "raw": {
+                    "full_name": u.full_name,
+                    "is_private": u.is_private,
+                    "is_verified": u.is_verified,
+                    "profile_pic_url": str(u.profile_pic_url) if u.profile_pic_url else None,
+                },
+            }
+        return {"users": list(seen_users.values()), "media_seen": len(medias)}
+
+    # ── public: discover_by_location ──────────────────────────────────────────
+
+    def discover_by_location(self, location_pk: int, limit: int = 50) -> dict:
+        cl = self._client()
+        medias = cl.location_medias_recent(location_pk, amount=limit)
+        seen_users: dict[str, dict] = {}
+        for m in medias:
+            u = m.user
+            if u.username in seen_users:
+                continue
+            seen_users[u.username] = {
+                "ig_username": u.username,
+                "ig_user_id": str(u.pk),
+                "raw": {
+                    "full_name": u.full_name,
+                    "is_private": u.is_private,
+                    "is_verified": u.is_verified,
+                    "profile_pic_url": str(u.profile_pic_url) if u.profile_pic_url else None,
+                },
+            }
+        return {"users": list(seen_users.values()), "media_seen": len(medias)}
+
+    # ── public: discover_competitor_followers ─────────────────────────────────
+
+    def discover_competitor_followers(self, username: str, max_users: int = 200, cursor: str | None = None) -> dict:
+        cl = self._client()
+        user_id = cl.user_id_from_username(username)
+        followers_chunk, next_cursor = cl.user_followers_v1_chunk(user_id, max_amount=max_users, end_cursor=cursor or "")
+        users = [{
+            "ig_username": u.username,
+            "ig_user_id": str(u.pk),
+            "raw": {
+                "full_name": u.full_name,
+                "is_private": u.is_private,
+                "is_verified": u.is_verified,
+                "profile_pic_url": str(u.profile_pic_url) if u.profile_pic_url else None,
+            },
+        } for u in followers_chunk]
+        return {"users": users, "next_cursor": next_cursor or None}
+
+    # ── public: discover_post_engagers ────────────────────────────────────────
+
+    def discover_post_engagers(self, media_pk: str, kind: str) -> dict:
+        cl = self._client()
+        if kind == "likers":
+            users_raw = cl.media_likers(int(media_pk))
+        else:
+            comments = cl.media_comments(int(media_pk), amount=100)
+            users_raw = [c.user for c in comments]
+        seen: dict[str, dict] = {}
+        for u in users_raw:
+            if u.username in seen:
+                continue
+            seen[u.username] = {
+                "ig_username": u.username,
+                "ig_user_id": str(u.pk),
+                "raw": {"full_name": u.full_name, "is_private": u.is_private, "is_verified": u.is_verified},
+            }
+        return {"users": list(seen.values())}
+
 
 # ── singleton ─────────────────────────────────────────────────────────────────
 

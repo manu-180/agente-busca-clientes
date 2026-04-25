@@ -97,3 +97,38 @@ export function enrichProfiles(
 ): Promise<{ profiles: ProfileData[]; errors: Record<string, string> }> {
   return call('/profile/enrich', { usernames })
 }
+
+// ── Discovery ───────────────────────────────────────────────────────
+
+export interface DiscoverResult {
+  run_id: string
+  users_seen: number
+  users_new: number
+}
+
+export interface DiscoverCompetitorResult extends DiscoverResult {
+  next_cursor: string | null
+}
+
+export function discoverHashtag(tag: string, limit = 50): Promise<DiscoverResult> {
+  return call('/discover/hashtag', { tag, limit })
+}
+
+export function discoverLocation(location_pk: number, limit = 50): Promise<DiscoverResult> {
+  return call('/discover/location', { location_pk, limit })
+}
+
+export function discoverCompetitorFollowers(
+  username: string,
+  max_users = 200,
+  cursor?: string,
+): Promise<DiscoverCompetitorResult> {
+  return call('/discover/competitor-followers', { username, max_users, cursor: cursor ?? null })
+}
+
+export function discoverPostEngagers(
+  media_pk: string,
+  kind: 'likers' | 'commenters' = 'likers',
+): Promise<DiscoverResult> {
+  return call('/discover/post-engagers', { media_pk, kind })
+}
