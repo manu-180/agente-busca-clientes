@@ -68,3 +68,5 @@ Thumbs.db
 # Large assets (explícitos)
 apex-leads.zip
 *.zip
+
+.vercel

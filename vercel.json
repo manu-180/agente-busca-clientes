@@ -1,0 +1,12 @@
+{
+  "experimentalServices": {
+    "railway-cron-pinger": {
+      "entrypoint": "apex-leads/railway-cron-pinger",
+      "routePrefix": "/_/railway-cron-pinger"
+    },
+    "sidecar": {
+      "entrypoint": "sidecar",
+      "routePrefix": "/_/sidecar"
+    }
+  }
+}

@@ -18,6 +18,17 @@ export const maxDuration = 90
 
 const IG_SENDER = igConfig.IG_SENDER_USERNAME
 const DRY_RUN = igConfig.DRY_RUN
+const DAILY_DM_LIMIT = igConfig.DAILY_DM_LIMIT
+
+// 09:30–21:30 ART (UTC-3) in minutes since midnight
+const WIN_START_MIN = 9 * 60 + 30
+const WIN_END_MIN = 21 * 60 + 30
+
+function isWithinSendWindow(): boolean {
+  const artDate = new Date(Date.now() - 3 * 60 * 60 * 1000)
+  const min = artDate.getUTCHours() * 60 + artDate.getUTCMinutes()
+  return min >= WIN_START_MIN && min <= WIN_END_MIN
+}
 
 function authCron(req: NextRequest): boolean {
   return req.headers.get('authorization') === `Bearer ${igConfig.CRON_SECRET}`
@@ -40,6 +51,36 @@ export async function GET(req: NextRequest) {
 
   if (healthRows?.length) {
     return NextResponse.json({ ok: false, skipped: true, reason: 'circuit_open' })
+  }
+
+  // Time window: 09:30–21:30 ART
+  if (!isWithinSendWindow()) {
+    const artDate = new Date(Date.now() - 3 * 60 * 60 * 1000)
+    return NextResponse.json({
+      ok: true,
+      skipped: true,
+      reason: 'outside_send_window',
+      art_time: `${String(artDate.getUTCHours()).padStart(2, '0')}:${String(artDate.getUTCMinutes()).padStart(2, '0')}`,
+      window: '09:30–21:30 ART',
+    })
+  }
+
+  // Daily quota guard
+  const today = new Date().toISOString().split('T')[0]
+  const { data: quotaCheck } = await supabase
+    .from('dm_daily_quota')
+    .select('dms_sent')
+    .eq('sender_ig_username', IG_SENDER)
+    .eq('day', today)
+    .maybeSingle()
+  if ((quotaCheck?.dms_sent ?? 0) >= DAILY_DM_LIMIT) {
+    return NextResponse.json({
+      ok: true,
+      skipped: true,
+      reason: 'daily_quota_exceeded',
+      dms_sent: quotaCheck?.dms_sent,
+      limit: DAILY_DM_LIMIT,
+    })
   }
 
   // Get next due queue item (one at a time)
@@ -131,15 +172,7 @@ export async function GET(req: NextRequest) {
   }
 
   const now = new Date().toISOString()
-  const today = now.split('T')[0]
-
-  const { data: quotaRow } = await supabase
-    .from('dm_daily_quota')
-    .select('dms_sent')
-    .eq('sender_ig_username', IG_SENDER)
-    .eq('day', today)
-    .maybeSingle()
-  const dmsSentSoFar = quotaRow?.dms_sent ?? 0
+  const dmsSentSoFar = quotaCheck?.dms_sent ?? 0
 
   // Record everything in parallel
   await Promise.all([
