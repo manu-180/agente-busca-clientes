@@ -14,7 +14,7 @@ def load_config():
         "CRON_BASE_URL": os.environ.get("CRON_BASE_URL", "").strip(),
         "CRON_SECRET": os.environ.get("CRON_SECRET", "").strip(),
         "CRON_PATH": os.environ.get(
-            "CRON_PATH", "/api/cron/leads-pendientes?force=true"
+            "CRON_PATH", "/api/cron/leads-pendientes"
         ).strip(),
         "REQUEST_TIMEOUT_S": os.environ.get("REQUEST_TIMEOUT_S", "90").strip(),
     }
