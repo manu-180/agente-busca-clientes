@@ -28,7 +28,7 @@ import {
   stripContinuationViolations,
   validateContinuationMessage,
 } from '@/lib/message-guards'
-import { enviarMensajeTwilio } from '@/lib/twilio'
+import { enviarMensajeTwilio, getTwilioCredentials } from '@/lib/twilio'
 import { normalizarTelefonoArg, soloDigitos, variantesTelefonoMismaLinea } from '@/lib/phone'
 import { debePersistirBocetoAceptado } from '@/lib/boceto-aceptacion'
 import { MENSAJE_COMPROMISO_BOCETO_24H } from '@/lib/mensaje-boceto-24h'
@@ -801,7 +801,10 @@ export async function POST(req: NextRequest) {
   // ── Verificación de firma Twilio ──
   if (process.env.NODE_ENV === 'production') {
     const twilioSignature = req.headers.get('x-twilio-signature') ?? ''
-    const authToken = process.env.TWILIO_AUTH_TOKEN ?? ''
+
+    // Detectar a qué número nuestro llegó el mensaje para elegir el auth token correcto.
+    const rawToForAuth = (form.get('To') as string | null)?.replace('whatsapp:', '') ?? ''
+    const { authToken } = getTwilioCredentials(rawToForAuth)
 
     // Usar el header X-Forwarded-Proto y Host para reconstruir la URL correcta
     // cuando Vercel está detrás de un proxy (evita firma inválida por URL distinta).

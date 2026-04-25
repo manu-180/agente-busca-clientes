@@ -1,8 +1,29 @@
 import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
 
-function getTwilioAuth() {
-  const accountSid = process.env.TWILIO_ACCOUNT_SID!
-  const authToken = process.env.TWILIO_AUTH_TOKEN!
+type TwilioCredentials = { accountSid: string; authToken: string; whatsappNumber: string }
+
+/** Devuelve las credenciales de la cuenta Twilio que corresponde al número `from`. */
+export function getTwilioCredentials(fromNumber?: string): TwilioCredentials {
+  const num2 = process.env.TWILIO_WHATSAPP_NUMBER_2
+  if (num2 && fromNumber) {
+    const normalizeNum = (n: string) => n.replace(/\D/g, '')
+    if (normalizeNum(fromNumber) === normalizeNum(num2)) {
+      return {
+        accountSid: process.env.TWILIO_ACCOUNT_SID_2!,
+        authToken: process.env.TWILIO_AUTH_TOKEN_2!,
+        whatsappNumber: num2,
+      }
+    }
+  }
+  return {
+    accountSid: process.env.TWILIO_ACCOUNT_SID!,
+    authToken: process.env.TWILIO_AUTH_TOKEN!,
+    whatsappNumber: process.env.TWILIO_WHATSAPP_NUMBER!,
+  }
+}
+
+function getTwilioAuth(fromNumber?: string) {
+  const { accountSid, authToken } = getTwilioCredentials(fromNumber)
   return 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64')
 }
 
@@ -24,15 +45,15 @@ export async function enviarMensajeTwilio(
   if (!options?.skipBlockCheck && isTelefonoHardBlocked(telefono)) {
     throw new Error('TELEFONO_BLOQUEADO')
   }
-  const accountSid = process.env.TWILIO_ACCOUNT_SID!
-  const from = fromNumber ?? process.env.TWILIO_WHATSAPP_NUMBER!
+  const { accountSid, whatsappNumber } = getTwilioCredentials(fromNumber)
+  const from = fromNumber ?? whatsappNumber
 
   const res = await fetch(
     `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
     {
       method: 'POST',
       headers: {
-        Authorization: getTwilioAuth(),
+        Authorization: getTwilioAuth(from),
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: new URLSearchParams({
