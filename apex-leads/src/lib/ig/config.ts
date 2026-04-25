@@ -29,8 +29,8 @@ const schema = z.object({
   DRY_RUN: boolEnv(false),
   ANTHROPIC_API_KEY: z
     .string()
-    .refine((v) => v.startsWith('sk-ant-'), { message: "must start with 'sk-ant-'" })
-    .optional(),
+    .refine((v) => v.startsWith('sk-ant-'), { message: "must start with 'sk-ant-'" }),
+  CLAUDE_HAIKU_MODEL: z.string().default('claude-haiku-4-5-20251001'),
   DAILY_DM_LIMIT: intEnv(3),
   FOLLOWUP_HOURS: intEnv(48),
   IG_WARMUP_MODE: boolEnv(false),
@@ -46,6 +46,7 @@ const BUILD_DEFAULTS: Record<string, string> = {
   APIFY_TOKEN: '__build__',
   APIFY_WEBHOOK_SECRET: 'a'.repeat(32),
   CRON_SECRET: 'a'.repeat(32),
+  ANTHROPIC_API_KEY: 'sk-ant-build-placeholder',
 }
 
 function loadConfig(): IgConfig {

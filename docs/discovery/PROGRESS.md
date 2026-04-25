@@ -9,7 +9,7 @@
 | Fase | Sesiones | Status | Última actualización |
 |---|---|---|---|
 | Phase 1 — Foundation | D01–D03 | 🟡 in progress | 2026-04-24 |
-| Phase 2 — Orchestration & Intelligence | D04–D07 | ⏸ pending | 2026-04-24 |
+| Phase 2 — Orchestration & Intelligence | D04–D07 | 🟡 in progress | 2026-04-25 |
 | Phase 3 — Observability & Admin | D08–D10 | ⏸ pending | 2026-04-24 |
 | Phase 4 — Optimization | D11–D12 | ⏸ pending | 2026-04-24 |
 | Phase 5 — Production | D13–D14 | ⏸ pending | 2026-04-24 |
@@ -91,14 +91,20 @@ Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 **Notas:** —
 
 ### D06 — Niche classifier (Claude Haiku)
-**Status:** ⏸ pending  
-**Modelo:** Opus  
-**Output esperado:**
-- `lib/ig/classify/niche.ts` con cache vía `niche_classifications`
-- Endpoint `/api/internal/classify-niche` para reuso/manual
-- Integración en `run-cycle` antes de scoring
-- Costo monitoreado en `alerts_log` si > $1/día
-**Notas:** —
+**Status:** ✅ done — 2026-04-25
+**Modelo:** Sonnet
+**Branch:** main
+**Output:**
+- `lib/ig/classify/prompts.ts`: system prompt + `buildUserPrompt()`
+- `lib/ig/classify/niche.ts`: `classifyNiche()` con cache vía `niche_classifications` (30d TTL), retry JSON parse 1×, `checkDailyCostAlert()` (umbral $1/día, dedup 1×/día en `alerts_log`)
+- `api/internal/classify-niche/route.ts`: endpoint interno auth Bearer CRON_SECRET, lookup `instagram_leads` + classifica
+- `run-cycle/route.ts`: classify loop post-enrich pre-score, niche gate (`TARGET_NICHES` + `MIN_CONFIDENCE=0.6`), `niche`/`niche_confidence` en todos los upserts de `instagram_leads`
+- `config.ts`: `ANTHROPIC_API_KEY` ahora required (no optional), `CLAUDE_HAIKU_MODEL` con default `claude-haiku-4-5-20251001`
+- 13 tests nuevos (47 total, todos pasando)
+**Notas:**
+- Costo estimado por 100 leads: ~$0.015 (100 × $0.00015). Muy por debajo del umbral $1/día.
+- Leads que fallan clasificación (error Claude) quedan sin niche y pasan a `wrong_niche` → seguros de ignorar.
+- Cost alert fire-and-forget en run-cycle (no bloquea pipeline si falla).
 
 ### D07 — Scoring v2
 **Status:** ⏸ pending  

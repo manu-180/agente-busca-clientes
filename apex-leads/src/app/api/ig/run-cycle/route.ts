@@ -6,11 +6,22 @@ import { isTargetLead, classifyLink } from '@/lib/ig/classify'
 import { scoreLead } from '@/lib/ig/score'
 import { pickOpeningTemplate } from '@/lib/ig/prompts/templates'
 import { preFilter, loadBlacklist } from '@/lib/ig/discover/pre-filter'
+import { classifyNiche, checkDailyCostAlert, NICHE_VALUES, type ClassificationResult } from '@/lib/ig/classify/niche'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
 
 const MIN_SCORE = 25
+const TARGET_NICHES = new Set<(typeof NICHE_VALUES)[number]>([
+  'moda_femenina',
+  'moda_masculina',
+  'indumentaria_infantil',
+  'accesorios',
+  'calzado',
+  'belleza_estetica',
+  'joyeria',
+])
+const MIN_CONFIDENCE = 0.6
 
 function unauthorized() {
   return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 })
@@ -148,6 +159,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'circuit_open', leads_processed: 0 }, { status: 503 })
   }
 
+  // Classify niches for enriched leads that pass the target-lead gate
+  const classificationMap = new Map<string, ClassificationResult>()
+  for (const [username, profile] of enrichedMap.entries()) {
+    if (!isTargetLead(profile)) continue
+    try {
+      const cls = await classifyNiche(supabase, profile)
+      classificationMap.set(username, cls)
+    } catch (err) {
+      console.error('[run-cycle] classify failed', username, err)
+    }
+  }
+
   // Score + send DMs
   let dmsSent = 0
   const results: Array<{ ig_username: string; action: string; score?: number }> = []
@@ -199,6 +222,42 @@ export async function POST(req: NextRequest) {
       continue
     }
 
+    // Niche gate — skip if wrong niche or low confidence
+    const cls = classificationMap.get(username)
+    if (!cls || !TARGET_NICHES.has(cls.niche) || cls.confidence < MIN_CONFIDENCE) {
+      await supabase
+        .from('instagram_leads_raw')
+        .update({ processed: true, processing_error: 'wrong_niche' })
+        .eq('id', raw.id)
+      const linkVerdict = classifyLink(profile.external_url ?? profile.bio_links?.[0]?.url ?? null)
+      await supabase.from('instagram_leads').upsert({
+        ig_user_id: Number(profile.ig_user_id),
+        ig_username: profile.ig_username,
+        full_name: profile.full_name,
+        biography: profile.biography,
+        external_url: profile.external_url,
+        bio_links: profile.bio_links,
+        link_verdict: linkVerdict,
+        followers_count: profile.followers_count,
+        following_count: profile.following_count,
+        posts_count: profile.posts_count,
+        is_private: profile.is_private,
+        is_verified: profile.is_verified,
+        is_business: profile.is_business,
+        business_category: profile.business_category,
+        profile_pic_url: profile.profile_pic_url,
+        last_post_at: profile.last_post_at,
+        niche: cls?.niche ?? null,
+        niche_confidence: cls?.confidence ?? null,
+        lead_score: 0,
+        status: 'discovered',
+        discovered_via: 'hashtag',
+        discovered_source_ref: raw.source_ref,
+      }, { onConflict: 'ig_username', ignoreDuplicates: true })
+      results.push({ ig_username: username, action: 'wrong_niche', score: 0 })
+      continue
+    }
+
     const { score, breakdown } = scoreLead(profile)
 
     if (score < MIN_SCORE) {
@@ -221,6 +280,8 @@ export async function POST(req: NextRequest) {
         business_category: profile.business_category,
         profile_pic_url: profile.profile_pic_url,
         last_post_at: profile.last_post_at,
+        niche: cls.niche,
+        niche_confidence: cls.confidence,
         lead_score: score,
         score_breakdown: breakdown,
         status: 'discovered',
@@ -268,6 +329,8 @@ export async function POST(req: NextRequest) {
           business_category: profile.business_category,
           profile_pic_url: profile.profile_pic_url,
           last_post_at: profile.last_post_at,
+          niche: cls.niche,
+          niche_confidence: cls.confidence,
           lead_score: score,
           score_breakdown: breakdown,
           status: 'contacted',
@@ -320,6 +383,9 @@ export async function POST(req: NextRequest) {
       results.push({ ig_username: username, action: 'error' })
     }
   }
+
+  // Cost guard — fire-and-forget, never throw
+  checkDailyCostAlert(supabase).catch((err) => console.error('[run-cycle] cost alert check failed', err))
 
   return NextResponse.json({
     ok: true,
