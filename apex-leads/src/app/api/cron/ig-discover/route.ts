@@ -35,8 +35,21 @@ export async function GET(req: NextRequest) {
 
   for (const hashtag of TARGET_HASHTAGS) {
     try {
+      // Webhooks must be passed as a base64-encoded query param, NOT in the actor input body
+      const webhookConfig = Buffer.from(JSON.stringify([
+        {
+          eventTypes: ['ACTOR.RUN.SUCCEEDED'],
+          requestUrl: `${APP_URL}/api/webhooks/apify?token=${APIFY_WEBHOOK_SECRET}`,
+          payloadTemplate: JSON.stringify({
+            eventType: '{{eventType}}',
+            eventData: { actorRunId: '{{actorRunId}}' },
+            sourceRef: hashtag,
+          }),
+        },
+      ])).toString('base64')
+
       const res = await fetch(
-        'https://api.apify.com/v2/acts/apidojo~instagram-scraper/runs',
+        `https://api.apify.com/v2/acts/apidojo~instagram-scraper/runs?webhooks=${webhookConfig}`,
         {
           method: 'POST',
           headers: {
@@ -47,17 +60,6 @@ export async function GET(req: NextRequest) {
             startUrls: [{ url: `https://www.instagram.com/explore/tags/${hashtag}/` }],
             resultsLimit: 300,
             addParentData: false,
-            webhooks: [
-              {
-                eventTypes: ['ACTOR.RUN.SUCCEEDED'],
-                requestUrl: `${APP_URL}/api/webhooks/apify?token=${APIFY_WEBHOOK_SECRET}`,
-                payloadTemplate: JSON.stringify({
-                  eventType: '{{eventType}}',
-                  eventData: { actorRunId: '{{actorRunId}}' },
-                  sourceRef: hashtag,
-                }),
-              },
-            ],
           }),
         },
       )
