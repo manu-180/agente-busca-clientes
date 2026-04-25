@@ -10,7 +10,7 @@
 |---|---|---|---|
 | Phase 1 — Foundation | D01–D03 | 🟡 in progress | 2026-04-24 |
 | Phase 2 — Orchestration & Intelligence | D04–D07 | 🟡 in progress | 2026-04-25 |
-| Phase 3 — Observability & Admin | D08–D10 | ⏸ pending | 2026-04-24 |
+| Phase 3 — Observability & Admin | D08–D10 | 🟡 in progress | 2026-04-25 |
 | Phase 4 — Optimization | D11–D12 | ⏸ pending | 2026-04-24 |
 | Phase 5 — Production | D13–D14 | ⏸ pending | 2026-04-24 |
 
@@ -117,24 +117,41 @@ Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 **Notas:** —
 
 ### D08 — Metrics layer
-**Status:** ⏸ pending  
-**Modelo:** Sonnet  
-**Output esperado:**
-- Materialized view `discovery_metrics_daily`
-- Cron `/api/cron/refresh-metrics` (1× por día 02:00 ART)
-- Vista SQL `dm_template_stats` con CIs Beta
-- Vista `lead_funnel` (raw → filtered → enriched → contacted → replied)
-**Notas:** —
+**Status:** ✅ done — 2026-04-25
+**Modelo:** Sonnet
+**Branch:** main
+**Output:**
+- Migración `20260425120000_discovery_v2_metrics.sql` aplicada en Supabase
+- `discovery_metrics_daily` (materialized view) con índice único `(day, source_kind)`
+- Vista `dm_template_stats`: sends, replies, CTR, beta_alpha, beta_beta
+- Vista `lead_funnel`: 30d rolling window, subqueries corregidas (CTE approach)
+- Función SQL `refresh_discovery_metrics()` (REFRESH MATERIALIZED VIEW CONCURRENTLY)
+- `api/cron/refresh-metrics/route.ts`: Bearer CRON_SECRET auth
+- `vercel.json` cron `0 2 * * *`
+- `lib/ig/metrics/queries.ts`: `getDailyMetrics`, `getKpiSnapshot`, `getLeadFunnel`, `getTemplateStats`
+**Notas:**
+- `discovery_metrics_daily` usa CTE approach para los dms_sent/replies (correlated subqueries con ungrouped outer column no funcionan en Postgres matviews)
+- `discovered_via::text` cast necesario (enum vs text mismatch)
+- D08 ejecutado en misma sesión que D09
 
 ### D09 — Admin dashboard read-only
-**Status:** ⏸ pending  
-**Modelo:** Sonnet  
-**Output esperado:**
-- `/admin/ig` con auth (cookie + email allowlist)
-- KPI cards (Reply Rate, Qualified Rate, DMs Today, Pipeline Health)
-- Charts con `recharts` (leads/día por fuente, CTR/template)
-- Tablas leads + sources + templates (read-only)
-**Notas:** —
+**Status:** ✅ done — 2026-04-25
+**Modelo:** Sonnet
+**Branch:** main
+**Output:**
+- `admin/ig/layout.tsx`: nav bar con links a Outreach / Discovery / Sources / Templates / Leads
+- Auth: usa middleware existente (`apex_auth` cookie) — no se cambió a Supabase auth (existente ya cubre todo)
+- `admin/ig/discovery/page.tsx`: SSR, KPI cards (Reply Rate, Qualified Rate, DMs Today, Pipeline Health) + SourceChart + FunnelTable
+- `admin/ig/sources/page.tsx`: tabla discovery_sources con last_run y leads_30d agregados desde discovery_runs
+- `admin/ig/templates/page.tsx`: tabla dm_template_stats con CI Beta calculado en servidor
+- `admin/ig/leads/page.tsx`: tabla paginada (50/page) con filtros por niche, status, min_score (server-side via searchParams)
+- `admin/ig/_components/KpiCard.tsx`: card server component con tone colors
+- `admin/ig/_components/SourceChart.tsx`: recharts AreaChart stacked por source_kind (`'use client'`)
+- `admin/ig/_components/FunnelTable.tsx`: funnel summary + daily breakdown 7d
+**Notas:**
+- `recharts` ya estaba instalado en package.json
+- Página principal `/admin/ig` (outreach dashboard) preservada tal cual
+- Fixes de pre-existing errors: `tsconfig target es2017` (Map.entries iteration), `cron-parser v5` API (`CronExpressionParser.parse()`)
 
 ### D10 — Admin actions + Discord alerts
 **Status:** ⏸ pending  

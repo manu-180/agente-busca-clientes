@@ -1,4 +1,4 @@
-import { parseExpression } from 'cron-parser'
+import CronExpressionParser from 'cron-parser'
 import {
   SidecarError,
   discoverCompetitorFollowers,
@@ -37,7 +37,7 @@ export async function pickSourcesToRun(
       .maybeSingle()
 
     const baseDate = lastRun?.started_at ? new Date(lastRun.started_at) : new Date(0)
-    const cron = parseExpression(s.schedule_cron, { currentDate: baseDate })
+    const cron = CronExpressionParser.parse(s.schedule_cron, { currentDate: baseDate })
     const nextRunAt = cron.next().toDate()
     if (nextRunAt <= now) out.push(s)
   }
