@@ -39,7 +39,7 @@ export function Sidebar() {
     fetchUnread()
     const interval = setInterval(fetchUnread, 30000)
     return () => clearInterval(interval)
-  }, [])
+  }, [pathname])
 
   return (
     <>

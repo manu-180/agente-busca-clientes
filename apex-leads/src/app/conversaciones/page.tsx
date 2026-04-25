@@ -254,7 +254,16 @@ export default function ConversacionesPage() {
     if (chatRef.current) {
       chatRef.current.scrollTop = chatRef.current.scrollHeight
     }
-  }, [seleccionado, grupos])
+  }, [seleccionado])
+
+  useEffect(() => {
+    if (!chatRef.current) return
+    const el = chatRef.current
+    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    if (distFromBottom < 150) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [grupos])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
