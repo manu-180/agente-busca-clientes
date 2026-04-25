@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
   for (const hashtag of TARGET_HASHTAGS) {
     try {
       // Webhooks must be passed as a base64-encoded query param, NOT in the actor input body
-      const webhookConfig = Buffer.from(JSON.stringify([
+      const webhookConfig = encodeURIComponent(Buffer.from(JSON.stringify([
         {
           eventTypes: ['ACTOR.RUN.SUCCEEDED'],
           requestUrl: `${APP_URL}/api/webhooks/apify?token=${APIFY_WEBHOOK_SECRET}`,
@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
             sourceRef: hashtag,
           }),
         },
-      ])).toString('base64')
+      ])).toString('base64'))
 
       const res = await fetch(
         `https://api.apify.com/v2/acts/apidojo~instagram-scraper/runs?webhooks=${webhookConfig}`,
