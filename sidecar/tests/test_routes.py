@@ -5,7 +5,7 @@ All tests use the module-level mocks from conftest.py (no real IG/Supabase calls
 """
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 
 import pytest
 from fastapi import HTTPException
@@ -187,3 +187,178 @@ def test_health_reports_degraded_when_circuit_open(client, mock_ig, mock_circuit
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "degraded"
+
+
+# ── /discover/competitor-followers ───────────────────────────────────────────
+
+def _make_supabase_mock(run_id: str = "run-d03-001") -> MagicMock:
+    """Return a mock Supabase client that satisfies discover route usage."""
+    sb = MagicMock()
+    # discovery_runs insert
+    sb.table.return_value.insert.return_value.execute.return_value = MagicMock(
+        data=[{"id": run_id}]
+    )
+    # instagram_leads_raw select (dedup check) — no existing rows
+    sb.table.return_value.select.return_value.in_.return_value.execute.return_value = MagicMock(
+        data=[]
+    )
+    return sb
+
+
+def test_competitor_followers_happy_path(client, sign, mock_ig):
+    """Successful call returns run_id, users_seen, users_new, next_cursor."""
+    mock_ig.discover_competitor_followers.return_value = {
+        "users": [
+            {"ig_username": "boutique_a", "ig_user_id": "11", "raw": {"is_private": False, "is_verified": False}},
+            {"ig_username": "boutique_b", "ig_user_id": "22", "raw": {"is_private": False, "is_verified": False}},
+        ],
+        "next_cursor": "cursor_abc",
+    }
+
+    with patch("app.routes.discover.check_and_mark", return_value=True), \
+         patch("app.routes.discover.get_supabase_client", return_value=_make_supabase_mock()):
+        body = json.dumps({"username": "tiendas_rival", "max_users": 50}).encode()
+        res = client.post(
+            "/discover/competitor-followers",
+            content=body,
+            headers={"Content-Type": "application/json", "X-Sidecar-Signature": sign(body)},
+        )
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["users_seen"] == 2
+    assert data["users_new"] == 2
+    assert data["next_cursor"] == "cursor_abc"
+    assert "run_id" in data
+
+
+def test_competitor_followers_rate_limited(client, sign, mock_ig):
+    """Second call within cooldown → 429 with retry_after_seconds."""
+    with patch("app.routes.discover.check_and_mark", return_value=False), \
+         patch("app.routes.discover.get_supabase_client", return_value=_make_supabase_mock()):
+        body = json.dumps({"username": "tiendas_rival"}).encode()
+        res = client.post(
+            "/discover/competitor-followers",
+            content=body,
+            headers={"Content-Type": "application/json", "X-Sidecar-Signature": sign(body)},
+        )
+
+    assert res.status_code == 429
+    assert res.json()["detail"]["error"] == "rate_limited"
+    assert res.json()["detail"]["retry_after_seconds"] == 3600
+
+
+def test_competitor_followers_no_next_cursor_when_exhausted(client, sign, mock_ig):
+    """When instagrapi returns empty cursor, next_cursor is None."""
+    mock_ig.discover_competitor_followers.return_value = {
+        "users": [{"ig_username": "u1", "ig_user_id": "1", "raw": {}}],
+        "next_cursor": None,
+    }
+
+    with patch("app.routes.discover.check_and_mark", return_value=True), \
+         patch("app.routes.discover.get_supabase_client", return_value=_make_supabase_mock()):
+        body = json.dumps({"username": "rival", "cursor": "prev_cursor"}).encode()
+        res = client.post(
+            "/discover/competitor-followers",
+            content=body,
+            headers={"Content-Type": "application/json", "X-Sidecar-Signature": sign(body)},
+        )
+
+    assert res.status_code == 200
+    assert res.json()["next_cursor"] is None
+
+
+def test_competitor_followers_circuit_open(client, sign, mock_circuit):
+    """Circuit open → 503 before any IG call."""
+    mock_circuit(open=True, cooldown_until="2026-04-30T12:00:00Z")
+
+    body = json.dumps({"username": "rival"}).encode()
+    res = client.post(
+        "/discover/competitor-followers",
+        content=body,
+        headers={"Content-Type": "application/json", "X-Sidecar-Signature": sign(body)},
+    )
+
+    assert res.status_code == 503
+    assert res.json()["detail"]["error"] == "circuit_open"
+
+
+# ── /discover/post-engagers ───────────────────────────────────────────────────
+
+def test_post_engagers_likers_happy_path(client, sign, mock_ig):
+    """kind=likers returns deduplicated users."""
+    mock_ig.discover_post_engagers.return_value = {
+        "users": [
+            {"ig_username": "fan_1", "ig_user_id": "100", "raw": {}},
+            {"ig_username": "fan_2", "ig_user_id": "200", "raw": {}},
+        ]
+    }
+
+    with patch("app.routes.discover.check_and_mark", return_value=True), \
+         patch("app.routes.discover.get_supabase_client", return_value=_make_supabase_mock()):
+        body = json.dumps({"media_pk": "123456789", "kind": "likers"}).encode()
+        res = client.post(
+            "/discover/post-engagers",
+            content=body,
+            headers={"Content-Type": "application/json", "X-Sidecar-Signature": sign(body)},
+        )
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["users_seen"] == 2
+    assert data["users_new"] == 2
+    assert "run_id" in data
+
+
+def test_post_engagers_commenters_happy_path(client, sign, mock_ig):
+    """kind=commenters is accepted and forwarded to IGClient."""
+    mock_ig.discover_post_engagers.return_value = {"users": []}
+
+    with patch("app.routes.discover.check_and_mark", return_value=True), \
+         patch("app.routes.discover.get_supabase_client", return_value=_make_supabase_mock()):
+        body = json.dumps({"media_pk": "987654321", "kind": "commenters"}).encode()
+        res = client.post(
+            "/discover/post-engagers",
+            content=body,
+            headers={"Content-Type": "application/json", "X-Sidecar-Signature": sign(body)},
+        )
+
+    assert res.status_code == 200
+    mock_ig.discover_post_engagers.assert_called_with("987654321", "commenters")
+
+
+def test_post_engagers_invalid_kind_returns_422(client, sign):
+    """kind not in ['likers','commenters'] → 422 Pydantic validation error."""
+    body = json.dumps({"media_pk": "123456789", "kind": "shares"}).encode()
+    res = client.post(
+        "/discover/post-engagers",
+        content=body,
+        headers={"Content-Type": "application/json", "X-Sidecar-Signature": sign(body)},
+    )
+    assert res.status_code == 422
+
+
+def test_post_engagers_rate_limited(client, sign):
+    """Second call within 30min cooldown → 429."""
+    with patch("app.routes.discover.check_and_mark", return_value=False), \
+         patch("app.routes.discover.get_supabase_client", return_value=_make_supabase_mock()):
+        body = json.dumps({"media_pk": "111222333"}).encode()
+        res = client.post(
+            "/discover/post-engagers",
+            content=body,
+            headers={"Content-Type": "application/json", "X-Sidecar-Signature": sign(body)},
+        )
+
+    assert res.status_code == 429
+    assert res.json()["detail"]["retry_after_seconds"] == 1800
+
+
+def test_post_engagers_invalid_media_pk_returns_422(client, sign):
+    """media_pk with non-numeric chars → 422 (Pydantic pattern validator)."""
+    body = json.dumps({"media_pk": "not_a_number"}).encode()
+    res = client.post(
+        "/discover/post-engagers",
+        content=body,
+        headers={"Content-Type": "application/json", "X-Sidecar-Signature": sign(body)},
+    )
+    assert res.status_code == 422

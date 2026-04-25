@@ -8,7 +8,7 @@
 
 | Fase | Sesiones | Status | Última actualización |
 |---|---|---|---|
-| Phase 1 — Foundation | D01–D03 | 🟡 in progress | 2026-04-24 |
+| Phase 1 — Foundation | D01–D03 | ✅ done | 2026-04-25 |
 | Phase 2 — Orchestration & Intelligence | D04–D07 | 🟡 in progress | 2026-04-25 |
 | Phase 3 — Observability & Admin | D08–D10 | ✅ done | 2026-04-25 |
 | Phase 4 — Optimization | D11–D12 | ⏸ pending | 2026-04-24 |
@@ -63,32 +63,42 @@ Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 - **Pendiente:** Smoke test contra Railway (ver Paso 6 de SESSION-D02.md)
 
 ### D03 — Sidecar discovery (competitor-followers, post-engagers)
-**Status:** ⏸ pending  
-**Modelo:** Sonnet  
-**Output esperado:**
-- 2 endpoints más en `discover.py`
-- Rate-limit guard: max 1 competitor-followers / hora (Redis o table)
-- Pagination cursor para competitor-followers
-**Notas:** Vigilar uso (anti-ban).
+**Status:** ✅ done — 2026-04-25
+**Modelo:** Sonnet
+**Branch:** main
+**Output:**
+- `app/routes/discover.py`: `POST /discover/competitor-followers` (paginado con cursor) y `POST /discover/post-engagers` (likers/commenters)
+- `app/rate_limits.py`: `check_and_mark(endpoint, key, cooldown_seconds)` con upsert en `sidecar_rate_limits`
+- `app/ig_client.py`: `discover_competitor_followers()` (user_followers_v1_chunk + next_cursor) y `discover_post_engagers()` (media_likers/media_comments)
+- Migración `discovery_v2_rate_limits` aplicada en Supabase: tabla `sidecar_rate_limits`
+- Cooldowns: competitor_followers=1h por username, post_engagers=30min por media_pk
+- 9 tests nuevos pytest (24 total, todos pasando)
+**Notas:** Vigilar uso anti-ban. NO llamar competitor-followers más de 1×/hora total en producción.
 
-### D04 — Discovery orchestrator + cron Railway
-**Status:** ⏸ pending  
-**Modelo:** Sonnet  
-**Output esperado:**
-- `apex-leads/src/app/api/cron/discover-orchestrator/route.ts`
-- Lee `discovery_sources active=true`, evalúa `schedule_cron`, llama sidecar
-- Cron Vercel `0 */6 * * *` o cron Railway con misma frecuencia
-- Seed inicial de `discovery_sources` con 6 hashtags + 4 locations + 3 competitors
-**Notas:** —
+### D04 — Discovery orchestrator + cron Vercel
+**Status:** ✅ done — 2026-04-25
+**Modelo:** Sonnet
+**Branch:** main
+**Output:**
+- `lib/ig/discover/orchestrator.ts`: `pickSourcesToRun()` (cron-parser, evalúa schedule vs last run) + `runOrchestratorCycle()` (anti-ban: max 1 competitor/ciclo, circuit-break-on-503)
+- `api/cron/discover-orchestrator/route.ts`: Bearer CRON_SECRET auth, `DISCOVERY_ENABLED` kill-switch, maxDuration=300
+- `lib/ig/sidecar.ts`: funciones `discoverHashtag`, `discoverLocation`, `discoverCompetitorFollowers`, `discoverPostEngagers`
+- `lib/ig/config.ts`: `DISCOVERY_ENABLED` booleano con default true
+- `vercel.json`: cron `0 6 * * *` (1×/día a las 6am UTC)
+- `lib/ig/discover/__tests__/orchestrator.test.ts`: 11 tests (18 total en discover, todos pasando)
+**Notas:** Cron seteado a 1×/día (0 6 * * *) en lugar de cada 6h para respetar límites plan Hobby Vercel. Ajustar a `0 */6 * * *` si se cambia a Pro.
 
-### D05 — Pre-filter v2 + dedup robusto
-**Status:** ⏸ pending  
-**Modelo:** Sonnet  
-**Output esperado:**
-- `lib/ig/discover/pre-filter.ts` extracted con tests
-- `lead_blacklist` integrado en pre-filter
-- Cleanup de raw > 30 días no procesados
-**Notas:** —
+### D05 — Pre-filter v2 + dedup + blacklist
+**Status:** ✅ done — 2026-04-25
+**Modelo:** Sonnet
+**Branch:** main
+**Output:**
+- `lib/ig/discover/pre-filter.ts`: `preFilter(raw, blacklist)` pura + `loadBlacklist(supabase)`; guards: private, verified, low/high followers, low posts; rows sin followers pasan a enrich (diseño deliberado)
+- `lib/ig/discover/__tests__/pre-filter.test.ts`: 8 tests (todos pasando)
+- `api/cron/cleanup-raw-leads/route.ts`: borra `instagram_leads_raw` con `processed=true AND created_at < now()-30d`
+- `vercel.json`: cron `0 4 * * 0` (domingo 4am UTC) para cleanup
+- `api/ig/run-cycle/route.ts`: usa `preFilter` + `loadBlacklist` (extrae bloque inline previo)
+**Notas:** Leads sin followers_count (vienen de hashtag_medias_recent) pasan al enrich donde se completan. Documentado en comentario en pre-filter.ts.
 
 ### D06 — Niche classifier (Claude Haiku)
 **Status:** ✅ done — 2026-04-25
@@ -232,6 +242,8 @@ Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 
 ## Próximos pasos inmediatos
 
-1. Manuel revisa `MASTER-PLAN.md` y aprueba scope.
-2. Manuel inicia sesión nueva con prompt `prompts/SESSION-D01.md`.
-3. Tras D01: actualizar este archivo con resultados, pasar a D02.
+1. D07 — Scoring v2 (10 features + pesos versionados en `scoring_weights` + sigmoid + `lead_score_history`)
+2. D11 — A/B testing Thompson Sampling para templates
+3. D12 — Self-learning scoring (Logistic Regression semanal en Railway)
+4. D13 — E2E tests + chaos drills
+5. D14 — Ramp-up 5→30 DMs/día + RUNBOOK + eliminar Apify legacy
