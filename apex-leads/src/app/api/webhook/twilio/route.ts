@@ -250,7 +250,17 @@ async function procesarEnBackground(p: BgParams): Promise<void> {
   // ── 4. Lock para evitar respuestas dobles ──
   const lockAdquirido = await adquirirLock(supabase, p.leadId)
   if (!lockAdquirido) {
-    console.log('[BG] Lock no disponible para lead', p.leadId, '— skipping')
+    console.warn('[BG] Lock no disponible para lead', p.leadId, '— skipping (posible race con cron)')
+    // Registrar el skip para diagnóstico — no bloquear con await
+    registrarEventoConversacional({
+      leadId: p.leadId,
+      telefono: p.telefono,
+      eventName: 'webhook_lock_bloqueado',
+      decisionAction: 'no_reply',
+      decisionReason: 'lock_no_disponible',
+      confidence: 1,
+      metadata: { mensaje: p.mensaje.slice(0, 100) },
+    }).catch(() => {})
     return
   }
 

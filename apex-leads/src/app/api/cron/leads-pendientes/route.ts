@@ -386,6 +386,7 @@ async function procesarSender(
         mensaje_inicial: mensajeGuardado,
         primer_envio_completado_at: new Date().toISOString(),
         primer_envio_error: null,
+        procesando_hasta: null, // liberar lock inmediatamente para no bloquear webhook de auto-reply
       })
 
       // Éxito: reset fallos, avanzar slot y contador
@@ -424,6 +425,7 @@ async function procesarSender(
       await actualizarLead(sup, lead.id, {
         primer_envio_intentos: (lead.primer_envio_intentos ?? 0) + 1,
         primer_envio_error: msg.slice(0, 500),
+        procesando_hasta: null, // liberar lock para que el próximo tick pueda reintentar
       })
 
       const fallosAntes = parseInt(await leerConfig(sup, `${key}_primer_fallos`, '0'), 10) || 0
