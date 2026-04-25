@@ -209,7 +209,14 @@ class IGClient:
         UserNotFound / PrivateAccountError go into the errors dict (no circuit).
         Other instagrapi exceptions propagate to the route for circuit handling.
         """
-        from instagrapi.exceptions import PrivateAccountError, UserNotFound
+        from instagrapi.exceptions import UserNotFound
+        try:
+            from instagrapi.exceptions import PrivateAccountError
+        except ImportError:
+            try:
+                from instagrapi.exceptions import PrivateError as PrivateAccountError  # type: ignore[no-redef]
+            except ImportError:
+                PrivateAccountError = UserNotFound  # type: ignore[assignment,misc]
 
         cl = self._client()
         profiles: list[dict] = []
