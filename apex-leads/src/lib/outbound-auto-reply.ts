@@ -1,6 +1,7 @@
 /**
  * Heurísticas para respuestas automáticas típicas de WhatsApp Business
  * (bienvenida + precios + promo) cuando el primer contacto lo hace APEX (outbound).
+ * Última revisión: fix lock cron + loggeo webhook_lock_bloqueado (2026-04-25)
  */
 
 const RE_BIENVENIDO = /bienvenid[oa]\b/i
