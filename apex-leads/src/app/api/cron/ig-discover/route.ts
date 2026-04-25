@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
             Authorization: `Bearer ${APIFY_TOKEN}`,
           },
           body: JSON.stringify({
-            hashtags: [hashtag],
+            startUrls: [{ url: `https://www.instagram.com/explore/tags/${hashtag}/` }],
             resultsLimit: 300,
             addParentData: false,
             webhooks: [
