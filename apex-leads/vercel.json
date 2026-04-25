@@ -3,7 +3,7 @@
   "buildCommand": "next build",
   "installCommand": "npm install",
   "crons": [
-    { "path": "/api/cron/discover-orchestrator", "schedule": "0 */6 * * *" },
+    { "path": "/api/cron/discover-orchestrator", "schedule": "0 6 * * *" },
     { "path": "/api/cron/cleanup-raw-leads", "schedule": "0 4 * * 0" },
     { "path": "/api/cron/refresh-metrics", "schedule": "0 2 * * *" },
     { "path": "/api/cron/check-reply-rate", "schedule": "0 18 * * *" }
