@@ -5,6 +5,7 @@ import { sendDM, enrichProfiles, SidecarError, type ProfileData } from '@/lib/ig
 import { isTargetLead, classifyLink } from '@/lib/ig/classify'
 import { scoreLead } from '@/lib/ig/score'
 import { pickOpeningTemplate } from '@/lib/ig/prompts/templates'
+import { preFilter, loadBlacklist } from '@/lib/ig/discover/pre-filter'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -86,22 +87,26 @@ export async function POST(req: NextRequest) {
   }
 
   // Pre-filter using raw_profile data (fast, no API calls)
-  const candidates = newLeads.filter((r) => {
-    const p = r.raw_profile as Record<string, unknown>
-    const followers = Number(p.followersCount ?? p.followers_count ?? 0)
-    const posts = Number(p.postsCount ?? p.posts_count ?? 0)
-    if (followers < 200 || posts < 5 || followers > 100_000) return false
-    const isPrivate = Boolean(p.isPrivate ?? p.is_private)
-    if (isPrivate) return false
-    return true
-  })
+  const blacklist = await loadBlacklist(supabase)
+  const filterResults = newLeads.map((r) => ({ raw: r, ...preFilter(r as Parameters<typeof preFilter>[0], blacklist) }))
+  const candidates = filterResults.filter((x) => x.keep).map((x) => x.raw)
+  const skipped = filterResults.filter((x) => !x.keep)
 
-  // Mark skipped ones as processed
-  const skippedIds = newLeads
-    .filter((r) => !candidates.includes(r))
-    .map((r) => r.id)
-  if (skippedIds.length > 0) {
-    await supabase.from('instagram_leads_raw').update({ processed: true }).in('id', skippedIds)
+  if (skipped.length > 0) {
+    // Group by reason to reduce DB round-trips
+    const byReason = new Map<string, string[]>()
+    for (const s of skipped) {
+      const reason = s.reason ?? 'filtered'
+      const group = byReason.get(reason) ?? []
+      group.push(s.raw.id)
+      byReason.set(reason, group)
+    }
+    for (const [reason, ids] of Array.from(byReason.entries())) {
+      await supabase
+        .from('instagram_leads_raw')
+        .update({ processed: true, processing_error: reason })
+        .in('id', ids)
+    }
   }
 
   // Enrich candidates in batches of 20 via sidecar
