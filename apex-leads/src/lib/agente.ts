@@ -107,7 +107,7 @@ export async function generarRespuestaAgente({
       .select('rol, mensaje, timestamp')
       .eq('lead_id', lead.id)
       .order('timestamp', { ascending: false })
-      .limit(20)
+      .limit(40)
 
     const filasHistorial = (historialDesc ?? []).reverse()
 
@@ -203,10 +203,6 @@ export async function generarRespuestaAgente({
       return { respuesta: RESPUESTA_OUTBOUND_TRAS_AUTOMATICO }
     }
 
-    const historialTexto = filasHistorial
-      .map(h => `[${h.rol === 'agente' ? 'APEX' : 'CLIENTE'}] ${h.mensaje}`)
-      .join('\n')
-
     const contextoLead = {
       nombre: String(lead.nombre ?? ''),
       rubro: String(lead.rubro ?? ''),
@@ -215,25 +211,41 @@ export async function generarRespuestaAgente({
       mensajeInicial: lead.mensaje_inicial as string | null | undefined,
     }
 
+    // Construir historial como turns alternados user/assistant (la forma correcta de pasar contexto a la API)
+    const historialMessages: Anthropic.MessageParam[] = []
+    for (const fila of filasHistorial) {
+      const role: 'user' | 'assistant' = fila.rol === 'agente' ? 'assistant' : 'user'
+      const last = historialMessages[historialMessages.length - 1]
+      if (last && last.role === role) {
+        last.content = (last.content as string) + '\n' + fila.mensaje
+      } else {
+        historialMessages.push({ role, content: fila.mensaje })
+      }
+    }
+    // La API de Claude requiere que el primer mensaje sea del usuario
+    while (historialMessages.length > 0 && historialMessages[0].role === 'assistant') {
+      historialMessages.shift()
+    }
+
     // 6. Construir prompt según origen
     console.log('[AGENTE] Construyendo prompt del sistema...')
     const systemPrompt = buildAgentPrompt(
       lead.origen as 'outbound' | 'inbound',
       apexInfoTexto,
-      historialTexto,
+      '', // historial va en messages[], no en el system prompt
       contextoLead
     )
 
     const userContent = buildUserMessageWithLeadContext(mensaje_nuevo, contextoLead)
 
-    // 7. Llamar a Claude
+    // 7. Llamar a Claude con historial completo como turns alternados
     console.log('[AGENTE] Llamando a Claude Sonnet...')
     const client = new Anthropic({ apiKey })
     const response = await client.messages.create({
       model: ANTHROPIC_CHAT_MODEL,
       max_tokens: 500,
       system: systemPrompt,
-      messages: [{ role: 'user', content: userContent }],
+      messages: [...historialMessages, { role: 'user', content: userContent }],
     })
 
     const respuestaRaw = response.content[0].type === 'text' ? response.content[0].text : ''
@@ -280,6 +292,7 @@ export async function generarRespuestaAgente({
           max_tokens: 500,
           system: systemPrompt,
           messages: [
+            ...historialMessages,
             { role: 'user', content: userContent },
             { role: 'assistant', content: chequeo.texto },
             { role: 'user', content: regenInstruccion },

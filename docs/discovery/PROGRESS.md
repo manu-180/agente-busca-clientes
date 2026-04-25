@@ -8,7 +8,7 @@
 
 | Fase | Sesiones | Status | Última actualización |
 |---|---|---|---|
-| Phase 1 — Foundation | D01–D03 | 🟡 in progress | 2026-04-25 |
+| Phase 1 — Foundation | D01–D03 | 🟡 in progress | 2026-04-24 |
 | Phase 2 — Orchestration & Intelligence | D04–D07 | ⏸ pending | 2026-04-24 |
 | Phase 3 — Observability & Admin | D08–D10 | ⏸ pending | 2026-04-24 |
 | Phase 4 — Optimization | D11–D12 | ⏸ pending | 2026-04-24 |
@@ -46,14 +46,21 @@ Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 - No existía script `types:gen` en package.json; tipos generados via MCP Supabase.
 
 ### D02 — Sidecar discovery (hashtag, location)
-**Status:** ⏸ pending  
+**Status:** ✅ done — 2026-04-24  
 **Modelo:** Sonnet  
-**Output esperado:**
-- `sidecar/app/routes/discover.py` con 2 endpoints
-- Métodos en `ig_client.py`: `discover_by_hashtag`, `discover_by_location`
-- Tests pytest con mocks
-- Smoke test contra Railway
-**Notas:** —
+**Branch:** `feat/discovery-d02-hashtag-location`  
+**Output:**
+- `app/routes/discover.py`: `POST /discover/hashtag` y `POST /discover/location` (HMAC via middleware)
+- `app/db.py`: `get_supabase_client()` lazy factory
+- `app/ig_client.py`: `discover_by_hashtag()` y `discover_by_location()` con deduplicación por username
+- Upsert en `instagram_leads_raw` ON CONFLICT (ig_username) DO NOTHING
+- `discovery_runs` con estado `running → ok/error`, `ended_at`, `users_seen`, `users_new`
+- 21/21 tests pytest pasando (7 tests nuevos de discovery)
+**Notas:**
+- Circuit breaker check agregado por consistencia con otras rutas (no estaba en spec, no rompe nada)
+- Supabase errors en error-path swallowed para no enmascarar excepciones de IG
+- `"ended_at": "now()"` reemplazado con `datetime.now(timezone.utc).isoformat()` (más robusto)
+- **Pendiente:** Smoke test contra Railway (ver Paso 6 de SESSION-D02.md)
 
 ### D03 — Sidecar discovery (competitor-followers, post-engagers)
 **Status:** ⏸ pending  
