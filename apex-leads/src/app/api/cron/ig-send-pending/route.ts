@@ -20,9 +20,9 @@ const IG_SENDER = igConfig.IG_SENDER_USERNAME
 const DRY_RUN = igConfig.DRY_RUN
 const DAILY_DM_LIMIT = igConfig.DAILY_DM_LIMIT
 
-// 09:30–21:30 ART (UTC-3) in minutes since midnight
-const WIN_START_MIN = 9 * 60 + 30
-const WIN_END_MIN = 21 * 60 + 30
+// 07:00–21:00 ART (UTC-3) in minutes since midnight
+const WIN_START_MIN = 7 * 60
+const WIN_END_MIN = 21 * 60
 
 function isWithinSendWindow(): boolean {
   const artDate = new Date(Date.now() - 3 * 60 * 60 * 1000)

@@ -16,10 +16,10 @@ const IG_SENDER = igConfig.IG_SENDER_USERNAME
 const WARMUP_MODE = igConfig.IG_WARMUP_MODE
 const WARMUP_LIMIT = 3
 
-// Window: 09:30–21:30 ART = 12:30–00:30 UTC
-const WINDOW_START_UTC_HOUR = 12
-const WINDOW_START_UTC_MIN = 30
-const WINDOW_DURATION_MINUTES = 12 * 60 // 12 hours
+// Window: 07:00–21:00 ART = 10:00–00:00 UTC
+const WINDOW_START_UTC_HOUR = 10
+const WINDOW_START_UTC_MIN = 0
+const WINDOW_DURATION_MINUTES = 14 * 60 // 14 hours
 
 function authCron(req: NextRequest): boolean {
   return req.headers.get('authorization') === `Bearer ${igConfig.CRON_SECRET}`
