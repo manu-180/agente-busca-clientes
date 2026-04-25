@@ -24,5 +24,5 @@ export function getHoraArgentina(fecha: Date = new Date()): number {
 export function estaEnVentanaPrimerContacto(fecha: Date = new Date()): boolean {
   if (PRIMER_CONTACTO_SIN_RESTRICCION_HORARIA) return true
   const h = getHoraArgentina(fecha)
-  return h >= PRIMER_CONTACTO_HORA_INICIO_AR && h <= PRIMER_CONTACTO_HORA_FIN_AR
+  return h >= PRIMER_CONTACTO_HORA_INICIO_AR && h < PRIMER_CONTACTO_HORA_FIN_AR
 }
