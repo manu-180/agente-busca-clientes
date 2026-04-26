@@ -11,7 +11,7 @@
 | Phase 1 — Foundation | D01–D03 | ✅ done | 2026-04-25 |
 | Phase 2 — Orchestration & Intelligence | D04–D07 | ✅ done | 2026-04-26 |
 | Phase 3 — Observability & Admin | D08–D10 | ✅ done | 2026-04-25 |
-| Phase 4 — Optimization | D11–D12 | ⏸ pending | 2026-04-24 |
+| Phase 4 — Optimization | D11–D12 | 🟡 in progress | 2026-04-25 |
 | Phase 5 — Production | D13–D14 | ⏸ pending | 2026-04-24 |
 
 Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
@@ -192,14 +192,29 @@ Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 - Setear `DISCORD_ALERT_WEBHOOK` en Vercel con la URL del webhook del server de Discord de Manuel.
 
 ### D11 — A/B testing infra
-**Status:** ⏸ pending  
-**Modelo:** Opus  
-**Output esperado:**
-- `dm_templates` seeded con 3-5 variantes iniciales
-- `lib/ig/templates/selector.ts` Thompson sampling
-- Auto-pause cron `/api/cron/auto-pause-templates`
-- UI en `/admin/ig/templates` para crear/editar/promover
-**Notas:** —
+**Status:** ✅ done — 2026-04-25
+**Modelo:** Sonnet
+**Branch:** main
+**Output:**
+- `dm_templates` seeded: 5 variantes activas (opener_v1_directo…v5_corto)
+- `lib/ig/templates/selector.ts`: Thompson sampling puro (Marsaglia-Tsang Gamma, sin deps externas) — `sampleBeta`, `thompsonPick`, `pickTemplate`, `renderTemplate`
+- `lib/ig/templates/auto-pause.ts`: lógica pura `betaCI95` + `findTemplatesToPause` (MIN_SENDS=100, CI 95%)
+- `lib/ig/templates/__tests__/selector.test.ts`: 7 tests (distribución Beta, favoritismo, renderizado)
+- `app/api/cron/auto-pause-templates/route.ts`: cron diario, pausa templates dominados, alerta Discord
+- `app/api/cron/auto-pause-templates/__tests__/auto-pause.test.ts`: 5 tests
+- `app/api/ig/run-cycle/route.ts`: `pickTemplate` + `renderTemplate` reemplaza `pickOpeningTemplate`; logging template.name en DRY_RUN; insert en `dm_template_assignments` post-send; `template_id` en upsert `instagram_leads`
+- `app/api/cron/ig-send-pending/route.ts`: `pickTemplate` + Claude adapta templateText; insert `dm_template_assignments`
+- `app/api/cron/ig-poll-inbox/route.ts`: reply detection — marca `dm_template_assignments.replied + replied_at + reply_was_positive` en primer reply
+- `app/api/admin/templates/route.ts`: POST create endpoint (status=draft, variables auto-detectadas)
+- `app/api/admin/templates/[id]/route.ts`: fix PATCH `content→body` normalización
+- `app/admin/ig/_components/NewTemplateForm.tsx`: form create con extracción automática de variables
+- `app/admin/ig/templates/page.tsx`: integrado `NewTemplateForm`
+- `vercel.json`: cron `0 6 * * *` para auto-pause-templates
+- `types/supabase.ts`: regenerado con `dm_template_stats` view y `dm_template_assignments` FK
+- 81 tests (todos pasando), `tsc --noEmit` limpio
+**Notas:**
+- `betaCI95` y `findTemplatesToPause` en módulo separado (`auto-pause.ts`) para tests sin drag de igConfig
+- Cast `features as unknown as Record<string, number>` en `rescore-all/route.ts` (Features no tiene index signature)
 
 ### D12 — Self-learning scoring
 **Status:** ⏸ pending  

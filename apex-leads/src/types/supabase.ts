@@ -563,6 +563,13 @@ export type Database = {
             foreignKeyName: "dm_template_assignments_template_id_fkey"
             columns: ["template_id"]
             isOneToOne: false
+            referencedRelation: "dm_template_stats"
+            referencedColumns: ["template_id"]
+          },
+          {
+            foreignKeyName: "dm_template_assignments_template_id_fkey"
+            columns: ["template_id"]
+            isOneToOne: false
             referencedRelation: "dm_templates"
             referencedColumns: ["id"]
           },
@@ -798,6 +805,13 @@ export type Database = {
           updated_at?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "instagram_leads_template_id_fkey"
+            columns: ["template_id"]
+            isOneToOne: false
+            referencedRelation: "dm_template_stats"
+            referencedColumns: ["template_id"]
+          },
           {
             foreignKeyName: "instagram_leads_template_id_fkey"
             columns: ["template_id"]
@@ -1183,6 +1197,24 @@ export type Database = {
         }
         Relationships: []
       }
+      sidecar_rate_limits: {
+        Row: {
+          endpoint: string
+          key: string
+          last_call_at: string
+        }
+        Insert: {
+          endpoint: string
+          key: string
+          last_call_at?: string
+        }
+        Update: {
+          endpoint?: string
+          key?: string
+          last_call_at?: string
+        }
+        Relationships: []
+      }
       trabajos: {
         Row: {
           activo: boolean
@@ -1294,6 +1326,43 @@ export type Database = {
           },
         ]
       }
+      discovery_metrics_daily: {
+        Row: {
+          day: string | null
+          dms_sent: number | null
+          replies: number | null
+          runs_err: number | null
+          runs_ok: number | null
+          source_kind: string | null
+          users_new: number | null
+          users_seen: number | null
+        }
+        Relationships: []
+      }
+      dm_template_stats: {
+        Row: {
+          beta_alpha: number | null
+          beta_beta: number | null
+          ctr_pct: number | null
+          name: string | null
+          replies: number | null
+          sends: number | null
+          status: string | null
+          template_id: string | null
+        }
+        Relationships: []
+      }
+      lead_funnel: {
+        Row: {
+          contacted: number | null
+          day: string | null
+          enriched: number | null
+          pre_filter_passed: number | null
+          raw_discovered: number | null
+          replied: number | null
+        }
+        Relationships: []
+      }
       v_conversation_messages: {
         Row: {
           lead_id: string | null
@@ -1311,6 +1380,7 @@ export type Database = {
       }
     }
     Functions: {
+      refresh_discovery_metrics: { Args: never; Returns: undefined }
       release_followup_cron_lock: { Args: never; Returns: undefined }
       show_limit: { Args: never; Returns: number }
       show_trgm: { Args: { "": string }; Returns: string[] }

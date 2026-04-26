@@ -114,7 +114,7 @@ export async function POST(req: NextRequest) {
       lead_id: lead.id,
       weights_version: weights.version,
       score,
-      features,
+      features: features as unknown as Record<string, number>,
     })
   }
 

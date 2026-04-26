@@ -5,7 +5,7 @@ import { sendDM, enrichProfiles, SidecarError, type ProfileData } from '@/lib/ig
 import { isTargetLead, classifyLink } from '@/lib/ig/classify'
 import { loadProductionWeights, computeScore, type WeightsRecord } from '@/lib/ig/score/v2'
 import { extractFeatures } from '@/lib/ig/score/features'
-import { pickOpeningTemplate } from '@/lib/ig/prompts/templates'
+import { pickTemplate, renderTemplate } from '@/lib/ig/templates/selector'
 import { preFilter, loadBlacklist } from '@/lib/ig/discover/pre-filter'
 import { classifyNiche, checkDailyCostAlert, NICHE_VALUES, type ClassificationResult } from '@/lib/ig/classify/niche'
 import { sendAlert } from '@/lib/ig/alerts/discord'
@@ -308,10 +308,15 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Send DM ──────────────────────────────────────────────────────
-    const dmText = pickOpeningTemplate(profile)
+    const template = await pickTemplate(supabase)
+    const firstName = (profile.full_name ?? profile.ig_username ?? '').split(' ')[0] || (profile.ig_username ?? '')
+    const dmText = renderTemplate(template, {
+      first_name: firstName,
+      niche: cls.niche.replaceAll('_', ' '),
+    })
 
     if (dryRun) {
-      console.log(`[run-cycle][DRY_RUN] Would send DM to @${username}: ${dmText.slice(0, 80)}...`)
+      console.log(`[run-cycle][DRY_RUN] @${username} template=${template.name}: ${dmText.slice(0, 80)}...`)
       await supabase.from('instagram_leads_raw').update({ processed: true }).eq('id', raw.id)
       results.push({ ig_username: username, action: 'dry_run', score })
       dmsSent++
@@ -351,6 +356,7 @@ export async function POST(req: NextRequest) {
           contacted_at: now,
           last_dm_sent_at: now,
           dm_sent_count: 1,
+          template_id: template.id,
           discovered_via: 'hashtag',
           discovered_source_ref: raw.source_ref,
         }, { onConflict: 'ig_username' })
@@ -373,6 +379,11 @@ export async function POST(req: NextRequest) {
           weights_version: weights.version,
           score,
           features,
+        })
+        await supabase.from('dm_template_assignments').insert({
+          lead_id: leadRow.id,
+          template_id: template.id,
+          sent_at: now,
         })
       }
 

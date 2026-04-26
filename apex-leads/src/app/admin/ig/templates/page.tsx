@@ -2,6 +2,7 @@ import { createSupabaseServer } from '@/lib/supabase-server'
 import { getTemplateStats } from '@/lib/ig/metrics/queries'
 import type { TemplateStatRow } from '@/lib/ig/metrics/queries'
 import { TemplateActions } from '../_components/TemplateActions'
+import { NewTemplateForm } from '../_components/NewTemplateForm'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,6 +32,8 @@ export default async function TemplatesPage() {
         <h1 className="font-bold text-2xl tracking-tight">DM Templates</h1>
         <p className="text-sm text-apex-muted mt-0.5">{rows.length} templates</p>
       </div>
+
+      <NewTemplateForm />
 
       <div className="bg-apex-card border border-apex-border rounded-xl overflow-hidden">
         <table className="w-full text-sm">

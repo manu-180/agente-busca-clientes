@@ -13,7 +13,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   const authError = requireAdmin(req)
   if (authError) return authError
 
-  let body: { status?: TemplateStatus; name?: string; content?: string }
+  let body: { status?: TemplateStatus; name?: string; body?: string; content?: string }
   try {
     body = await req.json()
   } catch {
@@ -27,9 +27,12 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     )
   }
 
-  const allowed = ['status', 'name', 'content']
+  const allowed = ['status', 'name', 'body']
+  const normalized = body.content !== undefined && body.body === undefined
+    ? { ...body, body: body.content }
+    : body
   const update = Object.fromEntries(
-    Object.entries(body).filter(([k]) => allowed.includes(k)),
+    Object.entries(normalized).filter(([k]) => allowed.includes(k)),
   )
 
   if (Object.keys(update).length === 0) {

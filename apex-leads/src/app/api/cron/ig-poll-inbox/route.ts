@@ -77,7 +77,7 @@ export async function GET(req: NextRequest) {
     // Find lead by thread_id or ig_username
     const { data: lead } = await supabase
       .from('instagram_leads')
-      .select('id, status, reply_count')
+      .select('id, status, reply_count, template_id, replied_at')
       .or(`ig_thread_id.eq.${msg.thread_id},ig_username.eq.${msg.ig_username}`)
       .maybeSingle()
 
@@ -106,12 +106,27 @@ export async function GET(req: NextRequest) {
     })
 
     // Update lead reply stats
+    const replyTs = new Date(msg.timestamp * 1000).toISOString()
     await supabase.from('instagram_leads').update({
       reply_count: (lead.reply_count ?? 0) + 1,
-      last_reply_at: new Date(msg.timestamp * 1000).toISOString(),
+      last_reply_at: replyTs,
       ig_thread_id: msg.thread_id,
       status: lead.status === 'contacted' || lead.status === 'follow_up_sent' ? 'replied' : lead.status,
     }).eq('id', lead.id)
+
+    // Mark assignment replied (first reply only)
+    if (lead.template_id && !lead.replied_at) {
+      await supabase
+        .from('dm_template_assignments')
+        .update({ replied: true, replied_at: replyTs, reply_was_positive: true })
+        .eq('lead_id', lead.id)
+        .eq('replied', false)
+
+      await supabase
+        .from('instagram_leads')
+        .update({ replied_at: replyTs })
+        .eq('id', lead.id)
+    }
 
     // Trigger Claude response
     try {

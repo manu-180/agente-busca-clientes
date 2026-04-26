@@ -8,7 +8,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { sendDM, SidecarError } from '@/lib/ig/sidecar'
 import { SYSTEM_PROMPT } from '@/lib/ig/prompts/system'
-import { pickOpeningTemplate } from '@/lib/ig/prompts/templates'
+import { pickTemplate, renderTemplate, type Template } from '@/lib/ig/templates/selector'
 import { alertCircuitOpen } from '@/lib/ig/alerts'
 import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 import { igConfig } from '@/lib/ig/config'
@@ -118,9 +118,19 @@ export async function GET(req: NextRequest) {
   // Build opening message with Claude
   const anthropic = new Anthropic()
   let messageText: string
+  let pickedTemplate: Template
 
   try {
-    const template = pickOpeningTemplate(lead)
+    pickedTemplate = await pickTemplate(supabase)
+  } catch (err) {
+    console.error('[ig-send-pending] pickTemplate failed', err)
+    return NextResponse.json({ ok: false, error: 'no_active_templates' }, { status: 503 })
+  }
+
+  const firstName = (lead.full_name ?? lead.ig_username ?? '').split(' ')[0] || (lead.ig_username ?? '')
+  const templateText = renderTemplate(pickedTemplate, { first_name: firstName })
+
+  try {
     const completion = await anthropic.messages.create({
       model: ANTHROPIC_CHAT_MODEL,
       max_tokens: 200,
@@ -128,16 +138,16 @@ export async function GET(req: NextRequest) {
       messages: [
         {
           role: 'user',
-          content: `Escribí el primer DM para esta cuenta de Instagram.\n\nPerfil:\n- Usuario: @${lead.ig_username}\n- Nombre: ${lead.full_name ?? 'desconocido'}\n- Biografía: ${lead.biography ?? 'sin bio'}\n- Categoría: ${lead.business_category ?? 'no especificada'}\n\nUsá esta plantilla como base (podés adaptarla levemente para que suene natural):\n${template}\n\nDevolvé ÚNICAMENTE el texto del mensaje, sin comillas ni explicaciones.`,
+          content: `Escribí el primer DM para esta cuenta de Instagram.\n\nPerfil:\n- Usuario: @${lead.ig_username}\n- Nombre: ${lead.full_name ?? 'desconocido'}\n- Biografía: ${lead.biography ?? 'sin bio'}\n- Categoría: ${lead.business_category ?? 'no especificada'}\n\nUsá esta plantilla como base (podés adaptarla levemente para que suene natural):\n${templateText}\n\nDevolvé ÚNICAMENTE el texto del mensaje, sin comillas ni explicaciones.`,
         },
       ],
     })
 
     messageText =
-      completion.content[0].type === 'text' ? completion.content[0].text.trim() : template
+      completion.content[0].type === 'text' ? completion.content[0].text.trim() : templateText
   } catch (err) {
     console.error('[ig-send-pending] Claude error', err)
-    messageText = pickOpeningTemplate(lead)
+    messageText = templateText
   }
 
   // Send via sidecar
@@ -207,6 +217,12 @@ export async function GET(req: NextRequest) {
       last_sent_at: now,
     }, { onConflict: 'sender_ig_username,day' }),
   ])
+
+  await supabase.from('dm_template_assignments').insert({
+    lead_id: lead.id,
+    template_id: pickedTemplate.id,
+    sent_at: now,
+  })
 
   return NextResponse.json({ ok: true, sent: 1, username: lead.ig_username, thread_id: threadId })
 }
