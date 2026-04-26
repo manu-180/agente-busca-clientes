@@ -12,7 +12,7 @@ import { sendAlert } from '@/lib/ig/alerts/discord'
 import { RAMP_START_DATE, getDailyLimit } from '@/lib/ig/ramp-up'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 120
+export const maxDuration = 300
 
 const TARGET_NICHES = new Set<(typeof NICHE_VALUES)[number]>([
   'moda_femenina',
@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
     .select('id, ig_username, raw_profile, source_ref')
     .eq('processed', false)
     .is('processing_error', null)
-    .limit(Math.min(remaining * 3, 60)) // fetch extra to account for filtered-out leads
+    .limit(Math.min(remaining * 2, 30)) // fetch extra to account for filtered-out leads
 
   if (fetchErr) {
     console.error('[run-cycle] fetch raw leads error', fetchErr)

@@ -27,9 +27,9 @@ headers = {
 print(f"[scheduler] Calling {url}", flush=True)
 
 try:
-    response = httpx.post(url, headers=headers, timeout=120.0)
+    response = httpx.post(url, headers=headers, timeout=280.0)
 except httpx.TimeoutException:
-    print("[scheduler] ERROR: request timed out after 120s", flush=True)
+    print("[scheduler] ERROR: request timed out after 280s", flush=True)
     sys.exit(1)
 except httpx.RequestError as exc:
     print(f"[scheduler] ERROR: request failed — {exc}", flush=True)
