@@ -86,7 +86,8 @@ async function enviarTwilioYGuardar(
   senderPhone?: string,
   senderId?: string | null
 ) {
-  await enviarMensajeTwilio(telefono, texto, senderPhone, { skipBlockCheck: true })
+  const result = await enviarMensajeTwilio(telefono, texto, senderPhone, { skipBlockCheck: true })
+  const sid = (result as { sid?: string })?.sid ?? null
 
   await supabase.from('conversaciones').insert({
     lead_id: leadId,
@@ -96,6 +97,7 @@ async function enviarTwilioYGuardar(
     tipo_mensaje: 'texto',
     manual: false,
     sender_id: senderId ?? null,
+    twilio_message_sid: sid,
   })
 }
 
@@ -824,6 +826,7 @@ export async function POST(req: NextRequest) {
 
   const rawFrom = form.get('From') as string | null
   const rawTo = form.get('To') as string | null
+  const messageSid = (form.get('MessageSid') as string | null) ?? null
   const mensaje = (form.get('Body') as string | null) ?? ''
   const numMedia = parseInt((form.get('NumMedia') as string | null) ?? '0', 10)
   const mediaContentType = (form.get('MediaContentType0') as string | null) ?? ''
@@ -935,6 +938,7 @@ export async function POST(req: NextRequest) {
       leido: false,
       sender_id: senderId,
       media_url: numMedia > 0 && mediaUrl0 ? mediaUrl0 : null,
+      twilio_message_sid: messageSid,
     })
     .select('id, timestamp')
     .single()

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { MessageSquare, Send, Bot, BotOff, UserCheck, CheckCircle, ArrowLeft, Sparkles, Loader2, CheckCheck, Search, X, Star } from 'lucide-react'
 import type { Lead, Conversacion } from '@/types'
+import { supabase } from '@/lib/supabase-client'
 
 interface SenderInfo {
   id: string
@@ -248,6 +249,25 @@ export default function ConversacionesPage() {
   useEffect(() => {
     if (!seleccionado) return
     void cargarMensajesHilo(seleccionado)
+  }, [seleccionado, cargarMensajesHilo])
+
+  // Realtime: actualización instantánea cuando llega o se guarda un mensaje nuevo
+  useEffect(() => {
+    if (!seleccionado) return
+    const channel = supabase
+      .channel(`conv-${seleccionado}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'conversaciones',
+          filter: `lead_id=eq.${seleccionado}`,
+        },
+        () => { void cargarMensajesHilo(seleccionado) }
+      )
+      .subscribe()
+    return () => { void supabase.removeChannel(channel) }
   }, [seleccionado, cargarMensajesHilo])
 
   useEffect(() => {
