@@ -225,7 +225,6 @@ def _upsert_leads(sb, users: list[dict], source: str, source_ref: str) -> int:
     rows = [
         {
             "ig_username": u["ig_username"],
-            "ig_user_id": u["ig_user_id"],
             "raw_profile": u["raw"],
             "source": source,
             "source_ref": source_ref,
