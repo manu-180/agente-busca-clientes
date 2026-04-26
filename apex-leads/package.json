@@ -8,6 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "test": "jest",
+    "test:e2e": "playwright test",
+    "chaos:sidecar": "tsx scripts/chaos-sidecar.ts",
     "generate:locations-ar": "node scripts/fetch-locations-ar.mjs"
   },
   "dependencies": {
@@ -27,6 +29,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@playwright/test": "^1.49.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.5.5",
     "@types/react": "^18.3.5",
@@ -38,6 +41,7 @@
     "postcss": "^8.4.45",
     "tailwindcss": "^3.4.11",
     "ts-jest": "^29.4.9",
+    "tsx": "^4.19.0",
     "typescript": "^5.6.2"
   }
 }

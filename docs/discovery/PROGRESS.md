@@ -12,7 +12,7 @@
 | Phase 2 — Orchestration & Intelligence | D04–D07 | ✅ done | 2026-04-26 |
 | Phase 3 — Observability & Admin | D08–D10 | ✅ done | 2026-04-25 |
 | Phase 4 — Optimization | D11–D12 | ✅ done | 2026-04-25 |
-| Phase 5 — Production | D13–D14 | ⏸ pending | 2026-04-24 |
+| Phase 5 — Production | D13–D14 | 🟡 in progress | 2026-04-25 |
 
 Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 
@@ -238,14 +238,22 @@ Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 - scoreWithShadow usa `loadCandidateWeights` con order version desc + limit 1 (siempre el más nuevo)
 
 ### D13 — E2E tests + chaos drills
-**Status:** ⏸ pending  
-**Modelo:** Sonnet  
-**Output esperado:**
-- Playwright tests para `/admin/ig` y endpoints públicos
-- Mock sidecar local con FastAPI test client
-- Chaos drill: kill sidecar, verificar circuit breaker + alerta Discord
-- CI workflow GitHub Actions
-**Notas:** —
+**Status:** ✅ done — 2026-04-25
+**Modelo:** Sonnet
+**Branch:** main
+**Output:**
+- `.github/workflows/ci.yml`: 3 jobs paralelos — `sidecar-tests` (pytest, Python 3.13), `apex-tests` (jest --no-coverage, Node 20), `apex-typecheck` (tsc --noEmit); trigger push+PR a main; env vars dummy para CI
+- `apex-leads/playwright.config.ts`: baseURL localhost:3000, 1 worker, 0 retries, webServer `npm run dev`; env vars forwarded al proceso Next
+- `apex-leads/e2e/admin-ig.spec.ts`: 4 tests — discovery KPI cards, sources tabla con filas, templates tabla + botón "New Template", leads tabla + filtros niche/status; cookie `apex_auth` seteada via `beforeEach`
+- `apex-leads/scripts/chaos-sidecar.ts`: drill ejecutable con `npx tsx`; apunta a localhost:3000 con Bearer CRON_SECRET; verifica que run-cycle no crashea ante sidecar muerto; documenta setup (IG_SIDECAR_URL=localhost:1) y checks manuales en Supabase
+- `apex-leads/src/lib/ig/__mocks__/sidecar.ts`: manual Jest mock — `enrichProfiles`, `sendDM`, `pollInbox`, `discover*`, `SidecarError`; activado con `jest.mock('@/lib/ig/sidecar')`
+- `apex-leads/src/app/api/ig/run-cycle/__tests__/route.test.ts`: 2 tests unitarios — `daily_limit_reached` (quota=5/5), `no_raw_leads` (queue vacío); mock Supabase chain thenable; todas las deps mockeadas
+- `package.json`: devDeps `@playwright/test ^1.49.0`, `tsx ^4.19.0`; scripts `test:e2e` y `chaos:sidecar`
+- 89 jest tests passing (vs 81 pre-D13)
+**Notas:**
+- Playwright tests requieren Supabase real (discovery_sources seeded D01); diseñados para correr local o contra staging, no en CI puro
+- Chaos drill deja estado limpio si instagram_leads_raw está vacío o DRY_RUN=true
+- `makeChain` en route.test.ts es thenable — resuelve tanto `await chain.method()` como `await chain.method().terminal()` en un solo mock
 
 ### D14 — Ramp-up + runbook
 **Status:** ⏸ pending  

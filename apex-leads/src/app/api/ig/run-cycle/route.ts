@@ -3,7 +3,7 @@ import { createSupabaseServer } from '@/lib/supabase-server'
 import { igConfig } from '@/lib/ig/config'
 import { sendDM, enrichProfiles, SidecarError, type ProfileData } from '@/lib/ig/sidecar'
 import { isTargetLead, classifyLink } from '@/lib/ig/classify'
-import { loadProductionWeights, computeScore, type WeightsRecord } from '@/lib/ig/score/v2'
+import { loadProductionWeights, computeScore, scoreWithShadow, type WeightsRecord } from '@/lib/ig/score/v2'
 import { extractFeatures } from '@/lib/ig/score/features'
 import { pickTemplate, renderTemplate } from '@/lib/ig/templates/selector'
 import { preFilter, loadBlacklist } from '@/lib/ig/discover/pre-filter'
@@ -274,6 +274,7 @@ export async function POST(req: NextRequest) {
     const linkVerdict = classifyLink(profile.external_url ?? profile.bio_links?.[0]?.url ?? null)
     const features = extractFeatures(profile, cls, linkVerdict)
     const { score } = computeScore(features, weights.weights)
+    void scoreWithShadow(supabase, features, score)
 
     if (score < igConfig.MIN_SCORE_FOR_DM) {
       await supabase.from('instagram_leads_raw').update({ processed: true }).eq('id', raw.id)

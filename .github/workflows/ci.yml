@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  sidecar-tests:
+    name: Sidecar (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: pip install --upgrade pip setuptools wheel && pip install -r sidecar/requirements.txt
+        working-directory: .
+
+      - name: Run pytest
+        run: python -m pytest sidecar/tests/ -v
+        env:
+          IG_SIDECAR_SECRET: testsecreto1234567890123456789012
+          IG_USERNAME: test_bot
+          IG_PASSWORD: test_pass
+          SUPABASE_URL: https://fake.supabase.co
+          SUPABASE_SERVICE_ROLE_KEY: fake-service-role-key
+          SIDECAR_DATA_DIR: /tmp/sidecar-test-data
+
+  apex-tests:
+    name: Apex (jest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: apex-leads/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: apex-leads
+
+      - name: Run jest
+        run: npx jest --no-coverage
+        working-directory: apex-leads
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://fake.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: fake-anon-key
+          SUPABASE_SERVICE_ROLE_KEY: fake-service-role-key
+          CRON_SECRET: test-cron-secret
+          IG_SIDECAR_URL: http://localhost:9999
+          IG_SIDECAR_SECRET: testsecreto1234567890123456789012
+          ANTHROPIC_API_KEY: sk-ant-test
+          APEX_SESSION_TOKEN: test-session-token
+          ADMIN_PASSWORD: apex
+          DISCORD_ALERT_WEBHOOK: ''
+
+  apex-typecheck:
+    name: Apex (tsc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: apex-leads/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: apex-leads
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+        working-directory: apex-leads
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://fake.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: fake-anon-key
+          SUPABASE_SERVICE_ROLE_KEY: fake-service-role-key
+          CRON_SECRET: test-cron-secret
+          IG_SIDECAR_URL: http://localhost:9999
+          IG_SIDECAR_SECRET: testsecreto1234567890123456789012
+          ANTHROPIC_API_KEY: sk-ant-test
