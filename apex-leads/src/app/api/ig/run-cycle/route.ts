@@ -3,7 +3,8 @@ import { createSupabaseServer } from '@/lib/supabase-server'
 import { igConfig } from '@/lib/ig/config'
 import { sendDM, enrichProfiles, SidecarError, type ProfileData } from '@/lib/ig/sidecar'
 import { isTargetLead, classifyLink } from '@/lib/ig/classify'
-import { scoreLead } from '@/lib/ig/score'
+import { loadProductionWeights, computeScore, type WeightsRecord } from '@/lib/ig/score/v2'
+import { extractFeatures } from '@/lib/ig/score/features'
 import { pickOpeningTemplate } from '@/lib/ig/prompts/templates'
 import { preFilter, loadBlacklist } from '@/lib/ig/discover/pre-filter'
 import { classifyNiche, checkDailyCostAlert, NICHE_VALUES, type ClassificationResult } from '@/lib/ig/classify/niche'
@@ -12,7 +13,6 @@ import { sendAlert } from '@/lib/ig/alerts/discord'
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
 
-const MIN_SCORE = 25
 const TARGET_NICHES = new Set<(typeof NICHE_VALUES)[number]>([
   'moda_femenina',
   'moda_masculina',
@@ -175,6 +175,15 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Load scoring weights once for the entire cycle
+  let weights: WeightsRecord
+  try {
+    weights = await loadProductionWeights(supabase)
+  } catch (err) {
+    console.error('[run-cycle] failed to load scoring weights', err)
+    return NextResponse.json({ ok: false, error: 'scoring_weights_missing' }, { status: 500 })
+  }
+
   // Score + send DMs
   let dmsSent = 0
   const results: Array<{ ig_username: string; action: string; score?: number }> = []
@@ -262,11 +271,12 @@ export async function POST(req: NextRequest) {
       continue
     }
 
-    const { score, breakdown } = scoreLead(profile)
+    const linkVerdict = classifyLink(profile.external_url ?? profile.bio_links?.[0]?.url ?? null)
+    const features = extractFeatures(profile, cls, linkVerdict)
+    const { score } = computeScore(features, weights.weights)
 
-    if (score < MIN_SCORE) {
+    if (score < igConfig.MIN_SCORE_FOR_DM) {
       await supabase.from('instagram_leads_raw').update({ processed: true }).eq('id', raw.id)
-      const linkVerdict = classifyLink(profile.external_url ?? profile.bio_links?.[0]?.url ?? null)
       await supabase.from('instagram_leads').upsert({
         ig_user_id: Number(profile.ig_user_id),
         ig_username: profile.ig_username,
@@ -287,7 +297,7 @@ export async function POST(req: NextRequest) {
         niche: cls.niche,
         niche_confidence: cls.confidence,
         lead_score: score,
-        score_breakdown: breakdown,
+        scoring_version: weights.version,
         status: 'discovered',
         discovered_via: 'hashtag',
         discovered_source_ref: raw.source_ref,
@@ -310,7 +320,6 @@ export async function POST(req: NextRequest) {
 
     try {
       const dmResult = await sendDM(username, dmText)
-      const linkVerdict = classifyLink(profile.external_url ?? profile.bio_links?.[0]?.url ?? null)
       const now = new Date().toISOString()
 
       // Insert/update instagram_leads
@@ -336,7 +345,7 @@ export async function POST(req: NextRequest) {
           niche: cls.niche,
           niche_confidence: cls.confidence,
           lead_score: score,
-          score_breakdown: breakdown,
+          scoring_version: weights.version,
           status: 'contacted',
           ig_thread_id: dmResult.thread_id,
           contacted_at: now,
@@ -348,7 +357,7 @@ export async function POST(req: NextRequest) {
         .select('id')
         .single()
 
-      // Log conversation
+      // Log conversation and score history
       if (leadRow?.id) {
         await supabase.from('instagram_conversations').insert({
           lead_id: leadRow.id,
@@ -358,6 +367,12 @@ export async function POST(req: NextRequest) {
           content: dmText,
           direction: 'outbound',
           sent_at: now,
+        })
+        await supabase.from('lead_score_history').insert({
+          lead_id: leadRow.id,
+          weights_version: weights.version,
+          score,
+          features,
         })
       }
 

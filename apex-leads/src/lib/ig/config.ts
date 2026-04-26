@@ -32,6 +32,7 @@ const schema = z.object({
     .refine((v) => v.startsWith('sk-ant-'), { message: "must start with 'sk-ant-'" }),
   CLAUDE_HAIKU_MODEL: z.string().default('claude-haiku-4-5-20251001'),
   DAILY_DM_LIMIT: intEnv(3),
+  MIN_SCORE_FOR_DM: intEnv(60),
   FOLLOWUP_HOURS: intEnv(48),
   IG_WARMUP_MODE: boolEnv(false),
   DISCOVERY_ENABLED: boolEnv(true),

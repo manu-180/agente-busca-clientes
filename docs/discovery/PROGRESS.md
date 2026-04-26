@@ -9,7 +9,7 @@
 | Fase | Sesiones | Status | Última actualización |
 |---|---|---|---|
 | Phase 1 — Foundation | D01–D03 | ✅ done | 2026-04-25 |
-| Phase 2 — Orchestration & Intelligence | D04–D07 | 🟡 in progress | 2026-04-25 |
+| Phase 2 — Orchestration & Intelligence | D04–D07 | ✅ done | 2026-04-26 |
 | Phase 3 — Observability & Admin | D08–D10 | ✅ done | 2026-04-25 |
 | Phase 4 — Optimization | D11–D12 | ⏸ pending | 2026-04-24 |
 | Phase 5 — Production | D13–D14 | ⏸ pending | 2026-04-24 |
@@ -117,14 +117,21 @@ Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 - Cost alert fire-and-forget en run-cycle (no bloquea pipeline si falla).
 
 ### D07 — Scoring v2
-**Status:** ⏸ pending  
+**Status:** ✅ done — 2026-04-26  
 **Modelo:** Opus  
-**Output esperado:**
-- `lib/ig/score/v2.ts` con sigmoide + features extendidos
-- Seed de pesos v1 en `scoring_weights` con `status='production'`
-- `lead_score_history` poblado en cada run-cycle
-- Backfill opcional de leads existentes con score nuevo
-**Notas:** —
+**Branch:** main  
+**Output:**
+- `lib/ig/score/features.ts`: 10 features normalizadas (followers_log, posts_log, engagement_rate, has_business_category, business_category_match, bio_keyword_match, has_external_url, link_is_linktree_or_ig_only, posts_recency, niche_classifier_confidence)
+- `lib/ig/score/v2.ts`: sigmoid engine, `loadProductionWeights()`, `computeScore()`, `scoreAndPersist()` (acepta `cachedWeights` para evitar N+1)
+- `scoring_weights` seeded en Supabase: v1 `status=production`, id `45edfa2b`, 11 pesos manuales
+- `run-cycle/route.ts`: pre-carga pesos 1 sola vez, reemplaza `scoreLead`, usa `igConfig.MIN_SCORE_FOR_DM` (default 60 vs 25 anterior), escribe `lead_score_history` post-DM con leadId real, elimina `score_breakdown` legacy
+- `config.ts`: `MIN_SCORE_FOR_DM: intEnv(60)` agregado
+- `api/internal/rescore-all/route.ts`: backfill paginado (default 100/página, max 500), reconstruye profile desde columnas + niche desde `instagram_leads`, inserta en `lead_score_history` sin overwrite
+- 13 tests nuevos (69 total, todos pasando)
+**Notas:**
+- Test "marginal profile": con weight 2.0 en niche_classifier_confidence, un perfil con niche match válido siempre puntúa alto (≥80). El test marginal usa `niche='otro'` (fuera de TARGET_NICHES) para forzar niche_confidence=0 y obtener score ~55.
+- `MIN_SCORE_FOR_DM=60` implica que aprox. el 40% menos de leads pasarán al DM gate vs. el umbral viejo de 25 — calidad sube.
+- D12 (self-learning) actualizará los pesos via LogisticRegression semanal.
 
 ### D08 — Metrics layer
 **Status:** ✅ done — 2026-04-25
@@ -242,8 +249,7 @@ Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 
 ## Próximos pasos inmediatos
 
-1. D07 — Scoring v2 (10 features + pesos versionados en `scoring_weights` + sigmoid + `lead_score_history`)
-2. D11 — A/B testing Thompson Sampling para templates
+1. D11 — A/B testing Thompson Sampling para templates
 3. D12 — Self-learning scoring (Logistic Regression semanal en Railway)
 4. D13 — E2E tests + chaos drills
 5. D14 — Ramp-up 5→30 DMs/día + RUNBOOK + eliminar Apify legacy
