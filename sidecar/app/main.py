@@ -10,7 +10,7 @@ from starlette.responses import JSONResponse
 from starlette.types import Message
 
 from app.auth import verify_signature
-from app.routes import dm, discover, health, inbox, profile
+from app.routes import dm, discover, health, inbox, jobs, profile
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ig-sidecar")
@@ -101,6 +101,7 @@ def create_app() -> FastAPI:
     app.include_router(inbox.router)
     app.include_router(profile.router)
     app.include_router(discover.router)
+    app.include_router(jobs.router)
 
     logger.info("ig-sidecar app created.")
     return app

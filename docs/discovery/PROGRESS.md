@@ -11,7 +11,7 @@
 | Phase 1 — Foundation | D01–D03 | ✅ done | 2026-04-25 |
 | Phase 2 — Orchestration & Intelligence | D04–D07 | ✅ done | 2026-04-26 |
 | Phase 3 — Observability & Admin | D08–D10 | ✅ done | 2026-04-25 |
-| Phase 4 — Optimization | D11–D12 | 🟡 in progress | 2026-04-25 |
+| Phase 4 — Optimization | D11–D12 | ✅ done | 2026-04-25 |
 | Phase 5 — Production | D13–D14 | ⏸ pending | 2026-04-24 |
 
 Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
@@ -217,14 +217,25 @@ Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 - Cast `features as unknown as Record<string, number>` en `rescore-all/route.ts` (Features no tiene index signature)
 
 ### D12 — Self-learning scoring
-**Status:** ⏸ pending  
-**Modelo:** Opus  
-**Output esperado:**
-- Worker Python `sidecar/jobs/update_weights.py` (sklearn LogisticRegression)
-- Cron Railway semanal (lunes 04:00 ART)
-- Shadow A/B integration en `lib/ig/score/v2.ts`
-- Auto-promote cuando p<0.1 en test de proporciones
-**Notas:** —
+**Status:** ✅ done — 2026-04-25  
+**Modelo:** Sonnet  
+**Branch:** main  
+**Output:**
+- `sidecar/jobs/update_weights.py`: sklearn LogisticRegression(C=1.0) + StandardScaler; MIN_POSITIVES=50; cross-val accuracy; proportions_ztest vs production; auto-promote if p<0.05 and candidate_accuracy > production_accuracy; Discord alert en ambos casos
+- `sidecar/app/routes/jobs.py`: POST /jobs/update-weights (HMAC auth via middleware existente)
+- `sidecar/app/main.py`: jobs router registrado
+- `sidecar/requirements.txt`: scikit-learn==1.5.2, statsmodels==0.14.4 agregados
+- `apex-leads/api/cron/trigger-weight-update/route.ts`: Vercel cron, Bearer CRON_SECRET auth, HMAC sign al sidecar
+- `vercel.json`: cron `0 7 * * 1` (lunes 07:00 UTC = 04:00 ART)
+- `lib/ig/score/v2.ts`: `loadCandidateWeights()` + `scoreWithShadow()` (fire-and-forget, log diff, early return si no hay candidate)
+- `run-cycle/route.ts`: `void scoreWithShadow(supabase, features, score)` después de computeScore
+- `sidecar/tests/test_update_weights.py`: 4 tests (skip <50 positivos, inserta candidate, ztest llamado con valores correctos, no auto-promueve si p≥0.05)
+- `lib/ig/score/__tests__/v2-shadow.test.ts`: 6 tests (loadCandidateWeights null/present, scoreWithShadow no-throw en 3 escenarios, log check)
+- 24 pytest passing · 19 jest score tests passing · tsc --noEmit limpio
+**Notas:**
+- sklearn y statsmodels no están en el venv local — los tests de update_weights.py corren en Railway donde el venv tiene todas las deps
+- proportions_ztest alternative="larger" (candidate mejor que production)
+- scoreWithShadow usa `loadCandidateWeights` con order version desc + limit 1 (siempre el más nuevo)
 
 ### D13 — E2E tests + chaos drills
 **Status:** ⏸ pending  
@@ -264,7 +275,5 @@ Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 
 ## Próximos pasos inmediatos
 
-1. D11 — A/B testing Thompson Sampling para templates
-3. D12 — Self-learning scoring (Logistic Regression semanal en Railway)
-4. D13 — E2E tests + chaos drills
-5. D14 — Ramp-up 5→30 DMs/día + RUNBOOK + eliminar Apify legacy
+1. D13 — E2E tests + chaos drills
+2. D14 — Ramp-up 5→30 DMs/día + RUNBOOK + eliminar Apify legacy

@@ -38,6 +38,37 @@ export function computeScore(
   return { score, z }
 }
 
+export async function loadCandidateWeights(supabase: Supabase): Promise<WeightsRecord | null> {
+  const { data, error } = await supabase
+    .from('scoring_weights')
+    .select('*')
+    .eq('status', 'candidate')
+    .order('version', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error || !data) return null
+  return data as WeightsRecord
+}
+
+export async function scoreWithShadow(
+  supabase: Supabase,
+  features: import('./features').Features,
+  productionScore: number,
+): Promise<void> {
+  try {
+    const candidate = await loadCandidateWeights(supabase)
+    if (!candidate) return
+    const { score: candidateScore } = computeScore(features, candidate.weights)
+    const diff = candidateScore - productionScore
+    console.log(
+      `[shadow-scoring] production=${productionScore} candidate_v${candidate.version}=${candidateScore} diff=${diff > 0 ? '+' : ''}${diff}`,
+    )
+  } catch (err) {
+    // fire-and-forget — never throw
+    console.warn('[shadow-scoring] error (ignored):', err)
+  }
+}
+
 export async function scoreAndPersist(
   supabase: Supabase,
   leadId: string | null,
