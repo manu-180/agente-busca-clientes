@@ -298,8 +298,8 @@ class IGClient:
                 "ig_user_id": str(u.pk),
                 "raw": {
                     "full_name": u.full_name,
-                    "is_private": u.is_private,
-                    "is_verified": u.is_verified,
+                    "is_private": getattr(u, "is_private", False),
+                    "is_verified": getattr(u, "is_verified", False),
                     "profile_pic_url": str(u.profile_pic_url) if u.profile_pic_url else None,
                 },
             }
@@ -320,8 +320,8 @@ class IGClient:
                 "ig_user_id": str(u.pk),
                 "raw": {
                     "full_name": u.full_name,
-                    "is_private": u.is_private,
-                    "is_verified": u.is_verified,
+                    "is_private": getattr(u, "is_private", False),
+                    "is_verified": getattr(u, "is_verified", False),
                     "profile_pic_url": str(u.profile_pic_url) if u.profile_pic_url else None,
                 },
             }
@@ -338,8 +338,8 @@ class IGClient:
             "ig_user_id": str(u.pk),
             "raw": {
                 "full_name": u.full_name,
-                "is_private": u.is_private,
-                "is_verified": u.is_verified,
+                "is_private": getattr(u, "is_private", False),
+                "is_verified": getattr(u, "is_verified", False),
                 "profile_pic_url": str(u.profile_pic_url) if u.profile_pic_url else None,
             },
         } for u in followers_chunk]
@@ -361,7 +361,7 @@ class IGClient:
             seen[u.username] = {
                 "ig_username": u.username,
                 "ig_user_id": str(u.pk),
-                "raw": {"full_name": u.full_name, "is_private": u.is_private, "is_verified": u.is_verified},
+                "raw": {"full_name": u.full_name, "is_private": getattr(u, "is_private", False), "is_verified": getattr(u, "is_verified", False)},
             }
         return {"users": list(seen.values())}
 
