@@ -22,8 +22,6 @@ const schema = z.object({
   IG_SIDECAR_URL: z.string().url(),
   IG_SIDECAR_SECRET: z.string().min(32),
   IG_SENDER_USERNAME: z.string().min(1),
-  APIFY_TOKEN: z.string().min(1),
-  APIFY_WEBHOOK_SECRET: z.string().min(32),
   CRON_SECRET: z.string().min(32),
   // ── Validated with sensible defaults ─────────────────────────────────
   DRY_RUN: boolEnv(false),
@@ -45,8 +43,6 @@ const BUILD_DEFAULTS: Record<string, string> = {
   IG_SIDECAR_URL: 'http://localhost:8000',
   IG_SIDECAR_SECRET: 'a'.repeat(32),
   IG_SENDER_USERNAME: '__build__',
-  APIFY_TOKEN: '__build__',
-  APIFY_WEBHOOK_SECRET: 'a'.repeat(32),
   CRON_SECRET: 'a'.repeat(32),
   ANTHROPIC_API_KEY: 'sk-ant-build-placeholder',
 }

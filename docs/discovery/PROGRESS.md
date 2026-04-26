@@ -12,7 +12,7 @@
 | Phase 2 — Orchestration & Intelligence | D04–D07 | ✅ done | 2026-04-26 |
 | Phase 3 — Observability & Admin | D08–D10 | ✅ done | 2026-04-25 |
 | Phase 4 — Optimization | D11–D12 | ✅ done | 2026-04-25 |
-| Phase 5 — Production | D13–D14 | 🟡 in progress | 2026-04-25 |
+| Phase 5 — Production | D13–D14 | ✅ done | 2026-04-25 |
 
 Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 
@@ -256,14 +256,19 @@ Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 - `makeChain` en route.test.ts es thenable — resuelve tanto `await chain.method()` como `await chain.method().terminal()` en un solo mock
 
 ### D14 — Ramp-up + runbook
-**Status:** ⏸ pending  
+**Status:** ✅ done — 2026-04-25  
 **Modelo:** Sonnet  
-**Output esperado:**
-- `DRY_RUN=false` en Vercel
-- `DAILY_DM_LIMIT=5` día 1, +5 cada día sin incidente hasta 30
-- `RUNBOOK.md` en docs/discovery con: monitoreo diario, escalación, rollback
-- Eliminación legacy Apify (`/api/cron/ig-discover`, env vars)
-**Notas:** —
+**Branch:** main  
+**Output:**
+- Eliminados archivos legacy Apify: `api/cron/ig-discover/route.ts`, `api/webhooks/apify/route.ts`, `api/cron/ig-enrich/route.ts`
+- `lib/ig/config.ts`: removidos `APIFY_TOKEN` y `APIFY_WEBHOOK_SECRET` del schema y BUILD_DEFAULTS
+- `lib/ig/ramp-up.ts`: `getDailyLimit(daysSinceLaunch)` — empieza en 5, +5/día, cap 30; exporta `RAMP_START_DATE` (lee `IG_RAMP_START` env var)
+- `lib/ig/__tests__/ramp-up.test.ts`: 5 tests (día 0=5, día 5=30, día 6=30 cap, día 10=30 cap, incremento lineal)
+- `api/ig/run-cycle/route.ts`: usa `getDailyLimit()` cuando `RAMP_START_DATE` está seteado; fallback a `DAILY_DM_LIMIT` fijo si no lo está
+- `docs/discovery/RUNBOOK.md`: launch checklist, env vars legacy a eliminar, monitoreo diario, escalación, rollback, accesos
+**Notas:**
+- `IG_RAMP_START` es opcional — sin él el sistema funciona igual que antes con `DAILY_DM_LIMIT` fijo
+- Env vars `APIFY_TOKEN` y `APIFY_WEBHOOK_SECRET` deben eliminarse manualmente desde Vercel (documentado en RUNBOOK §2)
 
 ---
 
@@ -283,5 +288,8 @@ Status legend: ⏸ pending · 🟡 in progress · ✅ done · ⚠ blocked
 
 ## Próximos pasos inmediatos
 
-1. D13 — E2E tests + chaos drills
-2. D14 — Ramp-up 5→30 DMs/día + RUNBOOK + eliminar Apify legacy
+1. ✅ D13 — E2E tests + chaos drills
+2. ✅ D14 — Ramp-up 5→30 DMs/día + RUNBOOK + eliminar Apify legacy
+
+**Phase 5 completa. Sistema listo para producción.**  
+Ver [RUNBOOK.md](RUNBOOK.md) para el checklist de launch.

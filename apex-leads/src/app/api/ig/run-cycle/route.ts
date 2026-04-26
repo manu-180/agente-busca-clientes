@@ -9,6 +9,7 @@ import { pickTemplate, renderTemplate } from '@/lib/ig/templates/selector'
 import { preFilter, loadBlacklist } from '@/lib/ig/discover/pre-filter'
 import { classifyNiche, checkDailyCostAlert, NICHE_VALUES, type ClassificationResult } from '@/lib/ig/classify/niche'
 import { sendAlert } from '@/lib/ig/alerts/discord'
+import { RAMP_START_DATE, getDailyLimit } from '@/lib/ig/ramp-up'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 120
@@ -41,7 +42,9 @@ export async function POST(req: NextRequest) {
   }
 
   const dryRun = igConfig.DRY_RUN
-  const dailyLimit = igConfig.DAILY_DM_LIMIT
+  const dailyLimit = RAMP_START_DATE
+    ? getDailyLimit(Math.max(0, Math.floor((Date.now() - RAMP_START_DATE.getTime()) / 86_400_000)))
+    : igConfig.DAILY_DM_LIMIT
   const senderIg = igConfig.IG_SENDER_USERNAME
 
   const supabase = createSupabaseServer()
