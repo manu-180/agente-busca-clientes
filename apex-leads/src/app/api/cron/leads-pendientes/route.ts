@@ -20,11 +20,13 @@ export const maxDuration = 60
 const TZ_OFFSET_HOURS_AR = -3
 const LEADS_TABLE = 'leads'
 const MAX_REINTENTOS = 3
+const MAX_DIARIO_TEMPLATES = 200
 const TWILIO_CONTENT_SID = 'HX77f10bb7597eb3ef4a0422e9f033859a'
 
 // ─── Senders Twilio (primer contacto) ────────────────────────────────────────
 // Cadencia intMin/intMax en minutos; si ambos ≤ 0 no hay espera entre envíos.
-// Ventana horaria 7:00–21:00 (America/Argentina/Buenos_Aires); ?force=true omite.
+// Ventana horaria 9:00–18:00 (America/Argentina/Buenos_Aires); ?force=true omite.
+// Límite diario: MAX_DIARIO_TEMPLATES templates por sender; ?force=true omite.
 interface SenderDef {
   key: string
   provider: 'twilio'
@@ -225,9 +227,18 @@ async function procesarSender(
     }
   }
 
-  // 2. Contador diario (métrica / diagnóstico; no condiciona envíos)
+  // 2. Límite diario duro: máx MAX_DIARIO_TEMPLATES templates por día
   const enviados = await leerDailyCount(sup, key)
-  console.log(`[DBG sender] [${key}] enviados_hoy=${enviados}`)
+  console.log(`[DBG sender] [${key}] enviados_hoy=${enviados}/${MAX_DIARIO_TEMPLATES}`)
+
+  if (!forced && enviados >= MAX_DIARIO_TEMPLATES) {
+    console.log(`[DBG sender] [${key}] → limite_diario_alcanzado (${enviados}/${MAX_DIARIO_TEMPLATES})`)
+    return {
+      status: 'limite_diario_alcanzado',
+      enviados_hoy: enviados,
+      limite: MAX_DIARIO_TEMPLATES,
+    }
+  }
 
   // 3. Slot de cadencia (omitido si intMin e intMax son ≤ 0)
   if (!forced && (intMin > 0 || intMax > 0)) {

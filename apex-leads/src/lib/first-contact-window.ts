@@ -2,10 +2,10 @@
  * Ventana de envío de primer contacto (WhatsApp / Twilio) en hora Argentina.
  * Misma regla en cron `leads-pendientes`, `queue-stats` y copy de UI.
  */
-export const PRIMER_CONTACTO_HORA_INICIO_AR = 7
-export const PRIMER_CONTACTO_HORA_FIN_AR = 21
+export const PRIMER_CONTACTO_HORA_INICIO_AR = 9
+export const PRIMER_CONTACTO_HORA_FIN_AR = 18
 
-/** `true` = ignora 7–21 h (solo para pruebas). Producción: `false`. */
+/** `true` = ignora 9–18 h (solo para pruebas). Producción: `false`. */
 export const PRIMER_CONTACTO_SIN_RESTRICCION_HORARIA = false
 
 const TZ_ARGENTINA = 'America/Argentina/Buenos_Aires'
