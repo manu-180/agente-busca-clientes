@@ -1,12 +1,9 @@
-name: Cron Followup (MIGRADO A RAILWAY)
+name: Cron Followup
 
-# SCHEDULE DESACTIVADO: migrado a Railway Cron Job (igual que leads-pendientes).
-# No coexistir ambos: doble disparo innecesario (el lock de DB previene duplicados
-# pero aumenta carga). Para disparo manual usar "Run workflow" en GitHub Actions.
 on:
-  # schedule:
-  #   - cron: '*/5 * * * *'  # DESACTIVADO — Railway maneja el schedule
-  workflow_dispatch:         # Disparo manual de emergencia desde GitHub UI
+  schedule:
+    - cron: '*/5 * * * *'  # Cada 5 min — el endpoint bloquea fuera de 9-18h ART
+  workflow_dispatch:         # Disparo manual desde GitHub UI
 
 jobs:
   trigger-followup:
