@@ -45,6 +45,7 @@ export async function POST(req: NextRequest) {
       await sup.from('leads').update({
         estado: 'descartado',
         primer_envio_error: 'no_es_whatsapp',
+        primer_envio_fallido_at: new Date().toISOString(),
       }).eq('id', leadId)
 
     } else if (errorCode === '63016') {
@@ -68,6 +69,7 @@ export async function POST(req: NextRequest) {
       await sup.from('leads').update({
         estado: 'descartado',
         primer_envio_error: 'fuera_ventana_sesion',
+        primer_envio_fallido_at: new Date().toISOString(),
       }).eq('id', leadId)
 
     } else {

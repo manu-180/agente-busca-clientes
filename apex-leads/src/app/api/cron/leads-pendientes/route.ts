@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
-import { normalizarTelefonoArg, variantesTelefonoMismaLinea } from '@/lib/phone'
-import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
+import { variantesTelefonoMismaLinea } from '@/lib/phone'
+import { verificarNumeroWhatsApp } from '@/lib/phone-verify'
 import {
   estaEnVentanaPrimerContacto,
   getHoraArgentina,
@@ -289,25 +289,21 @@ async function procesarSender(
     // Reservar para que el otro sender no lo tome en el mismo tick
     yaProcesoIds.push(lead.id)
 
-    const telefono = normalizarTelefonoArg(String(lead.telefono))
-    console.log(`[DBG sender] [${key}] tel normalizado: "${lead.telefono}" → "${telefono}"`)
+    const verificacion = verificarNumeroWhatsApp(String(lead.telefono))
+    console.log(`[DBG sender] [${key}] verificacion tel="${lead.telefono}": ${JSON.stringify(verificacion)}`)
 
-    if (!telefono) {
-      console.warn(`[DBG sender] [${key}] tel inválido tras normalizar → descartando`)
-      await actualizarLead(sup, lead.id, { estado: 'descartado', primer_envio_error: 'telefono_invalido' })
-      continue
-    }
-
-    if (isTelefonoHardBlocked(telefono)) {
+    if (!verificacion.valido) {
+      console.warn(`[DBG sender] [${key}] verificacion fallida razon=${verificacion.razon} → descartando`)
       await actualizarLead(sup, lead.id, {
         estado: 'descartado',
-        primer_envio_error: 'telefono_bloqueado_lista',
+        primer_envio_error: verificacion.razon,
+        primer_envio_fallido_at: new Date().toISOString(),
         procesando_hasta: null,
       })
-      console.warn(`[DBG sender] [${key}] tel ${telefono} en lista de bloqueo → descartado`)
       continue
     }
 
+    const telefono = verificacion.normalizado
     const telsMismaLinea = variantesTelefonoMismaLinea(telefono)
     console.log(`[DBG sender] [${key}] variantes misma línea: ${JSON.stringify(telsMismaLinea)}`)
 
@@ -435,10 +431,15 @@ async function procesarSender(
 
       erroresTick.push({ lead_id: lead.id, error: msg })
 
+      const nuevoIntentos = (lead.primer_envio_intentos ?? 0) + 1
+      const esUltimoIntento = nuevoIntentos >= MAX_REINTENTOS
       await actualizarLead(sup, lead.id, {
-        primer_envio_intentos: (lead.primer_envio_intentos ?? 0) + 1,
+        primer_envio_intentos: nuevoIntentos,
         primer_envio_error: msg.slice(0, 500),
-        procesando_hasta: null, // liberar lock para que el próximo tick pueda reintentar
+        procesando_hasta: null,
+        ...(esUltimoIntento
+          ? { estado: 'descartado', primer_envio_fallido_at: new Date().toISOString() }
+          : {}),
       })
 
       const fallosAntes = parseInt(await leerConfig(sup, `${key}_primer_fallos`, '0'), 10) || 0

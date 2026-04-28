@@ -49,6 +49,7 @@ interface ApiErrorResponse {
 interface QueueStats {
   pendientes: number
   enviados_hoy: number
+  fallidos_hoy: number
   ventana_horaria: { inicio: number; fin: number }
   en_ventana: boolean
   activo: boolean
@@ -447,8 +448,17 @@ export default function NuevoLeadClient() {
             <div className="text-2xl font-bold text-apex-lime mt-1">{queueStats.pendientes}</div>
           </div>
           <div className="bg-apex-card border border-apex-border rounded-lg p-3">
-            <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Enviados hoy</div>
-            <div className="text-2xl font-bold mt-1">{queueStats.enviados_hoy}</div>
+            <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Hoy</div>
+            <div className="flex items-baseline gap-3 mt-1">
+              <span className="text-2xl font-bold text-apex-lime">{queueStats.enviados_hoy}</span>
+              <span className="text-xs text-apex-muted font-mono">enviados</span>
+            </div>
+            {queueStats.fallidos_hoy > 0 && (
+              <div className="flex items-baseline gap-1.5 mt-0.5">
+                <span className="text-sm font-bold text-red-400">{queueStats.fallidos_hoy}</span>
+                <span className="text-xs text-apex-muted font-mono">fallidos</span>
+              </div>
+            )}
           </div>
           <div className="bg-apex-card border border-apex-border rounded-lg p-3">
             <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Horario envío</div>

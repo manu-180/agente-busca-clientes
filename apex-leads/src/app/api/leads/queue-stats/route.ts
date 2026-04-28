@@ -24,7 +24,7 @@ export async function GET() {
 
   const inicioDiaUtc = inicioDelDiaArUtc().toISOString()
 
-  const [pendientesRes, enviadosHoyRes, configRes] = await Promise.all([
+  const [pendientesRes, enviadosHoyRes, fallidosHoyRes, configRes] = await Promise.all([
     supabase
       .from(LEADS_TABLE)
       .select('id', { count: 'exact' })
@@ -37,6 +37,11 @@ export async function GET() {
       .select('id', { count: 'exact' })
       .gte('primer_envio_completado_at', inicioDiaUtc)
       .limit(0),
+    supabase
+      .from(LEADS_TABLE)
+      .select('id', { count: 'exact' })
+      .gte('primer_envio_fallido_at', inicioDiaUtc)
+      .limit(0),
     supabase.from('configuracion').select('valor').eq('clave', 'first_contact_activo').maybeSingle(),
   ])
 
@@ -46,6 +51,7 @@ export async function GET() {
   const res = NextResponse.json({
     pendientes: pendientesRes.count ?? 0,
     enviados_hoy: enviadosHoyRes.count ?? 0,
+    fallidos_hoy: fallidosHoyRes.count ?? 0,
     ventana_horaria: {
       inicio: PRIMER_CONTACTO_HORA_INICIO_AR,
       fin: PRIMER_CONTACTO_HORA_FIN_AR,
