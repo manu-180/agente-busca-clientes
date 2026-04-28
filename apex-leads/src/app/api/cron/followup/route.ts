@@ -6,6 +6,12 @@ import { evaluarFollowup } from '@/lib/followup-eligibility'
 import { generarMensajeFollowupClaude } from '@/lib/generar-followup'
 import { claveUnicaPaisLinea } from '@/lib/phone'
 import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
+import {
+  estaEnVentanaPrimerContacto,
+  getHoraArgentina,
+  PRIMER_CONTACTO_HORA_INICIO_AR,
+  PRIMER_CONTACTO_HORA_FIN_AR,
+} from '@/lib/first-contact-window'
 import type { Lead } from '@/types'
 
 /** Evita 2+ filas de leads (5411 / 54911) y el followup a la misma persona dos veces por tick. */
@@ -67,6 +73,16 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
   const { data: cfg } = await supabase.from('configuracion').select('valor').eq('clave', 'agente_activo').single()
   if (cfg?.valor !== 'true') {
     return NextResponse.json({ ok: true, skipped: true, motivo: 'agente_global_off' })
+  }
+
+  if (!estaEnVentanaPrimerContacto()) {
+    return NextResponse.json({
+      ok: true,
+      skipped: true,
+      motivo: 'fuera_de_ventana',
+      hora_argentina: getHoraArgentina(),
+      ventana: { inicio: PRIMER_CONTACTO_HORA_INICIO_AR, fin: PRIMER_CONTACTO_HORA_FIN_AR },
+    })
   }
 
   const { data: leadsRaw, error: errLeads } = await ejecutarConTablaLeads<Lead[]>((tabla) =>
