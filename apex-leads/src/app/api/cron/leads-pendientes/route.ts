@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { variantesTelefonoMismaLinea } from '@/lib/phone'
+import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
 import { verificarNumeroWhatsApp } from '@/lib/phone-verify'
 import {
   estaEnVentanaPrimerContacto,
