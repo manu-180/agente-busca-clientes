@@ -216,19 +216,18 @@ async function procesarSender(
   const fallosActuales = parseInt(await leerConfig(sup, `${key}_primer_fallos`, '0'), 10) || 0
   console.log(`[DBG sender] [${key}] senderId=${senderId} fallosActuales=${fallosActuales}`)
 
-  // TEMP: ventana horaria desactivada para testing
-  // if (!forced && !estaEnVentanaPrimerContacto()) {
-  //   const h = getHoraArgentina()
-  //   console.log(`[DBG sender] [${key}] → fuera_de_ventana hora=${h}`)
-  //   return {
-  //     status: 'fuera_de_ventana',
-  //     hora_argentina: h,
-  //     ventana: {
-  //       inicio: PRIMER_CONTACTO_HORA_INICIO_AR,
-  //       fin: PRIMER_CONTACTO_HORA_FIN_AR,
-  //     },
-  //   }
-  // }
+  if (!forced && !estaEnVentanaPrimerContacto()) {
+    const h = getHoraArgentina()
+    console.log(`[DBG sender] [${key}] → fuera_de_ventana hora=${h}`)
+    return {
+      status: 'fuera_de_ventana',
+      hora_argentina: h,
+      ventana: {
+        inicio: PRIMER_CONTACTO_HORA_INICIO_AR,
+        fin: PRIMER_CONTACTO_HORA_FIN_AR,
+      },
+    }
+  }
 
   // 2. Límite diario duro: máx MAX_DIARIO_TEMPLATES templates por día
   const enviados = await leerDailyCount(sup, key)
