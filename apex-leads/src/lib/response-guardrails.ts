@@ -50,8 +50,13 @@ function truncarEnOracion(text: string, maxChars: number): string {
   return fragmento.trimEnd()
 }
 
+function stripThinkingBlocks(text: string): string {
+  return text.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim()
+}
+
 export function sanitizarRespuestaModelo(raw: string): string {
-  const compact = compactWhitespace(raw)
+  const sinThinking = stripThinkingBlocks(raw)
+  const compact = compactWhitespace(sinThinking)
   if (!compact) return ''
   const noRepeats = removeRepeatedLines(compact)
   return truncarEnOracion(noRepeats, MAX_CHARS)
