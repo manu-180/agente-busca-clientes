@@ -13,6 +13,7 @@ import {
   resolveWhatsAppDemoHost,
   SITIO_PRINCIPAL_APEX,
 } from '@/lib/whatsapp-template-demos'
+import { getTwilioCredentials } from '@/lib/twilio'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -21,7 +22,7 @@ const TZ_OFFSET_HOURS_AR = -3
 const LEADS_TABLE = 'leads'
 const MAX_REINTENTOS = 3
 const MAX_DIARIO_TEMPLATES = 200
-const TWILIO_CONTENT_SID = 'HX77f10bb7597eb3ef4a0422e9f033859a'
+const TWILIO_CONTENT_SID = 'HX1f02dd4ebcbc3af123a8262fdeb5641f'
 
 // ─── Senders Twilio (primer contacto) ────────────────────────────────────────
 // Cadencia intMin/intMax en minutos; si ambos ≤ 0 no hay espera entre envíos.
@@ -130,8 +131,8 @@ async function enviarTemplateTwilio(
   if (isTelefonoHardBlocked(telefono)) {
     throw new Error('TELEFONO_BLOQUEADO')
   }
-  const accountSid = process.env.TWILIO_ACCOUNT_SID!
-  const auth = 'Basic ' + Buffer.from(`${accountSid}:${process.env.TWILIO_AUTH_TOKEN!}`).toString('base64')
+  const { accountSid, authToken } = getTwilioCredentials(fromNumber)
+  const auth = 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64')
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://leads.theapexweb.com'
 
   const params = {
@@ -153,6 +154,7 @@ async function enviarTemplateTwilio(
   console.log(`[DBG twilio] ContentVariables=${params.ContentVariables}`)
   console.log(`[DBG twilio] StatusCallback=${params.StatusCallback}`)
 
+  console.log(`[DBG twilio] using accountSid=${accountSid.slice(0, 8)}… for fromNumber=${fromNumber}`)
   const res = await fetch(
     `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
     {
@@ -214,18 +216,19 @@ async function procesarSender(
   const fallosActuales = parseInt(await leerConfig(sup, `${key}_primer_fallos`, '0'), 10) || 0
   console.log(`[DBG sender] [${key}] senderId=${senderId} fallosActuales=${fallosActuales}`)
 
-  if (!forced && !estaEnVentanaPrimerContacto()) {
-    const h = getHoraArgentina()
-    console.log(`[DBG sender] [${key}] → fuera_de_ventana hora=${h}`)
-    return {
-      status: 'fuera_de_ventana',
-      hora_argentina: h,
-      ventana: {
-        inicio: PRIMER_CONTACTO_HORA_INICIO_AR,
-        fin: PRIMER_CONTACTO_HORA_FIN_AR,
-      },
-    }
-  }
+  // TEMP: ventana horaria desactivada para testing
+  // if (!forced && !estaEnVentanaPrimerContacto()) {
+  //   const h = getHoraArgentina()
+  //   console.log(`[DBG sender] [${key}] → fuera_de_ventana hora=${h}`)
+  //   return {
+  //     status: 'fuera_de_ventana',
+  //     hora_argentina: h,
+  //     ventana: {
+  //       inicio: PRIMER_CONTACTO_HORA_INICIO_AR,
+  //       fin: PRIMER_CONTACTO_HORA_FIN_AR,
+  //     },
+  //   }
+  // }
 
   // 2. Límite diario duro: máx MAX_DIARIO_TEMPLATES templates por día
   const enviados = await leerDailyCount(sup, key)
