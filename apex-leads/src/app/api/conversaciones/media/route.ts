@@ -3,11 +3,10 @@ import { createSupabaseServer } from '@/lib/supabase-server'
 
 export const dynamic = 'force-dynamic'
 
-const TWILIO_API = 'https://api.twilio.com/'
-
 /**
- * Sirve el binario del adjunto Twilio asociado a un mensaje (Basic Auth solo en servidor).
- * El cliente usa src="/api/conversaciones/media?id=<uuid>".
+ * Sirve el binario del adjunto asociado a un mensaje.
+ * Con Evolution API, la media se almacena como URL del servidor de Evolution.
+ * URLs de Twilio legacy (api.twilio.com) ya no son accesibles — retornan 410.
  */
 export async function GET(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id')
@@ -27,34 +26,35 @@ export async function GET(req: NextRequest) {
   }
 
   const mediaUrl = row.media_url.trim()
-  if (!mediaUrl.startsWith(TWILIO_API)) {
-    return NextResponse.json({ error: 'Origen no permitido' }, { status: 400 })
+
+  // URLs de Twilio legacy — ya no accesibles tras la migración
+  if (mediaUrl.startsWith('https://api.twilio.com/')) {
+    return NextResponse.json({ error: 'Media legacy de Twilio no disponible' }, { status: 410 })
   }
 
-  const accountSid = process.env.TWILIO_ACCOUNT_SID
-  const authToken = process.env.TWILIO_AUTH_TOKEN
-  if (!accountSid || !authToken) {
-    return NextResponse.json({ error: 'Twilio no configurado' }, { status: 500 })
+  // Media de Evolution API — proxy con apikey
+  const evolutionUrl = process.env.EVOLUTION_API_URL ?? ''
+  const evolutionKey = process.env.EVOLUTION_API_KEY ?? ''
+  if (evolutionUrl && mediaUrl.startsWith(evolutionUrl)) {
+    if (!evolutionKey) {
+      return NextResponse.json({ error: 'Evolution API no configurada' }, { status: 500 })
+    }
+    const upstream = await fetch(mediaUrl, {
+      headers: { apikey: evolutionKey },
+      redirect: 'follow',
+    })
+    if (!upstream.ok) {
+      return new NextResponse(null, { status: 502 })
+    }
+    const contentType = upstream.headers.get('content-type') ?? 'application/octet-stream'
+    const buf = await upstream.arrayBuffer()
+    return new NextResponse(buf, {
+      headers: {
+        'Content-Type': contentType,
+        'Cache-Control': 'private, max-age=300',
+      },
+    })
   }
 
-  const basic = Buffer.from(`${accountSid}:${authToken}`).toString('base64')
-  const upstream = await fetch(mediaUrl, {
-    headers: { Authorization: `Basic ${basic}` },
-    redirect: 'follow',
-  })
-
-  if (!upstream.ok) {
-    return new NextResponse(null, { status: 502 })
-  }
-
-  const contentType =
-    upstream.headers.get('content-type') ?? 'application/octet-stream'
-  const buf = await upstream.arrayBuffer()
-
-  return new NextResponse(buf, {
-    headers: {
-      'Content-Type': contentType,
-      'Cache-Control': 'private, max-age=300',
-    },
-  })
+  return NextResponse.json({ error: 'Origen de media no permitido' }, { status: 400 })
 }

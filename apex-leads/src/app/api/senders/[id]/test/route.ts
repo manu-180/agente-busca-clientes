@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
-import { enviarMensajeTwilio } from '@/lib/twilio'
+import { enviarMensajeEvolution } from '@/lib/evolution'
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   const supabase = createSupabaseServer()
@@ -18,8 +18,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
   if (!sender) return NextResponse.json({ error: 'Sender no encontrado' }, { status: 404 })
 
+  const instanceName = sender.instance_name as string | undefined
+  if (!instanceName) {
+    return NextResponse.json({ error: 'Sender sin instance_name — configurar Evolution API' }, { status: 400 })
+  }
+
   try {
-    await enviarMensajeTwilio(telefono_test, '✅ Test de conexión APEX Lead Engine', sender.phone_number)
+    await enviarMensajeEvolution(telefono_test, 'Test de conexion APEX Lead Engine', instanceName)
     return NextResponse.json({ ok: true })
   } catch (err) {
     return NextResponse.json({ ok: false, error: String(err) }, { status: 500 })

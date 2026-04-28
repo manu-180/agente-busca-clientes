@@ -54,19 +54,17 @@ export async function GET(req: NextRequest) {
 
   // ── Env vars ──────────────────────────────────────────────────────────────
   const anthropicKey = process.env.ANTHROPIC_API_KEY ?? ''
-  const twilioSid = process.env.TWILIO_ACCOUNT_SID ?? ''
-  const twilioToken = process.env.TWILIO_AUTH_TOKEN ?? ''
-  const twilioNumber = process.env.TWILIO_WHATSAPP_NUMBER ?? ''
+  const evolutionUrl = process.env.EVOLUTION_API_URL ?? ''
+  const evolutionKey = process.env.EVOLUTION_API_KEY ?? ''
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ''
 
   const envVars = {
-    ANTHROPIC_API_KEY: anthropicKey ? `✅ SET (${anthropicKey.slice(0, 12)}...)` : '❌ FALTA',
-    TWILIO_ACCOUNT_SID: twilioSid ? `✅ SET (${twilioSid.slice(0, 8)}...)` : '❌ FALTA',
-    TWILIO_AUTH_TOKEN: twilioToken ? '✅ SET' : '❌ FALTA',
-    TWILIO_WHATSAPP_NUMBER: twilioNumber || '❌ FALTA',
-    SUPABASE_URL: supabaseUrl ? `✅ ${supabaseUrl}` : '❌ FALTA',
-    APP_URL: appUrl || '⚠️ NO SETEADA (usa default leads.theapexweb.com)',
+    ANTHROPIC_API_KEY: anthropicKey ? `SET (${anthropicKey.slice(0, 12)}...)` : 'FALTA',
+    EVOLUTION_API_URL: evolutionUrl || 'FALTA',
+    EVOLUTION_API_KEY: evolutionKey ? 'SET' : 'FALTA',
+    SUPABASE_URL: supabaseUrl ? `SET ${supabaseUrl}` : 'FALTA',
+    APP_URL: appUrl || 'NO SETEADA (usa default leads.theapexweb.com)',
     NODE_ENV: process.env.NODE_ENV ?? '?',
   }
 
@@ -173,7 +171,8 @@ export async function GET(req: NextRequest) {
     })),
     resumen: {
       agente_global_activo: configMap['agente_activo'] === 'true',
-      anthropic_ok: anthropicPing.ok,
+      evolution_configurado: !!(evolutionUrl && evolutionKey),
+    anthropic_ok: anthropicPing.ok,
       errores_recientes: (errores ?? []).length,
       respuestas_ultimas_24h: eventCounts['full_reply_sent'] ?? 0,
       fallbacks_ultimas_24h: eventCounts['fallback_message_sent'] ?? 0,

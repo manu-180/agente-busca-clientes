@@ -1,5 +1,4 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { createHmac, timingSafeEqual } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { waitUntil } from '@vercel/functions'
 import { createSupabaseServer } from '@/lib/supabase-server'
@@ -34,23 +33,19 @@ import {
   stripContinuationViolations,
   validateContinuationMessage,
 } from '@/lib/message-guards'
-import { enviarMensajeTwilio, getTwilioCredentials } from '@/lib/twilio'
+import { enviarMensajeEvolution } from '@/lib/evolution'
 import { normalizarTelefonoArg, soloDigitos, variantesTelefonoMismaLinea } from '@/lib/phone'
 import { debePersistirBocetoAceptado } from '@/lib/boceto-aceptacion'
 import { MENSAJE_COMPROMISO_BOCETO_24H } from '@/lib/mensaje-boceto-24h'
 import { estaEnVentanaPrimerContacto, getHoraArgentina } from '@/lib/first-contact-window'
 
-// maxDuration = 30s → da margen para el background tras devolver TwiML
+// maxDuration = 30s → da margen para el background tras devolver 200
 export const maxDuration = 30
 
-// Twilio espera TwiML (XML) como respuesta, no JSON.
-// Devolvemos <Response/> vacío — el mensaje real se envía por la REST API.
-function twimlOk() {
-  return new Response('<Response/>', {
-    status: 200,
-    headers: { 'Content-Type': 'text/xml' },
-  })
-}
+const VENTANA_RESPUESTA_MANUAL_MS = 5 * 60 * 1000
+const DEBOUNCE_MS = 4000
+const LOCK_TTL_MS = 35_000
+const FALLBACK_CUANDO_CLAUDE_FALLA = 'Gracias por tu mensaje. Te respondemos a la brevedad.'
 
 const END_CONVERSATION_TOOL: Anthropic.Tool = {
   name: 'end_conversation',
@@ -73,29 +68,84 @@ const END_CONVERSATION_TOOL: Anthropic.Tool = {
   },
 }
 
-// ─── Constantes de tiempo ──────────────────────────────────────────────────────
-// Twilio WhatsApp webhook timeout = 10s → devolvemos TwiML en < 3s y procesamos en BG.
-const VENTANA_RESPUESTA_MANUAL_MS = 5 * 60 * 1000
-// Debounce reducido: 4s (en background ya no importa bloquear el TwiML).
-const DEBOUNCE_MS = 4000
-const LOCK_TTL_MS = 35_000
-// Mensaje de fallback cuando Claude falla (en vez de silencio total).
-const FALLBACK_CUANDO_CLAUDE_FALLA =
-  'Gracias por tu mensaje. Te respondemos a la brevedad.'
+// ─── Evolution API payload types ──────────────────────────────────────────────
+
+interface EvolutionMessageKey {
+  remoteJid: string
+  fromMe: boolean
+  id: string
+}
+
+interface EvolutionMessageContent {
+  conversation?: string
+  extendedTextMessage?: { text?: string }
+  imageMessage?: { caption?: string; mimetype?: string }
+  audioMessage?: { mimetype?: string; ptt?: boolean }
+  videoMessage?: { caption?: string }
+  documentMessage?: { title?: string }
+}
+
+interface EvolutionMessageData {
+  key: EvolutionMessageKey
+  message?: EvolutionMessageContent
+  messageType?: string
+  messageTimestamp?: number
+  pushName?: string
+}
+
+interface EvolutionStatusUpdate {
+  key: EvolutionMessageKey
+  update: { status?: number }
+}
+
+interface EvolutionWebhookPayload {
+  event: string
+  instance: string
+  data: EvolutionMessageData | EvolutionStatusUpdate | EvolutionStatusUpdate[]
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-async function enviarTwilioYGuardar(
+function extractPhoneFromJid(jid: string): string {
+  return jid.replace(/@s\.whatsapp\.net$/, '').replace(/@c\.us$/, '').replace(/^\+/, '')
+}
+
+function isGroupJid(jid: string): boolean {
+  return jid.endsWith('@g.us')
+}
+
+function extractMessageText(msg: EvolutionMessageContent | undefined): string {
+  if (!msg) return ''
+  if (msg.conversation) return msg.conversation
+  if (msg.extendedTextMessage?.text) return msg.extendedTextMessage.text
+  if (msg.imageMessage?.caption) return msg.imageMessage.caption
+  if (msg.videoMessage?.caption) return msg.videoMessage.caption
+  return ''
+}
+
+function detectarTipoMensaje(messageType: string | undefined): 'texto' | 'audio' | 'imagen' | 'otro' {
+  switch (messageType) {
+    case 'conversation':
+    case 'extendedTextMessage':
+      return 'texto'
+    case 'audioMessage':
+      return 'audio'
+    case 'imageMessage':
+      return 'imagen'
+    default:
+      return messageType ? 'otro' : 'texto'
+  }
+}
+
+async function enviarEvolutionYGuardar(
   supabase: ReturnType<typeof createSupabaseServer>,
   telefono: string,
   leadId: string,
   texto: string,
-  senderPhone?: string,
+  instanceName: string,
   senderId?: string | null
 ) {
-  const result = await enviarMensajeTwilio(telefono, texto, senderPhone, { skipBlockCheck: true })
-  const sid = (result as { sid?: string })?.sid ?? null
-
+  const result = await enviarMensajeEvolution(telefono, texto, instanceName, { skipBlockCheck: true })
   await supabase.from('conversaciones').insert({
     lead_id: leadId,
     telefono,
@@ -104,7 +154,7 @@ async function enviarTwilioYGuardar(
     tipo_mensaje: 'texto',
     manual: false,
     sender_id: senderId ?? null,
-    twilio_message_sid: sid,
+    twilio_message_sid: result.messageId,
   })
 }
 
@@ -114,7 +164,6 @@ async function adquirirLock(
 ): Promise<boolean> {
   const ahora = new Date().toISOString()
   const expiracion = new Date(Date.now() + LOCK_TTL_MS).toISOString()
-
   const { data } = await supabase
     .from('leads')
     .update({ procesando_hasta: expiracion })
@@ -122,7 +171,6 @@ async function adquirirLock(
     .or(`procesando_hasta.is.null,procesando_hasta.lt.${ahora}`)
     .select('id')
     .maybeSingle()
-
   return data !== null
 }
 
@@ -133,26 +181,6 @@ async function liberarLock(
   await supabase.from('leads').update({ procesando_hasta: null }).eq('id', leadId)
 }
 
-function verifyTwilioSignature(
-  authToken: string,
-  signature: string,
-  url: string,
-  params: Record<string, string>
-): boolean {
-  const sortedKeys = Object.keys(params).sort()
-  const paramString = sortedKeys.map(k => k + params[k]).join('')
-  const hmac = createHmac('sha1', authToken).update(url + paramString).digest('base64')
-  try {
-    return timingSafeEqual(Buffer.from(hmac), Buffer.from(signature))
-  } catch {
-    return false
-  }
-}
-
-/**
- * Registra un error fatal en conversational_events para que sea visible
- * en la tabla de telemetría (ya que no hay UI de logs propia).
- */
 async function registrarErrorWebhook(
   supabase: ReturnType<typeof createSupabaseServer>,
   leadId: string,
@@ -162,7 +190,7 @@ async function registrarErrorWebhook(
 ) {
   const msg = error instanceof Error ? error.message : String(error)
   const stack = error instanceof Error ? (error.stack ?? '').slice(0, 800) : ''
-  console.error(`[Twilio Webhook] ERROR en etapa "${etapa}":`, msg, stack)
+  console.error(`[Evolution Webhook] ERROR en etapa "${etapa}":`, msg, stack)
   try {
     await registrarEventoConversacional({
       leadId,
@@ -174,30 +202,27 @@ async function registrarErrorWebhook(
       metadata: { etapa, error: msg, stack },
     })
   } catch {
-    // No bloquear si falla el log mismo
+    // no bloquear si falla el log
   }
 }
 
 // ─── Parámetros para el procesamiento en background ───────────────────────────
 interface BgParams {
   telefono: string
-  nuestroNumero: string
+  instanceName: string
   mensaje: string
   tipoMensaje: 'texto' | 'audio' | 'imagen' | 'otro'
   leadId: string
   leadOrigen: string
   leadAgentActivo: boolean
   senderId: string | null
-  senderPhone: string
   miMsgTimestamp: string | undefined
 }
 
 // ─── Procesamiento pesado en background ───────────────────────────────────────
-// Corre DESPUÉS de que el TwiML ya fue devuelto a Twilio (gracias a waitUntil).
 async function procesarEnBackground(p: BgParams): Promise<void> {
   const supabase = createSupabaseServer()
 
-  // Imagen/audio: guardados en DB (fast path). El agente no responde sin visión.
   if (p.tipoMensaje !== 'texto') {
     console.log('[BG] Media distinto de texto → sin respuesta automática')
     return
@@ -214,9 +239,7 @@ async function procesarEnBackground(p: BgParams): Promise<void> {
   const agenteLeadOn = p.leadAgentActivo
 
   if (!agenteGlobalOn || !agenteLeadOn) {
-    console.log(
-      `[BG] Agente desactivado → global=${agenteGlobalOn} lead=${agenteLeadOn}`
-    )
+    console.log(`[BG] Agente desactivado → global=${agenteGlobalOn} lead=${agenteLeadOn}`)
     return
   }
 
@@ -266,7 +289,6 @@ async function procesarEnBackground(p: BgParams): Promise<void> {
   const lockAdquirido = await adquirirLock(supabase, p.leadId)
   if (!lockAdquirido) {
     console.warn('[BG] Lock no disponible para lead', p.leadId, '— skipping (posible race con cron)')
-    // Registrar el skip para diagnóstico — no bloquear con await
     registrarEventoConversacional({
       leadId: p.leadId,
       telefono: p.telefono,
@@ -283,14 +305,13 @@ async function procesarEnBackground(p: BgParams): Promise<void> {
     await procesarConLock(supabase, p)
   } catch (error) {
     await registrarErrorWebhook(supabase, p.leadId, p.telefono, 'procesarConLock', error)
-    // Fallback: si Claude falló completamente, enviar mensaje de espera
     try {
-      await enviarTwilioYGuardar(
+      await enviarEvolutionYGuardar(
         supabase,
         p.telefono,
         p.leadId,
         FALLBACK_CUANDO_CLAUDE_FALLA,
-        p.senderPhone,
+        p.instanceName,
         p.senderId
       )
       await registrarEventoConversacional({
@@ -393,12 +414,12 @@ async function procesarConLock(
         console.log('[BG] Ya mandó respuesta fija → skip')
         return
       }
-      await enviarTwilioYGuardar(
+      await enviarEvolutionYGuardar(
         supabase,
         p.telefono,
         p.leadId,
         RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
-        p.senderPhone,
+        p.instanceName,
         p.senderId
       )
       await registrarEventoConversacional({
@@ -408,7 +429,7 @@ async function procesarConLock(
         decisionAction: 'full_reply',
         decisionReason: 'default_full_reply',
         confidence: 1,
-        metadata: { source: 'twilio_webhook_bg' },
+        metadata: { source: 'evolution_webhook_bg' },
       })
       return
     }
@@ -440,7 +461,6 @@ async function procesarConLock(
     metadata: { origen: p.leadOrigen, tipo_mensaje: p.tipoMensaje },
   })
 
-  // Desactivar agente si opt-out explícito
   if (decision.disableAgent) {
     await supabase
       .from('leads')
@@ -454,7 +474,6 @@ async function procesarConLock(
     return
   }
 
-  // Cerrar / reabrir conversación según decisión
   if (decision.closeConversation) {
     await supabase
       .from('leads')
@@ -477,16 +496,16 @@ async function procesarConLock(
     decision.action === 'no_reply'
   ) {
     const mensajesAgenteLista = filasHistorial.filter(h => h.rol === 'agente')
-    const yaMandoPlantillaTwilio = mensajesAgenteLista.some(m =>
+    const yaMandoPlantilla = mensajesAgenteLista.some(m =>
       esPlantillaRespuestaOutboundAuto(m.mensaje as string | null | undefined)
     )
-    if (!yaMandoPlantillaTwilio) {
-      await enviarTwilioYGuardar(
+    if (!yaMandoPlantilla) {
+      await enviarEvolutionYGuardar(
         supabase,
         p.telefono,
         p.leadId,
         RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
-        p.senderPhone,
+        p.instanceName,
         p.senderId
       )
       await registrarEventoConversacional({
@@ -496,38 +515,33 @@ async function procesarConLock(
         decisionAction: 'full_reply',
         decisionReason: decision.reason,
         confidence: decision.confidence,
-        metadata: { source: 'twilio_webhook_bg', prev_action: 'no_reply' },
+        metadata: { source: 'evolution_webhook_bg', prev_action: 'no_reply' },
       })
       return
     }
   }
 
-  if (decision.action === 'no_reply' || decision.action === 'close_conversation') {
-    return
-  }
+  if (decision.action === 'no_reply' || decision.action === 'close_conversation') return
 
   if (decision.action === 'micro_ack') {
     const microAck = 'Gracias por el mensaje. Si querés, te paso el siguiente paso en 1 línea.'
-    await enviarTwilioYGuardar(supabase, p.telefono, p.leadId, microAck, p.senderPhone, p.senderId)
+    await enviarEvolutionYGuardar(supabase, p.telefono, p.leadId, microAck, p.instanceName, p.senderId)
     return
   }
 
   if (decision.action === 'handoff_human') {
     const ahora = new Date().toISOString()
-    await enviarTwilioYGuardar(
+    await enviarEvolutionYGuardar(
       supabase,
       p.telefono,
       p.leadId,
       MENSAJE_COMPROMISO_BOCETO_24H,
-      p.senderPhone,
+      p.instanceName,
       p.senderId
     )
     await supabase
       .from('leads')
-      .update({
-        boceto_prometido_24h: true,
-        boceto_prometido_24h_at: ahora,
-      })
+      .update({ boceto_prometido_24h: true, boceto_prometido_24h_at: ahora })
       .eq('id', p.leadId)
     await registrarEventoConversacional({
       leadId: p.leadId,
@@ -536,68 +550,33 @@ async function procesarConLock(
       decisionAction: 'handoff_human',
       decisionReason: decision.reason,
       confidence: decision.confidence,
-      metadata: { source: 'twilio_webhook_bg', boceto_24h: true },
+      metadata: { source: 'evolution_webhook_bg', boceto_24h: true },
     })
     return
   }
 
   if (decision.action === 'gatekeeper_relay') {
-    await enviarTwilioYGuardar(
-      supabase,
-      p.telefono,
-      p.leadId,
-      RESPUESTA_GATEKEEPER,
-      p.senderPhone,
-      p.senderId
-    )
+    await enviarEvolutionYGuardar(supabase, p.telefono, p.leadId, RESPUESTA_GATEKEEPER, p.instanceName, p.senderId)
     return
   }
 
   if (decision.action === 'apologize_wrong_target') {
-    await enviarTwilioYGuardar(
-      supabase,
-      p.telefono,
-      p.leadId,
-      RESPUESTA_WRONG_TARGET,
-      p.senderPhone,
-      p.senderId
-    )
+    await enviarEvolutionYGuardar(supabase, p.telefono, p.leadId, RESPUESTA_WRONG_TARGET, p.instanceName, p.senderId)
     return
   }
 
   if (decision.action === 'apologize_business_closed') {
-    await enviarTwilioYGuardar(
-      supabase,
-      p.telefono,
-      p.leadId,
-      RESPUESTA_BUSINESS_CLOSED,
-      p.senderPhone,
-      p.senderId
-    )
+    await enviarEvolutionYGuardar(supabase, p.telefono, p.leadId, RESPUESTA_BUSINESS_CLOSED, p.instanceName, p.senderId)
     return
   }
 
   if (decision.action === 'family_relay') {
-    await enviarTwilioYGuardar(
-      supabase,
-      p.telefono,
-      p.leadId,
-      RESPUESTA_FAMILY_RELAY,
-      p.senderPhone,
-      p.senderId
-    )
+    await enviarEvolutionYGuardar(supabase, p.telefono, p.leadId, RESPUESTA_FAMILY_RELAY, p.instanceName, p.senderId)
     return
   }
 
   if (decision.action === 'explain_source') {
-    await enviarTwilioYGuardar(
-      supabase,
-      p.telefono,
-      p.leadId,
-      RESPUESTA_SUSPICION,
-      p.senderPhone,
-      p.senderId
-    )
+    await enviarEvolutionYGuardar(supabase, p.telefono, p.leadId, RESPUESTA_SUSPICION, p.instanceName, p.senderId)
     return
   }
 
@@ -606,16 +585,14 @@ async function procesarConLock(
     const ultAgent = [...filasHistorial].reverse().find(h => h.rol === 'agente')?.mensaje
     const marcarBoceto = debePersistirBocetoAceptado(decision.eventName, ultAgent)
     const ahora = new Date().toISOString()
-    await enviarTwilioYGuardar(supabase, p.telefono, p.leadId, closeMsg, p.senderPhone, p.senderId)
+    await enviarEvolutionYGuardar(supabase, p.telefono, p.leadId, closeMsg, p.instanceName, p.senderId)
     await supabase
       .from('leads')
       .update({
         estado: 'interesado',
         conversacion_cerrada: true,
         conversacion_cerrada_at: ahora,
-        ...(marcarBoceto
-          ? { boceto_aceptado: true, boceto_aceptado_at: ahora }
-          : {}),
+        ...(marcarBoceto ? { boceto_aceptado: true, boceto_aceptado_at: ahora } : {}),
       })
       .eq('id', p.leadId)
     return
@@ -623,16 +600,13 @@ async function procesarConLock(
 
   // ── Claude (full_reply) ──
   const anthropicKey = process.env.ANTHROPIC_API_KEY
-  if (!anthropicKey) {
-    throw new Error('ANTHROPIC_API_KEY no configurada')
-  }
+  if (!anthropicKey) throw new Error('ANTHROPIC_API_KEY no configurada')
 
   const [{ data: apexInfo }, { data: demosActivos }] = await Promise.all([
     supabase.from('apex_info').select('categoria, titulo, contenido').eq('activo', true),
     supabase.from('demos_rubro').select('url, strong_keywords').eq('active', true),
   ])
 
-  // Re-cargar lead actualizado (puede haber cambiado conversacion_cerrada, etc.)
   const { data: leadActualizado } = await supabase
     .from('leads')
     .select('*')
@@ -819,20 +793,10 @@ async function procesarConLock(
     }
   }
 
-  // Capa 3 — guardrail anti boceto-bombing.
-  // Si el LLM pichteó el boceto a pesar de que el cliente envió señales que
-  // lo prohíben (wrong target, sospecha, hostilidad, familiar, cierre),
-  // interceptamos y reemplazamos por un fallback honesto.
   if (!dealClosedByTool) {
     const bocetoCheck = detectarBocetoBombing(chequeo.texto, mensajeEfectivo)
     if (bocetoCheck.esBocetoBombing && bocetoCheck.marcadorUsuario) {
-      console.warn(
-        '[BG] Boceto-bombing detectado → fallback.',
-        'pitch:',
-        bocetoCheck.marcadorPitch,
-        'señal cliente:',
-        bocetoCheck.marcadorUsuario
-      )
+      console.warn('[BG] Boceto-bombing detectado → fallback.')
       await registrarEventoConversacional({
         leadId: p.leadId,
         telefono: p.telefono,
@@ -841,7 +805,7 @@ async function procesarConLock(
         decisionReason: decision.reason,
         confidence: decision.confidence,
         metadata: {
-          source: 'twilio_webhook_bg',
+          source: 'evolution_webhook_bg',
           marcadorPitch: bocetoCheck.marcadorPitch,
           marcadorUsuario: bocetoCheck.marcadorUsuario,
         },
@@ -873,7 +837,7 @@ async function procesarConLock(
     }
   }
 
-  await enviarTwilioYGuardar(supabase, p.telefono, p.leadId, respuesta, p.senderPhone, p.senderId)
+  await enviarEvolutionYGuardar(supabase, p.telefono, p.leadId, respuesta, p.instanceName, p.senderId)
   await registrarEventoConversacional({
     leadId: p.leadId,
     telefono: p.telefono,
@@ -889,87 +853,67 @@ async function procesarConLock(
 
 // ─── Handler principal ─────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
-  let form: FormData
-  try {
-    form = await req.formData()
-  } catch (error) {
-    console.error('[Twilio Webhook] Error parsing form data:', error)
-    return twimlOk()
-  }
-
-  // ── Verificación de firma Twilio ──
+  // Verificar API key de Evolution API
+  const apiKey = req.headers.get('apikey') ?? ''
   if (process.env.NODE_ENV === 'production') {
-    const twilioSignature = req.headers.get('x-twilio-signature') ?? ''
-
-    // Detectar a qué número nuestro llegó el mensaje para elegir el auth token correcto.
-    const rawToForAuth = (form.get('To') as string | null)?.replace('whatsapp:', '') ?? ''
-    const { authToken } = getTwilioCredentials(rawToForAuth)
-
-    // Usar el header X-Forwarded-Proto y Host para reconstruir la URL correcta
-    // cuando Vercel está detrás de un proxy (evita firma inválida por URL distinta).
-    const proto = req.headers.get('x-forwarded-proto') ?? 'https'
-    const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? ''
-    const path = new URL(req.url).pathname + new URL(req.url).search
-    const urlParaFirma = host ? `${proto}://${host}${path}` : req.url
-
-    const params: Record<string, string> = {}
-    form.forEach((value, key) => { params[key] = String(value) })
-
-    if (!twilioSignature || !verifyTwilioSignature(authToken, twilioSignature, urlParaFirma, params)) {
-      console.warn('[Twilio Webhook] Firma inválida — url usada para verificar:', urlParaFirma)
-      return new Response('<Response/>', { status: 403, headers: { 'Content-Type': 'text/xml' } })
+    const expectedKey = process.env.EVOLUTION_API_KEY ?? ''
+    if (!expectedKey || apiKey !== expectedKey) {
+      console.warn('[Evolution Webhook] API key inválida')
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
   }
 
-  const rawFrom = form.get('From') as string | null
-  const rawTo = form.get('To') as string | null
-  const messageSid = (form.get('MessageSid') as string | null) ?? null
-  const mensaje = (form.get('Body') as string | null) ?? ''
-  const numMedia = parseInt((form.get('NumMedia') as string | null) ?? '0', 10)
-  const mediaContentType = (form.get('MediaContentType0') as string | null) ?? ''
-  const mediaUrl0 = (form.get('MediaUrl0') as string | null)?.trim() ?? ''
-
-  const telefono = rawFrom?.replace('whatsapp:', '').replace(/^\+/, '') ?? ''
-  const nuestroNumero = rawTo?.replace('whatsapp:', '').replace(/^\+/, '') ?? process.env.TWILIO_WHATSAPP_NUMBER!
-
-  console.log('[Twilio Webhook] From:', telefono, 'To:', nuestroNumero, 'Body:', mensaje.slice(0, 80))
-
-  if (!telefono) {
-    return twimlOk()
+  let payload: EvolutionWebhookPayload
+  try {
+    payload = await req.json() as EvolutionWebhookPayload
+  } catch {
+    return NextResponse.json({ ok: true })
   }
+
+  const { event, instance: instanceName, data } = payload
+
+  // ── Manejar status updates (messages.update) ──
+  if (event === 'messages.update') {
+    const updates = Array.isArray(data) ? data as EvolutionStatusUpdate[] : [data as EvolutionStatusUpdate]
+    await handleStatusUpdates(updates)
+    return NextResponse.json({ ok: true })
+  }
+
+  // Solo procesar messages.upsert
+  if (event !== 'messages.upsert') {
+    return NextResponse.json({ ok: true })
+  }
+
+  const msgData = data as EvolutionMessageData
+  const { key, message, messageType } = msgData
+
+  // Ignorar mensajes enviados por nosotros (ecos de outbound)
+  if (key.fromMe) return NextResponse.json({ ok: true })
+
+  const remoteJid = key.remoteJid ?? ''
+
+  // Ignorar grupos
+  if (isGroupJid(remoteJid)) return NextResponse.json({ ok: true })
+
+  const telefono = extractPhoneFromJid(remoteJid)
+  if (!telefono) return NextResponse.json({ ok: true })
+
+  const mensaje = extractMessageText(message)
+  const tipoMensaje = detectarTipoMensaje(messageType)
+
+  console.log('[Evolution Webhook] From:', telefono, 'Instance:', instanceName, 'Body:', mensaje.slice(0, 80))
 
   const supabase = createSupabaseServer()
 
-  // Lookup sender
+  // Lookup sender por instance_name
   const { data: senderData } = await supabase
     .from('senders')
-    .select('id, alias, phone_number, activo')
-    .eq('provider', 'twilio')
-    .eq('phone_number', nuestroNumero)
+    .select('id, alias, phone_number, activo, instance_name')
+    .eq('provider', 'evolution')
+    .eq('instance_name', instanceName)
     .maybeSingle()
 
   const senderId = senderData?.id ?? null
-  const senderPhone = senderData?.phone_number ?? nuestroNumero
-
-  // Ignorar eco (mismo From y To en dígitos)
-  const fromD = soloDigitos(telefono)
-  const toD = soloDigitos(nuestroNumero)
-  if (fromD && toD && fromD === toD) {
-    console.log('[Twilio Webhook] Ignorado — From y To idénticos (eco):', fromD)
-    return twimlOk()
-  }
-
-  // Detectar tipo de mensaje
-  let tipoMensaje: 'texto' | 'audio' | 'imagen' | 'otro' = 'texto'
-  if (numMedia > 0) {
-    if (mediaContentType.startsWith('audio/') || mediaContentType === 'audio/ogg') {
-      tipoMensaje = 'audio'
-    } else if (mediaContentType.startsWith('image/')) {
-      tipoMensaje = 'imagen'
-    } else {
-      tipoMensaje = 'otro'
-    }
-  }
 
   // Buscar lead
   const telsMismaLinea = variantesTelefonoMismaLinea(telefono)
@@ -1013,8 +957,8 @@ export async function POST(req: NextRequest) {
   }
 
   if (!lead) {
-    console.error('[Twilio] No se pudo crear/encontrar lead')
-    return twimlOk()
+    console.error('[Evolution] No se pudo crear/encontrar lead')
+    return NextResponse.json({ ok: true })
   }
 
   // Anclar sender al lead si corresponde
@@ -1024,18 +968,22 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Guardar mensaje entrante en DB ──
+  const mensajeGuardado = tipoMensaje !== 'texto'
+    ? `[${tipoMensaje.toUpperCase()}] ${mensaje}`
+    : mensaje
+
   const { data: insertadoMsg } = await supabase
     .from('conversaciones')
     .insert({
       lead_id: lead.id,
       telefono,
-      mensaje: tipoMensaje !== 'texto' ? `[${tipoMensaje.toUpperCase()}] ${mensaje}` : mensaje,
+      mensaje: mensajeGuardado,
       rol: 'cliente',
       tipo_mensaje: tipoMensaje,
       leido: false,
       sender_id: senderId,
-      media_url: numMedia > 0 && mediaUrl0 ? mediaUrl0 : null,
-      twilio_message_sid: messageSid,
+      media_url: null,
+      twilio_message_sid: key.id,
     })
     .select('id, timestamp')
     .single()
@@ -1046,28 +994,55 @@ export async function POST(req: NextRequest) {
     await supabase.from('leads').update({ estado: 'respondio' }).eq('id', lead.id)
   }
 
-  // ── RESPUESTA INMEDIATA A TWILIO (antes del timeout de 10s) ──
-  // El procesamiento pesado (debounce + Claude) corre en background via waitUntil.
+  // ── Procesamiento en background ──
   const bgParams: BgParams = {
     telefono,
-    nuestroNumero,
+    instanceName,
     mensaje,
     tipoMensaje,
     leadId: lead.id,
     leadOrigen: lead.origen ?? 'outbound',
     leadAgentActivo: !!lead.agente_activo,
     senderId,
-    senderPhone,
     miMsgTimestamp,
   }
 
   waitUntil(
     procesarEnBackground(bgParams).catch(err => {
-      console.error('[Twilio] Error no capturado en procesarEnBackground:', err)
+      console.error('[Evolution] Error no capturado en procesarEnBackground:', err)
     })
   )
 
-  return twimlOk()
+  return NextResponse.json({ ok: true })
+}
+
+// ── Manejo de status updates ───────────────────────────────────────────────────
+// Evolution API status codes: 0=ERROR, 1=PENDING, 2=SERVER_ACK, 3=DELIVERY_ACK, 4=READ, 5=PLAYED
+async function handleStatusUpdates(updates: EvolutionStatusUpdate[]) {
+  const supabase = createSupabaseServer()
+
+  for (const update of updates) {
+    if (!update.key.fromMe) continue
+    const status = update.update?.status
+    if (status !== 0) continue  // solo procesar errores
+
+    const messageId = update.key.id
+    if (!messageId) continue
+
+    const { data: conv } = await supabase
+      .from('conversaciones')
+      .select('id, lead_id')
+      .eq('twilio_message_sid', messageId)
+      .maybeSingle()
+
+    if (!conv?.lead_id) continue
+
+    await supabase.from('leads').update({
+      primer_envio_error: 'evolution_delivery_error',
+    }).eq('id', conv.lead_id)
+
+    console.log(`[Evolution Status] messageId=${messageId} status=ERROR lead=${conv.lead_id}`)
+  }
 }
 
 export async function GET() {

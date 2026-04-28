@@ -14,7 +14,7 @@ import {
   resolveWhatsAppDemoHost,
   SITIO_PRINCIPAL_APEX,
 } from '@/lib/whatsapp-template-demos'
-import { getTwilioCredentials } from '@/lib/twilio'
+import { enviarMensajeEvolution } from '@/lib/evolution'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -22,33 +22,10 @@ export const maxDuration = 60
 const TZ_OFFSET_HOURS_AR = -3
 const LEADS_TABLE = 'leads'
 const MAX_REINTENTOS = 3
-const MAX_DIARIO_TEMPLATES = 200
-const TWILIO_CONTENT_SID = 'HX1f02dd4ebcbc3af123a8262fdeb5641f'
-
-// ─── Senders Twilio (primer contacto) ────────────────────────────────────────
-// Cadencia intMin/intMax en minutos; si ambos ≤ 0 no hay espera entre envíos.
-// Ventana horaria 9:00–18:00 (America/Argentina/Buenos_Aires); ?force=true omite.
-// Límite diario: MAX_DIARIO_TEMPLATES templates por sender; ?force=true omite.
-interface SenderDef {
-  key: string
-  provider: 'twilio'
-  phoneNumber: string
-  contentSid: string
-  intMin: number
-  intMax: number
-}
-
-const SENDERS: SenderDef[] = [
-  {
-    key: 'assistify_respaldo',
-    provider: 'twilio',
-    phoneNumber: '+5491125303794',
-    contentSid: TWILIO_CONTENT_SID,
-    intMin: 0,
-    intMax: 0,
-  },
-]
-// ──────────────────────────────────────────────────────────────────────────────
+// Límite diario de mensajes por sender. Se respeta aunque ?force=true no lo omite.
+const MAX_DIARIO_POR_SENDER = 200
+// Cuántos leads intentar por tick antes de rendirse
+const MAX_LEADS_POR_TICK = 10
 
 type SupabaseClient = ReturnType<typeof createSupabaseServer>
 
@@ -59,7 +36,6 @@ interface LeadColaRow {
   zona: string
   telefono: string
   instagram: string | null
-  /** Incluye "Rating: X/5" cuando el lead viene de búsqueda (ver NuevoLeadClient). */
   descripcion: string
   mensaje_inicial: string
   estado: string
@@ -71,6 +47,14 @@ interface LeadColaRow {
   primer_envio_completado_at: string | null
 }
 
+interface SenderRow {
+  id: string
+  instance_name: string
+  phone_number: string
+  alias: string | null
+  activo: boolean
+}
+
 function authCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
   if (!secret) return false
@@ -79,13 +63,12 @@ function authCron(req: NextRequest): boolean {
 
 function fechaArHoy(): string {
   const ar = new Date(Date.now() + TZ_OFFSET_HOURS_AR * 3600_000)
-  return ar.toISOString().slice(0, 10) // YYYY-MM-DD
+  return ar.toISOString().slice(0, 10)
 }
 
 function minAleatorio(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min
 }
-
 
 async function leerConfig(sup: SupabaseClient, clave: string, def: string): Promise<string> {
   const { data } = await sup.from('configuracion').select('valor').eq('clave', clave).maybeSingle()
@@ -101,7 +84,6 @@ async function actualizarLead(sup: SupabaseClient, id: string, updates: Record<s
   if (error) console.error('[cron leads-pendientes] Error update lead:', error.message)
 }
 
-// Daily count — stored as "N|YYYY-MM-DD". Se resetea automáticamente al cambiar el día.
 async function leerDailyCount(sup: SupabaseClient, key: string): Promise<number> {
   const raw = await leerConfig(sup, `${key}_primer_enviados_hoy`, `0|1970-01-01`)
   const [countStr, fecha] = raw.split('|')
@@ -112,110 +94,38 @@ async function incrementarDailyCount(sup: SupabaseClient, key: string, actual: n
   await escribirConfig(sup, `${key}_primer_enviados_hoy`, `${actual + 1}|${fechaArHoy()}`)
 }
 
-
-// Envía mensaje con template de Twilio (HSM pre-aprobado por Meta)
-// Variables: 1=nombre, 2=rating, 3=demo (host), 4=localidad, 5=rubro búsqueda, 6=sitio principal
-// Retorna el MessageSid de Twilio para tracking asíncrono de entrega.
-async function enviarTemplateTwilio(
-  telefono: string,
-  fromNumber: string,
-  contentSid: string,
-  vars: {
-    nombre: string
-    rating: string
-    demoHost: string
-    zona: string
-    rubro: string
-    sitioPrincipal: string
-  }
-): Promise<string> {
-  if (isTelefonoHardBlocked(telefono)) {
-    throw new Error('TELEFONO_BLOQUEADO')
-  }
-  const { accountSid, authToken } = getTwilioCredentials(fromNumber)
-  const auth = 'Basic ' + Buffer.from(`${accountSid}:${authToken}`).toString('base64')
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'https://leads.theapexweb.com'
-
-  const params = {
-    From: `whatsapp:${fromNumber}`,
-    To: `whatsapp:+${telefono}`,
-    ContentSid: contentSid,
-    ContentVariables: JSON.stringify({
-      '1': vars.nombre,
-      '2': vars.rating,
-      '3': vars.demoHost,
-      '4': vars.zona,
-      '5': vars.rubro,
-      '6': vars.sitioPrincipal,
-    }),
-    StatusCallback: `${appUrl}/api/webhook/twilio-status`,
-  }
-
-  console.log(`[DBG twilio] POST Messages.json From=${params.From} To=${params.To} ContentSid=${contentSid}`)
-  console.log(`[DBG twilio] ContentVariables=${params.ContentVariables}`)
-  console.log(`[DBG twilio] StatusCallback=${params.StatusCallback}`)
-
-  console.log(`[DBG twilio] using accountSid=${accountSid.slice(0, 8)}… for fromNumber=${fromNumber}`)
-  const res = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`,
-    {
-      method: 'POST',
-      headers: { Authorization: auth, 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(params).toString(),
-    }
-  )
-
-  console.log(`[DBG twilio] httpStatus=${res.status}`)
-
-  if (!res.ok) {
-    const err = await res.text()
-    console.error(`[DBG twilio] error body: ${err.slice(0, 500)}`)
-    throw new Error(`Twilio template error ${res.status}: ${err}`)
-  }
-
-  const body = await res.json()
-  console.log(`[DBG twilio] OK sid=${body.sid} status=${body.status}`)
-  return body.sid as string
+// Construye el mensaje de primer contacto como texto libre (sin template Meta).
+// El mismo texto se usa para el envío y para guardar en la tabla conversaciones.
+function construirMensajePrimerContacto(lead: LeadColaRow): string {
+  const rating = extraerRatingParaPlantilla(lead.descripcion)
+  const demoHost = resolveWhatsAppDemoHost(lead.rubro, lead.descripcion)
+  return [
+    `Hola ${lead.nombre}`,
+    `Vi que tu negocio tiene ${rating}⭐ en Google Maps.`,
+    `Hice este boceto para un negocio como el tuyo: ${demoHost}`,
+    `Trabajo con negocios de ${lead.zona} haciendo páginas web para ${lead.rubro} - conocé mi trabajo en ${SITIO_PRINCIPAL_APEX}`,
+    `¿Te lo armamos con tu marca?`,
+  ].join('\n')
 }
 
-// Cuántos leads intentar por tick antes de rendirse
-const MAX_LEADS_POR_TICK = 10
-
 // ─── Procesar un sender ────────────────────────────────────────────────────────
-// Itera leads hasta enviar uno exitosamente (o agotar MAX_LEADS_POR_TICK).
-// Si falla 10 veces consecutivas entre ticks, pausa el sender automáticamente.
 async function procesarSender(
   sup: SupabaseClient,
-  sender: SenderDef,
+  sender: SenderRow,
   forced: boolean,
-  yaProcesoIds: string[]  // leads tomados en este tick por el otro sender
+  yaProcesoIds: string[]
 ): Promise<Record<string, unknown>> {
-  const { key, provider, phoneNumber, contentSid, intMin, intMax } = sender
+  const key = sender.instance_name
 
-  console.log(`[DBG sender] ── INICIO procesarSender key=${key} phone=${phoneNumber} forced=${forced} ──`)
+  console.log(`[DBG sender] ── INICIO procesarSender key=${key} phone=${sender.phone_number} forced=${forced} ──`)
 
-  // 1. Verificar sender en tabla senders (activo + id para taggear conversaciones)
-  const { data: senderRow, error: senderErr } = await sup
-    .from('senders')
-    .select('id, activo')
-    .eq('provider', provider)
-    .eq('phone_number', phoneNumber)
-    .maybeSingle()
-
-  console.log(`[DBG sender] [${key}] senderRow=${JSON.stringify(senderRow)} error=${senderErr?.message ?? 'none'}`)
-
-  if (senderRow && !senderRow.activo) {
+  if (!sender.activo) {
     console.log(`[DBG sender] [${key}] → INACTIVO en DB`)
     return { status: 'inactivo' }
   }
 
-  if (!senderRow) {
-    console.warn(`[DBG sender] [${key}] ⚠ NO se encontró fila en tabla senders para phone=${phoneNumber}`)
-  }
-
-  const senderId = senderRow?.id ?? null
   const fallosActuales = parseInt(await leerConfig(sup, `${key}_primer_fallos`, '0'), 10) || 0
-  console.log(`[DBG sender] [${key}] senderId=${senderId} fallosActuales=${fallosActuales}`)
+  console.log(`[DBG sender] [${key}] senderId=${sender.id} fallosActuales=${fallosActuales}`)
 
   if (!forced && !estaEnVentanaPrimerContacto()) {
     const h = getHoraArgentina()
@@ -230,36 +140,32 @@ async function procesarSender(
     }
   }
 
-  // 2. Límite diario duro: máx MAX_DIARIO_TEMPLATES templates por día
   const enviados = await leerDailyCount(sup, key)
-  console.log(`[DBG sender] [${key}] enviados_hoy=${enviados}/${MAX_DIARIO_TEMPLATES}`)
+  console.log(`[DBG sender] [${key}] enviados_hoy=${enviados}/${MAX_DIARIO_POR_SENDER}`)
 
-  if (!forced && enviados >= MAX_DIARIO_TEMPLATES) {
-    console.log(`[DBG sender] [${key}] → limite_diario_alcanzado (${enviados}/${MAX_DIARIO_TEMPLATES})`)
+  if (!forced && enviados >= MAX_DIARIO_POR_SENDER) {
+    console.log(`[DBG sender] [${key}] → limite_diario_alcanzado (${enviados}/${MAX_DIARIO_POR_SENDER})`)
     return {
       status: 'limite_diario_alcanzado',
       enviados_hoy: enviados,
-      limite: MAX_DIARIO_TEMPLATES,
+      limite: MAX_DIARIO_POR_SENDER,
     }
   }
 
-  // 3. Slot de cadencia (omitido si intMin e intMax son ≤ 0)
-  if (!forced && (intMin > 0 || intMax > 0)) {
-    const nextSlotStr = await leerConfig(sup, `${key}_primer_next_slot_at`, '1970-01-01T00:00:00.000Z')
-    if (new Date(nextSlotStr).getTime() > Date.now()) {
-      const faltanMin = Math.ceil((new Date(nextSlotStr).getTime() - Date.now()) / 60_000)
-      console.log(`[DBG sender] [${key}] → slot_no_alcanzado next=${nextSlotStr} faltan=${faltanMin}min`)
-      return { status: 'slot_no_alcanzado', next_slot_at: nextSlotStr, faltan_min: faltanMin }
-    }
+  // Slot de cadencia (por ahora sin delay: intMin=intMax=0)
+  // Para agregar delay por sender, agregar columnas int_min/int_max a la tabla senders.
+  const nextSlotStr = await leerConfig(sup, `${key}_primer_next_slot_at`, '1970-01-01T00:00:00.000Z')
+  if (!forced && new Date(nextSlotStr).getTime() > Date.now()) {
+    const faltanMin = Math.ceil((new Date(nextSlotStr).getTime() - Date.now()) / 60_000)
+    console.log(`[DBG sender] [${key}] → slot_no_alcanzado next=${nextSlotStr} faltan=${faltanMin}min`)
+    return { status: 'slot_no_alcanzado', next_slot_at: nextSlotStr, faltan_min: faltanMin }
   }
 
-  // 4. Loop: intentar leads hasta mandar uno o agotar MAX_LEADS_POR_TICK
   const erroresTick: Array<{ lead_id: string; error: string }> = []
 
   for (let i = 0; i < MAX_LEADS_POR_TICK; i++) {
     console.log(`[DBG sender] [${key}] ── intento ${i + 1}/${MAX_LEADS_POR_TICK} ──`)
 
-    // Elegir lead: el más antiguo en cola (FIFO) que no haya tomado el otro sender en este tick
     const { data: candidatos, error: candidatosErr } = await sup
       .from(LEADS_TABLE)
       .select('*')
@@ -278,7 +184,7 @@ async function procesarSender(
     ) as LeadColaRow | undefined
 
     if (!lead) {
-      console.log(`[DBG sender] [${key}] → sin lead disponible (todos tomados o cola vacía)`)
+      console.log(`[DBG sender] [${key}] → sin lead disponible`)
       return {
         status: erroresTick.length > 0 ? 'error_sin_mas_candidatos' : 'sin_pendientes',
         errores: erroresTick,
@@ -286,8 +192,6 @@ async function procesarSender(
     }
 
     console.log(`[DBG sender] [${key}] lead elegido id=${lead.id} tel_raw=${lead.telefono} nombre=${lead.nombre} intentos=${lead.primer_envio_intentos}`)
-
-    // Reservar para que el otro sender no lo tome en el mismo tick
     yaProcesoIds.push(lead.id)
 
     const verificacion = verificarNumeroWhatsApp(String(lead.telefono))
@@ -306,9 +210,18 @@ async function procesarSender(
 
     const telefono = verificacion.normalizado
     const telsMismaLinea = variantesTelefonoMismaLinea(telefono)
-    console.log(`[DBG sender] [${key}] variantes misma línea: ${JSON.stringify(telsMismaLinea)}`)
 
-    // Evitar spam: saltar si el teléfono ya tiene conversación previa o fue enviado antes
+    if (isTelefonoHardBlocked(telefono)) {
+      await actualizarLead(sup, lead.id, {
+        estado: 'descartado',
+        primer_envio_error: 'telefono_bloqueado',
+        primer_envio_fallido_at: new Date().toISOString(),
+        procesando_hasta: null,
+      })
+      console.warn(`[DBG sender] [${key}] tel ${telefono} bloqueado → saltando`)
+      continue
+    }
+
     const [{ data: yaConv }, { data: yaLead }, { data: yaConvPorLead }] = await Promise.all([
       sup.from('conversaciones').select('id').in('telefono', telsMismaLinea).limit(1).maybeSingle(),
       sup
@@ -349,81 +262,51 @@ async function procesarSender(
     console.log(`[DBG sender] [${key}] claim lead ${lead.id}: claimed=${!!claimed} claimErr=${claimErr?.message ?? 'none'}`)
 
     if (claimErr || !claimed) {
-      console.warn(`[DBG sender] [${key}] lead ${lead.id} ya reclamado por otro proceso → saltando`)
+      console.warn(`[DBG sender] [${key}] lead ${lead.id} ya reclamado → saltando`)
       continue
     }
 
     try {
-      // Nota: La validación síncrona de WhatsApp via Twilio Lookup API v2
-      // no está disponible (el campo 'whatsapp' fue removido de esa API).
-      // Los números sin WA se detectan de forma asíncrona por el webhook
-      // /api/webhook/twilio-status cuando Twilio reporta error 63024.
+      const mensajeTexto = construirMensajePrimerContacto(lead)
+      const result = await enviarMensajeEvolution(telefono, mensajeTexto, key)
 
-      const ratingStr = extraerRatingParaPlantilla(lead.descripcion)
-      const demoHost = resolveWhatsAppDemoHost(lead.rubro, lead.descripcion)
-      const vars = {
-        nombre: lead.nombre,
-        rating: ratingStr,
-        demoHost,
-        zona: lead.zona,
-        rubro: lead.rubro,
-        sitioPrincipal: SITIO_PRINCIPAL_APEX,
-      }
-      const messageSid = await enviarTemplateTwilio(telefono, phoneNumber, contentSid, vars)
-      const mensajeGuardado = [
-        `Hola ${lead.nombre}`,
-        `Vi que tu negocio tiene ${ratingStr}⭐ en Google Maps.`,
-        `Hice este boceto para un negocio como el tuyo: ${demoHost}`,
-        `Trabajo con negocios de ${lead.zona} haciendo páginas web para ${lead.rubro} - conocé mi trabajo en ${SITIO_PRINCIPAL_APEX}`,
-        `¿Te lo armamos con tu marca?`,
-      ].join('\n')
-
-      // Guardar conversación con SID para tracking asíncrono de entrega
       await sup.from('conversaciones').insert({
         lead_id: lead.id,
         telefono,
-        mensaje: mensajeGuardado,
+        mensaje: mensajeTexto,
         rol: 'agente',
         tipo_mensaje: 'texto',
         manual: false,
-        sender_id: senderId,
-        twilio_message_sid: messageSid,
+        sender_id: sender.id,
+        twilio_message_sid: result.messageId,
       })
 
       await actualizarLead(sup, lead.id, {
         mensaje_enviado: true,
         estado: 'contactado',
-        mensaje_inicial: mensajeGuardado,
+        mensaje_inicial: mensajeTexto,
         primer_envio_completado_at: new Date().toISOString(),
         primer_envio_error: null,
-        procesando_hasta: null, // liberar lock inmediatamente para no bloquear webhook de auto-reply
+        procesando_hasta: null,
       })
 
-      // Éxito: reset fallos, avanzar slot y contador
       await incrementarDailyCount(sup, key, enviados)
       await escribirConfig(sup, `${key}_primer_fallos`, '0')
-      let proximoSlot: Date | null = null
-      let proximoMin = 0
-      if (intMin > 0 || intMax > 0) {
-        proximoMin = minAleatorio(intMin, intMax)
-        proximoSlot = new Date(Date.now() + proximoMin * 60_000)
-        await escribirConfig(sup, `${key}_primer_next_slot_at`, proximoSlot.toISOString())
-      } else {
-        await escribirConfig(sup, `${key}_primer_next_slot_at`, '1970-01-01T00:00:00.000Z')
-      }
+
+      // Sin delay entre envíos por defecto; agregar lógica de slot si se necesita
+      const proximoMin = minAleatorio(0, 0)
+      await escribirConfig(sup, `${key}_primer_next_slot_at`, '1970-01-01T00:00:00.000Z')
 
       return {
         status: 'ok',
         lead_id: lead.id,
         nombre: lead.nombre,
-        twilio_message_sid: messageSid,
+        message_id: result.messageId,
         enviados_hoy: enviados + 1,
-        proximo_slot_at: proximoSlot?.toISOString() ?? null,
-        proximo_min: proximoMin,
         intentos_hasta_envio: i + 1,
         ...(erroresTick.length > 0 ? { saltados: erroresTick.length } : {}),
+        proximo_min: proximoMin,
       }
-
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       const stack = e instanceof Error ? (e.stack ?? '') : ''
@@ -450,9 +333,7 @@ async function procesarSender(
       console.error(`[DBG sender] [${key}] fallos_sender=${fallos}/10`)
 
       if (fallos >= 10) {
-        if (senderRow?.id) {
-          await sup.from('senders').update({ activo: false }).eq('id', senderRow.id)
-        }
+        await sup.from('senders').update({ activo: false }).eq('id', sender.id)
         console.error(`[DBG sender] [${key}] ❌❌ 10 fallos consecutivos → SENDER PAUSADO`)
         return {
           status: 'pausado_auto',
@@ -475,7 +356,7 @@ export async function GET(req: NextRequest) {
   console.log(`[DBG cron] ════ TICK INICIO ${new Date().toISOString()} ════`)
 
   if (!authCron(req)) {
-    console.warn(`[DBG cron] ❌ Auth fallida. Header authorization=${req.headers.get('authorization')?.slice(0, 20)}… CRON_SECRET=${process.env.CRON_SECRET ? 'SET('+process.env.CRON_SECRET.length+'chars)' : 'FALTA'}`)
+    console.warn(`[DBG cron] ❌ Auth fallida. CRON_SECRET=${process.env.CRON_SECRET ? 'SET' : 'FALTA'}`)
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
@@ -484,8 +365,7 @@ export async function GET(req: NextRequest) {
 
   const sup = createSupabaseServer()
 
-  // Verificar variables de entorno críticas
-  console.log(`[DBG cron] ENV: TWILIO_ACCOUNT_SID=${process.env.TWILIO_ACCOUNT_SID ? 'SET' : 'FALTA'} TWILIO_AUTH_TOKEN=${process.env.TWILIO_AUTH_TOKEN ? 'SET' : 'FALTA'} NEXT_PUBLIC_APP_URL=${process.env.NEXT_PUBLIC_APP_URL ?? '(no seteada, usará default)'}`)
+  console.log(`[DBG cron] ENV: EVOLUTION_API_URL=${process.env.EVOLUTION_API_URL ? 'SET' : 'FALTA'} EVOLUTION_API_KEY=${process.env.EVOLUTION_API_KEY ? 'SET' : 'FALTA'}`)
 
   // Verificar interruptor global
   const { data: cfgActivo } = await sup
@@ -495,13 +375,31 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: 'first_contact_inactivo' })
   }
 
-  // Cada sender corre de forma independiente y secuencial.
-  // yaProcesoIds previene que ambos tomen el mismo lead en el mismo tick.
+  // Cargar senders activos desde DB (N instancias Evolution API)
+  const { data: sendersDB, error: sendersErr } = await sup
+    .from('senders')
+    .select('id, instance_name, phone_number, alias, activo')
+    .eq('provider', 'evolution')
+    .eq('activo', true)
+    .not('instance_name', 'is', null)
+
+  if (sendersErr) {
+    console.error('[DBG cron] Error cargando senders:', sendersErr.message)
+    return NextResponse.json({ error: sendersErr.message }, { status: 500 })
+  }
+
+  const senders = (sendersDB ?? []) as SenderRow[]
+  console.log(`[DBG cron] senders activos: ${senders.length}`)
+
+  if (senders.length === 0) {
+    return NextResponse.json({ ok: true, skipped: 'sin_senders_activos' })
+  }
+
   const yaProcesoIds: string[] = []
   const results: Record<string, unknown> = {}
 
-  for (const sender of SENDERS) {
-    results[sender.key] = await procesarSender(sup, sender, forced, yaProcesoIds)
+  for (const sender of senders) {
+    results[sender.instance_name] = await procesarSender(sup, sender, forced, yaProcesoIds)
   }
 
   return NextResponse.json({ ok: true, results })

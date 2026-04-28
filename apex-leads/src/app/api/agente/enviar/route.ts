@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
-import { enviarMensajeTwilio } from '@/lib/twilio'
+import { enviarMensajeEvolution } from '@/lib/evolution'
 import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
 
 const SELECT_CONV = `
@@ -25,10 +25,8 @@ export async function POST(req: NextRequest) {
 
   // ─── Resolver sender con prioridad estricta ──────────────────────────────
   // 1. sender_id explícito del body (enviado por la UI)
-  // 2. sender_id anclado en el lead (asignado al primer mensaje entrante)
-  // 3. Último mensaje del CLIENTE (no del agente) con sender_id no nulo
-  //    → garantiza que siempre respondemos por el canal que usó el contacto
-  // Si ninguno aplica → enviarMensajeTwilio usa TWILIO_WHATSAPP_NUMBER (último recurso).
+  // 2. sender_id anclado en el lead
+  // 3. Último mensaje del CLIENTE con sender_id no nulo
   let resolvedSenderId: string | null = sender_id ?? null
 
   if (!resolvedSenderId && lead_id) {
@@ -57,8 +55,13 @@ export async function POST(req: NextRequest) {
     ? await supabase.from('senders').select('*').eq('id', resolvedSenderId).single()
     : { data: null }
 
+  const instanceName = senderData?.instance_name as string | undefined
+  if (!instanceName) {
+    return NextResponse.json({ error: 'No se encontró una instancia Evolution API para este sender' }, { status: 400 })
+  }
+
   try {
-    await enviarMensajeTwilio(telefono, mensaje, senderData?.phone_number)
+    await enviarMensajeEvolution(telefono, mensaje, instanceName)
 
     let conversacion: Record<string, unknown> | null = null
     if (lead_id) {
@@ -78,7 +81,7 @@ export async function POST(req: NextRequest) {
 
       if (insertError) {
         console.error('[API] Error guardando mensaje manual:', insertError.message)
-        return NextResponse.json({ error: `Mensaje enviado a Twilio pero no guardado en DB: ${insertError.message}` }, { status: 500 })
+        return NextResponse.json({ error: `Mensaje enviado pero no guardado en DB: ${insertError.message}` }, { status: 500 })
       }
 
       conversacion = insertada as Record<string, unknown>

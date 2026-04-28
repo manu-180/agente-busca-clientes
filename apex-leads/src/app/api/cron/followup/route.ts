@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { ejecutarConTablaLeads } from '@/lib/leads-table'
-import { enviarMensajeTwilio } from '@/lib/twilio'
+import { enviarMensajeEvolution } from '@/lib/evolution'
 import { evaluarFollowup } from '@/lib/followup-eligibility'
 import { generarMensajeFollowupClaude } from '@/lib/generar-followup'
 import { claveUnicaPaisLinea } from '@/lib/phone'
@@ -165,7 +165,7 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
       continue
     }
 
-    // Buscar sender original del lead para mantener el mismo número
+    // Buscar sender original del lead para mantener la misma instancia
     const { data: ultimaConv } = await supabase
       .from('conversaciones')
       .select('sender_id')
@@ -175,15 +175,20 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
       .limit(1)
       .maybeSingle()
 
-    let senderPhone: string | undefined
+    let instanceName: string | undefined
     let senderId: string | null = ultimaConv?.sender_id ?? null
     if (senderId) {
       const { data: senderRow } = await supabase
         .from('senders')
-        .select('phone_number')
+        .select('instance_name')
         .eq('id', senderId)
         .maybeSingle()
-      senderPhone = senderRow?.phone_number ?? undefined
+      instanceName = senderRow?.instance_name ?? undefined
+    }
+
+    if (!instanceName) {
+      resultados.push({ lead_id: lead.id, ok: false, detalle: 'sin_instance_name' })
+      continue
     }
 
     const { data: convInsertada, error: errIns } = await supabase
@@ -207,11 +212,11 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
     }
 
     try {
-      await enviarMensajeTwilio(lead.telefono, texto, senderPhone)
+      await enviarMensajeEvolution(lead.telefono, texto, instanceName)
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
       await supabase.from('conversaciones').delete().eq('id', convInsertada.id)
-      resultados.push({ lead_id: lead.id, ok: false, detalle: `twilio:${msg}` })
+      resultados.push({ lead_id: lead.id, ok: false, detalle: `evolution:${msg}` })
       continue
     }
 
