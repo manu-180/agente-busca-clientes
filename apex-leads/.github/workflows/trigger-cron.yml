@@ -41,18 +41,20 @@ jobs:
             sleep 15
           done
 
-      - name: Trigger leads-pendientes cron (force=true)
+      - name: Trigger leads-pendientes cron
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          echo "--- Triggering cron with force=true ---"
+          # NO usar ?force=true: bypassea la ventana horaria 9-18h ART.
+          # El endpoint decide si enviar según la hora Argentina.
+          echo "--- Triggering cron (respeta ventana horaria 9-18h ART) ---"
 
           for attempt in 1 2 3; do
             echo ""
             echo "=== Attempt $attempt ==="
             RESPONSE=$(curl -s -w "\n%{http_code}" \
               -H "Authorization: Bearer $CRON_SECRET" \
-              "https://apex-leads-six.vercel.app/api/cron/leads-pendientes?force=true")
+              "https://apex-leads-six.vercel.app/api/cron/leads-pendientes")
 
             HTTP_CODE=$(echo "$RESPONSE" | tail -1)
             BODY=$(echo "$RESPONSE" | head -1)

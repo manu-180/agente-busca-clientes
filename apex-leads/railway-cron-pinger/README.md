@@ -18,8 +18,13 @@ desplegada en Vercel, registra el resultado con logging estructurado y termina c
 |---|---|---|---|
 | `CRON_BASE_URL` | ✅ Sí | — | URL base de Vercel sin trailing slash |
 | `CRON_SECRET` | ✅ Sí | — | Bearer token del endpoint cron |
-| `CRON_PATH` | No | `/api/cron/leads-pendientes?force=true` | Path + query del endpoint |
+| `CRON_PATH` | No | `/api/cron/leads-pendientes` | Path del endpoint. **NO agregar `?force=true`** (ver advertencia abajo). |
 | `REQUEST_TIMEOUT_S` | No | `90` | Timeout de red en segundos |
+
+> ⚠️ **IMPORTANTE — `?force=true` está PROHIBIDO en producción.**
+> El parámetro `?force=true` bypasea la ventana horaria 9–18h ART, el límite diario y la cadencia.
+> Usarlo en Railway provocaría mensajes de Twilio las 24 hs del día.
+> Solo funciona si `CRON_ALLOW_FORCE=true` está seteado en las env vars de Vercel (nunca en producción).
 
 ## Cómo probar localmente
 

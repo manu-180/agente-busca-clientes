@@ -477,8 +477,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const forced = req.nextUrl.searchParams.get('force') === 'true'
-  console.log(`[DBG cron] forced=${forced}`)
+  // force=true solo funciona si CRON_ALLOW_FORCE=true está seteado en Vercel env vars.
+  // En producción esta variable NO debe estar presente — protege contra ?force=true accidental.
+  const forceRequested = req.nextUrl.searchParams.get('force') === 'true'
+  const forced = forceRequested && process.env.CRON_ALLOW_FORCE === 'true'
+  if (forceRequested && !forced) {
+    console.warn(`[DBG cron] ⚠ ?force=true solicitado pero CRON_ALLOW_FORCE no está habilitado → ignorado`)
+  }
+  console.log(`[DBG cron] forced=${forced} (forceRequested=${forceRequested} CRON_ALLOW_FORCE=${process.env.CRON_ALLOW_FORCE ?? 'unset'})`)
 
   const sup = createSupabaseServer()
 

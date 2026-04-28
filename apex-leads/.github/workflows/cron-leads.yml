@@ -32,11 +32,11 @@ jobs:
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: |
-          # force=true: mismo comportamiento que "Trigger Cron After Deploy" (post push).
-          # Sin esto, el schedule suele devolver 200 con slot/ventana y no manda aunque el workflow sea verde.
+          # NO usar ?force=true en producción: bypassea la ventana horaria 9-18h ART y el límite diario.
+          # Si el cron devuelve 200 con status "fuera_de_ventana", es comportamiento correcto.
           RESPONSE=$(curl -s -w "\n%{http_code}" \
             -H "Authorization: Bearer $CRON_SECRET" \
-            "https://apex-leads-six.vercel.app/api/cron/leads-pendientes?force=true")
+            "https://apex-leads-six.vercel.app/api/cron/leads-pendientes")
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -1)
           BODY=$(echo "$RESPONSE" | head -1)
