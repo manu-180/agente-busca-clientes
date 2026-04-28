@@ -5,12 +5,19 @@ import {
   clienteYaMandoAlgoNoAutomatico,
   pareceMensajeAutomaticoNegocio,
   RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
+  RESPUESTA_WRONG_TARGET,
+  RESPUESTA_BUSINESS_CLOSED,
+  RESPUESTA_FAMILY_RELAY,
+  RESPUESTA_SUSPICION,
+  RESPUESTA_GATEKEEPER,
 } from '@/lib/outbound-auto-reply'
 import { obtenerConfigConversacional } from '@/lib/conversation-config'
 import { decidirRespuestaConversacional } from '@/lib/response-decision'
 import { registrarEventoConversacional } from '@/lib/conversation-events'
 import {
   auditarCoherenciaRubro,
+  detectarBocetoBombing,
+  fallbackPostBocetoBombing,
   fallbackSeguroPorVertical,
   instruccionRegeneracion,
   sanitizarRespuestaModelo,
@@ -167,6 +174,26 @@ export async function generarRespuestaAgente({
       return { respuesta: 'Gracias por el mensaje. Si querés, te paso el siguiente paso en 1 línea.' }
     }
 
+    if (decision.action === 'apologize_wrong_target') {
+      return { respuesta: RESPUESTA_WRONG_TARGET }
+    }
+
+    if (decision.action === 'apologize_business_closed') {
+      return { respuesta: RESPUESTA_BUSINESS_CLOSED }
+    }
+
+    if (decision.action === 'family_relay') {
+      return { respuesta: RESPUESTA_FAMILY_RELAY }
+    }
+
+    if (decision.action === 'explain_source') {
+      return { respuesta: RESPUESTA_SUSPICION }
+    }
+
+    if (decision.action === 'gatekeeper_relay') {
+      return { respuesta: RESPUESTA_GATEKEEPER }
+    }
+
     if (decision.action === 'handoff_human') {
       return { respuesta: MENSAJE_COMPROMISO_BOCETO_24H }
     }
@@ -238,8 +265,8 @@ export async function generarRespuestaAgente({
 
     const userContent = buildUserMessageWithLeadContext(mensaje_nuevo, contextoLead)
 
-    // 7. Llamar a Claude con historial completo como turns alternados
-    console.log('[AGENTE] Llamando a Claude Sonnet...')
+    // 7. Llamar a Claude con historial completo como turns alternados.
+    console.log('[AGENTE] Llamando a Claude...')
     const client = new Anthropic({ apiKey })
     const response = await client.messages.create({
       model: ANTHROPIC_CHAT_MODEL,
@@ -337,6 +364,40 @@ export async function generarRespuestaAgente({
           intrusa: null,
           ok: true,
         }
+      }
+    }
+
+    // Capa 3 — guardrail anti "boceto-bombing": si el LLM se cayó al script del
+    // boceto a pesar de que el último mensaje del cliente prohibía pitchear
+    // (wrong target, sospecha, hostilidad, familiar, cierre), interceptamos y
+    // reemplazamos por un fallback honesto al contexto.
+    const bocetoCheck = detectarBocetoBombing(chequeo.texto, mensaje_nuevo)
+    if (bocetoCheck.esBocetoBombing && bocetoCheck.marcadorUsuario) {
+      console.warn(
+        '[AGENTE] Boceto-bombing detectado → fallback.',
+        'pitch:',
+        bocetoCheck.marcadorPitch,
+        'señal cliente:',
+        bocetoCheck.marcadorUsuario
+      )
+      await registrarEventoConversacional({
+        leadId: lead.id,
+        telefono: lead.telefono,
+        eventName: 'boceto_bombing_intercepted',
+        decisionAction: 'full_reply',
+        decisionReason: decision.reason,
+        confidence: decision.confidence,
+        metadata: {
+          source: 'agente.ts',
+          marcadorPitch: bocetoCheck.marcadorPitch,
+          marcadorUsuario: bocetoCheck.marcadorUsuario,
+        },
+      })
+      chequeo = {
+        texto: fallbackPostBocetoBombing(bocetoCheck.marcadorUsuario),
+        verticalLead: chequeo.verticalLead,
+        intrusa: null,
+        ok: true,
       }
     }
 

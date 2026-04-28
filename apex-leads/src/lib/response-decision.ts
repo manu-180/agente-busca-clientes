@@ -8,6 +8,10 @@ export type DecisionAction =
   | 'close_conversation'
   | 'confirm_close'
   | 'gatekeeper_relay'
+  | 'apologize_wrong_target'
+  | 'apologize_business_closed'
+  | 'family_relay'
+  | 'explain_source'
 
 export type DecisionReason =
   | 'empty'
@@ -21,6 +25,10 @@ export type DecisionReason =
   | 'default_full_reply'
   | 'commit_signal'
   | 'gatekeeper_response'
+  | 'wrong_target'
+  | 'business_closed'
+  | 'family_relay'
+  | 'source_question'
 
 export interface ConversationDecision {
   action: DecisionAction
@@ -54,6 +62,143 @@ const OPT_OUT_PHRASES = [
   'basta',
   'stop',
   'cancelar',
+  'no escriban mas',
+  'no escriban más',
+  'sacame de la lista',
+  'sácame de la lista',
+  'borrame de la lista',
+  'bórrame de la lista',
+  'no me llames',
+  'no llamen mas',
+  'no llamen más',
+]
+
+// Cliente dice que no tiene negocio / no es el dueño / es el número equivocado.
+// Estas frases son señal MUY fuerte: se cierra y desactiva agente con disculpa.
+const WRONG_TARGET_PHRASES = [
+  'no tengo negocio',
+  'no tengo ningun negocio',
+  'no tengo ningún negocio',
+  'no es mi negocio',
+  'no soy el dueno',
+  'no soy el dueño',
+  'no soy la duena',
+  'no soy la dueña',
+  'no soy duena',
+  'no soy dueña',
+  'no soy el responsable',
+  'no soy la responsable',
+  'numero equivocado',
+  'número equivocado',
+  'te equivocaste de numero',
+  'te equivocaste de número',
+  'se equivocaron de numero',
+  'se equivocaron de número',
+  'tenes el numero equivocado',
+  'tenés el número equivocado',
+  'no es mi rubro',
+  'no me dedico a eso',
+  'no me dedico a',
+  'no tengo nada que ver',
+  'soy un particular',
+  'soy particular',
+  'soy una particular',
+  'no es mi local',
+  'este no es mi',
+  'no es mi tienda',
+  'no es mi comercio',
+]
+
+// Cliente dice que el negocio cerró / ya no opera. Se cierra con disculpa.
+const BUSINESS_CLOSED_PHRASES = [
+  'cerre el negocio',
+  'cerré el negocio',
+  'cerramos el negocio',
+  'cerre el local',
+  'cerré el local',
+  'cerramos el local',
+  'cerre la tienda',
+  'cerré la tienda',
+  'cerramos la tienda',
+  'ya no tengo el negocio',
+  'ya no tengo el local',
+  'ya no tengo la tienda',
+  'ya no tengo el comercio',
+  'ya no atiendo mas',
+  'ya no atiendo más',
+  'ya no trabajo mas',
+  'ya no trabajo más',
+  'el negocio cerro',
+  'el negocio cerró',
+  'el local cerro',
+  'el local cerró',
+  'esta cerrado',
+  'está cerrado',
+  'me jubile',
+  'me jubilé',
+  'lo vendi',
+  'lo vendí',
+  'vendi el negocio',
+  'vendí el negocio',
+]
+
+// Familiar / conocido que dice "se lo paso", "le aviso" — pero NO es empleado/portero del negocio.
+// Variante "blanda" del gatekeeper, con tono más cercano.
+const FAMILY_RELAY_PHRASES = [
+  'es de mi hermana',
+  'es de mi hermano',
+  'es de mi mama',
+  'es de mi mamá',
+  'es de mi papa',
+  'es de mi papá',
+  'es de mi pareja',
+  'es de mi marido',
+  'es de mi esposo',
+  'es de mi esposa',
+  'es de mi mujer',
+  'es de mi hija',
+  'es de mi hijo',
+  'es de un familiar',
+  'es de una amiga',
+  'es de un amigo',
+  'es de mi tia',
+  'es de mi tía',
+  'es de mi tio',
+  'es de mi tío',
+  'le digo a mi',
+  'le aviso a mi',
+  'le paso a mi',
+  'se lo paso a mi',
+]
+
+// Cliente pregunta cómo conseguimos su número / por qué lo contactamos. Suele indicar
+// sospecha o frustración. Si NO viene combinado con "no tengo negocio", se explica
+// brevemente sin pitchear nada y se le deja a él la decisión de seguir.
+const SOURCE_QUESTION_PHRASES = [
+  'de donde sacaste mi numero',
+  'de dónde sacaste mi número',
+  'de donde sacaron mi numero',
+  'de dónde sacaron mi número',
+  'como conseguiste mi numero',
+  'cómo conseguiste mi número',
+  'como conseguieron mi numero',
+  'cómo consiguieron mi número',
+  'quien te dio mi numero',
+  'quién te dio mi número',
+  'quien les dio mi numero',
+  'quién les dio mi número',
+  'de donde me conoces',
+  'de dónde me conoces',
+  'de donde me conocen',
+  'de dónde me conocen',
+  'como llegaste a mi',
+  'cómo llegaste a mi',
+  'porque me escribis',
+  'por qué me escribis',
+  'por que me escribis',
+  'porque me escriben',
+  'por qué me escriben',
+  'por que me escriben',
 ]
 
 const HUMAN_HANDOFF_PHRASES = [
@@ -273,6 +418,52 @@ export function decidirRespuestaConversacional(input: DecisionInput): Conversati
       closeConversation: true,
       disableAgent: true,
       eventName: 'conversation_opt_out',
+    }
+  }
+
+  // Cliente dice que no tiene negocio / no es el dueño / número equivocado.
+  // Cierra con disculpa y desactiva agente — no hay nada que vender acá.
+  if (includesAny(normalized, WRONG_TARGET_PHRASES)) {
+    return {
+      action: 'apologize_wrong_target',
+      reason: 'wrong_target',
+      confidence: 0.97,
+      closeConversation: true,
+      disableAgent: true,
+      eventName: 'conversation_wrong_target',
+    }
+  }
+
+  // Cliente dice que cerró el negocio. Cierra con disculpa.
+  if (includesAny(normalized, BUSINESS_CLOSED_PHRASES)) {
+    return {
+      action: 'apologize_business_closed',
+      reason: 'business_closed',
+      confidence: 0.95,
+      closeConversation: true,
+      disableAgent: true,
+      eventName: 'conversation_business_closed',
+    }
+  }
+
+  // Familiar / conocido relay (variante suave del gatekeeper).
+  if (includesAny(normalized, FAMILY_RELAY_PHRASES)) {
+    return {
+      action: 'family_relay',
+      reason: 'family_relay',
+      confidence: 0.9,
+      eventName: 'family_relay_detected',
+    }
+  }
+
+  // Cliente pregunta de dónde sacamos su número (sin negar negocio).
+  // Solo aplica si no se combina con un signal ya cubierto arriba.
+  if (includesAny(normalized, SOURCE_QUESTION_PHRASES)) {
+    return {
+      action: 'explain_source',
+      reason: 'source_question',
+      confidence: 0.9,
+      eventName: 'source_question_detected',
     }
   }
 

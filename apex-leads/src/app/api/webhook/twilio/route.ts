@@ -9,14 +9,20 @@ import {
   esAutoReplyCortoNegocio,
   esPlantillaRespuestaOutboundAuto,
   pareceMensajeAutomaticoNegocio,
+  RESPUESTA_BUSINESS_CLOSED,
+  RESPUESTA_FAMILY_RELAY,
   RESPUESTA_GATEKEEPER,
   RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
+  RESPUESTA_SUSPICION,
+  RESPUESTA_WRONG_TARGET,
 } from '@/lib/outbound-auto-reply'
 import { decidirRespuestaConversacional } from '@/lib/response-decision'
 import { obtenerConfigConversacional } from '@/lib/conversation-config'
 import { registrarEventoConversacional } from '@/lib/conversation-events'
 import {
   auditarCoherenciaRubro,
+  detectarBocetoBombing,
+  fallbackPostBocetoBombing,
   fallbackSeguroPorVertical,
   instruccionRegeneracion,
   sanitizarRespuestaModelo,
@@ -547,6 +553,54 @@ async function procesarConLock(
     return
   }
 
+  if (decision.action === 'apologize_wrong_target') {
+    await enviarTwilioYGuardar(
+      supabase,
+      p.telefono,
+      p.leadId,
+      RESPUESTA_WRONG_TARGET,
+      p.senderPhone,
+      p.senderId
+    )
+    return
+  }
+
+  if (decision.action === 'apologize_business_closed') {
+    await enviarTwilioYGuardar(
+      supabase,
+      p.telefono,
+      p.leadId,
+      RESPUESTA_BUSINESS_CLOSED,
+      p.senderPhone,
+      p.senderId
+    )
+    return
+  }
+
+  if (decision.action === 'family_relay') {
+    await enviarTwilioYGuardar(
+      supabase,
+      p.telefono,
+      p.leadId,
+      RESPUESTA_FAMILY_RELAY,
+      p.senderPhone,
+      p.senderId
+    )
+    return
+  }
+
+  if (decision.action === 'explain_source') {
+    await enviarTwilioYGuardar(
+      supabase,
+      p.telefono,
+      p.leadId,
+      RESPUESTA_SUSPICION,
+      p.senderPhone,
+      p.senderId
+    )
+    return
+  }
+
   if (decision.action === 'confirm_close') {
     const closeMsg = 'Genial. Te escribe alguien del equipo a la brevedad para coordinar los detalles.'
     const ultAgent = [...filasHistorial].reverse().find(h => h.rol === 'agente')?.mensaje
@@ -761,6 +815,42 @@ async function procesarConLock(
           intrusa: null,
           ok: true,
         }
+      }
+    }
+  }
+
+  // Capa 3 — guardrail anti boceto-bombing.
+  // Si el LLM pichteó el boceto a pesar de que el cliente envió señales que
+  // lo prohíben (wrong target, sospecha, hostilidad, familiar, cierre),
+  // interceptamos y reemplazamos por un fallback honesto.
+  if (!dealClosedByTool) {
+    const bocetoCheck = detectarBocetoBombing(chequeo.texto, mensajeEfectivo)
+    if (bocetoCheck.esBocetoBombing && bocetoCheck.marcadorUsuario) {
+      console.warn(
+        '[BG] Boceto-bombing detectado → fallback.',
+        'pitch:',
+        bocetoCheck.marcadorPitch,
+        'señal cliente:',
+        bocetoCheck.marcadorUsuario
+      )
+      await registrarEventoConversacional({
+        leadId: p.leadId,
+        telefono: p.telefono,
+        eventName: 'boceto_bombing_intercepted',
+        decisionAction: 'full_reply',
+        decisionReason: decision.reason,
+        confidence: decision.confidence,
+        metadata: {
+          source: 'twilio_webhook_bg',
+          marcadorPitch: bocetoCheck.marcadorPitch,
+          marcadorUsuario: bocetoCheck.marcadorUsuario,
+        },
+      })
+      chequeo = {
+        texto: fallbackPostBocetoBombing(bocetoCheck.marcadorUsuario),
+        verticalLead: chequeo.verticalLead,
+        intrusa: null,
+        ok: true,
       }
     }
   }

@@ -125,3 +125,15 @@ Cuando quieras charlamos con calma. Para ver trabajos de APEX: *www.theapexweb.c
 
 /** Respuesta cuando un intermediario/portero dice que va a reenviar el mensaje al decisor */
 export const RESPUESTA_GATEKEEPER = `Perfecto, gracias. Si le podés comentar que dejamos una propuesta arriba, genial. Cuando quieran charlar, por acá estamos.`
+
+/** Cliente dice que no tiene negocio / no es el dueño / número equivocado. Disculpa y cierra. */
+export const RESPUESTA_WRONG_TARGET = `Uh, disculpame la molestia. Tu número quedó por error en una base que armé buscando comercios de la zona — lo borro ahora. Que tengas buen día.`
+
+/** Cliente dice que ya cerró el negocio / ya no tiene el local. Disculpa y cierra. */
+export const RESPUESTA_BUSINESS_CLOSED = `No tenía idea, disculpá. Te borro de la base entonces. Éxitos en lo que sigas.`
+
+/** Familiar/conocido que dice "se lo paso", "le aviso". Variante suave del gatekeeper. */
+export const RESPUESTA_FAMILY_RELAY = `Dale, gracias. Si querés mostrale lo que dejamos arriba, sin compromiso. Si lo charlan y les interesa, por acá estamos.`
+
+/** Cliente pregunta de dónde sacamos el número (sospecha/desconfianza, sin negar negocio). */
+export const RESPUESTA_SUSPICION = `Tranqui, lo saqué de Google Maps — busco comercios de la zona y el rubro con el que trabajo, nada raro. Si no te interesa lo borro y listo.`
