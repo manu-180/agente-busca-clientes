@@ -32,6 +32,7 @@ import { enviarMensajeTwilio, getTwilioCredentials } from '@/lib/twilio'
 import { normalizarTelefonoArg, soloDigitos, variantesTelefonoMismaLinea } from '@/lib/phone'
 import { debePersistirBocetoAceptado } from '@/lib/boceto-aceptacion'
 import { MENSAJE_COMPROMISO_BOCETO_24H } from '@/lib/mensaje-boceto-24h'
+import { estaEnVentanaPrimerContacto, getHoraArgentina } from '@/lib/first-contact-window'
 
 // maxDuration = 30s → da margen para el background tras devolver TwiML
 export const maxDuration = 30
@@ -210,6 +211,12 @@ async function procesarEnBackground(p: BgParams): Promise<void> {
     console.log(
       `[BG] Agente desactivado → global=${agenteGlobalOn} lead=${agenteLeadOn}`
     )
+    return
+  }
+
+  // Bloquear auto-respuesta fuera de ventana horaria (9-18h ART)
+  if (!estaEnVentanaPrimerContacto()) {
+    console.log(`[BG] Fuera de ventana horaria (hora AR=${getHoraArgentina()}) → sin auto-respuesta`)
     return
   }
 
