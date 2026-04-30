@@ -262,16 +262,140 @@ export async function getCapacityStats(
 
 /**
  * Marca un sender como desconectado. Llamado desde el cron tras N fallos
- * consecutivos o al detectar que la sesión de WhatsApp se cayó.
+ * consecutivos, desde el webhook al recibir `connection.update state=close`,
+ * o desde el cron de health-check.
+ *
+ * Idempotente: si ya estaba `connected=false`, solo refresca `disconnected_at`
+ * si la razón cambió.
+ *
+ * @param reason — código corto: `device_removed`, `conflict`, `timeout`,
+ *   `send_failure_threshold`, `health_check_close`, `preflight_close`, etc.
  */
 export async function markDisconnected(
+  supabase: SupabaseClient,
+  senderId: string,
+  reason: string = 'unknown'
+): Promise<void> {
+  const { error } = await supabase
+    .from('senders')
+    .update({
+      connected: false,
+      disconnection_reason: reason,
+      disconnected_at: new Date().toISOString(),
+    })
+    .eq('id', senderId)
+
+  if (error) throw new Error(`markDisconnected failed: ${error.message}`)
+}
+
+/**
+ * Marca un sender como conectado y limpia el estado de desconexión previo.
+ * Llamado desde webhook (`connection.update state=open`), desde el cron de
+ * health-check, y desde el flujo de reconexión por QR.
+ *
+ * Resetea `consecutive_send_failures` a 0 — si vino de una caída, los fallos
+ * acumulados ya no son válidos.
+ */
+export async function markConnected(
+  supabase: SupabaseClient,
+  senderId: string,
+  opts?: { phoneNumber?: string | null }
+): Promise<void> {
+  const update: Record<string, unknown> = {
+    connected: true,
+    connected_at: new Date().toISOString(),
+    disconnection_reason: null,
+    disconnected_at: null,
+    consecutive_send_failures: 0,
+    health_checked_at: new Date().toISOString(),
+  }
+  if (opts?.phoneNumber) update.phone_number = opts.phoneNumber
+
+  const { error } = await supabase
+    .from('senders')
+    .update(update)
+    .eq('id', senderId)
+
+  if (error) throw new Error(`markConnected failed: ${error.message}`)
+}
+
+/**
+ * Incrementa atómicamente `consecutive_send_failures` para un sender.
+ * Devuelve el nuevo valor para que el caller decida si superó el umbral.
+ *
+ * Race-safe: si dos crons fallan simultáneamente, ambos suman correctamente
+ * porque usamos un `select` post-update.
+ */
+export async function incrementSendFailures(
+  supabase: SupabaseClient,
+  senderId: string
+): Promise<number> {
+  const { data: current, error: readErr } = await supabase
+    .from('senders')
+    .select('consecutive_send_failures')
+    .eq('id', senderId)
+    .maybeSingle()
+
+  if (readErr) throw new Error(`incrementSendFailures read failed: ${readErr.message}`)
+  if (!current) return 0
+
+  const next = (current.consecutive_send_failures ?? 0) + 1
+  const { error: updateErr } = await supabase
+    .from('senders')
+    .update({ consecutive_send_failures: next })
+    .eq('id', senderId)
+
+  if (updateErr) throw new Error(`incrementSendFailures update failed: ${updateErr.message}`)
+  return next
+}
+
+/**
+ * Resetea contador de fallos consecutivos a 0. Llamado tras un envío exitoso.
+ */
+export async function resetSendFailures(
   supabase: SupabaseClient,
   senderId: string
 ): Promise<void> {
   const { error } = await supabase
     .from('senders')
-    .update({ connected: false })
+    .update({ consecutive_send_failures: 0 })
     .eq('id', senderId)
 
-  if (error) throw new Error(`markDisconnected failed: ${error.message}`)
+  if (error) throw new Error(`resetSendFailures failed: ${error.message}`)
+}
+
+/**
+ * Actualiza `health_checked_at` para registrar que el cron de health-check
+ * verificó la instancia. Si pasa `connected`, también actualiza ese flag.
+ *
+ * Idempotente. Útil para detectar staleness (si el cron deja de correr,
+ * `health_checked_at` se vuelve viejo y la UI puede alertar).
+ */
+export async function updateHealthCheck(
+  supabase: SupabaseClient,
+  senderId: string,
+  opts: { connected?: boolean; reason?: string | null; phoneNumber?: string | null }
+): Promise<void> {
+  const update: Record<string, unknown> = {
+    health_checked_at: new Date().toISOString(),
+  }
+  if (opts.connected === true) {
+    update.connected = true
+    update.connected_at = new Date().toISOString()
+    update.disconnection_reason = null
+    update.disconnected_at = null
+    update.consecutive_send_failures = 0
+  } else if (opts.connected === false) {
+    update.connected = false
+    if (opts.reason) update.disconnection_reason = opts.reason
+    update.disconnected_at = new Date().toISOString()
+  }
+  if (opts.phoneNumber) update.phone_number = opts.phoneNumber
+
+  const { error } = await supabase
+    .from('senders')
+    .update(update)
+    .eq('id', senderId)
+
+  if (error) throw new Error(`updateHealthCheck failed: ${error.message}`)
 }

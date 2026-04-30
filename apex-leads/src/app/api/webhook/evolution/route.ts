@@ -34,6 +34,8 @@ import {
   validateContinuationMessage,
 } from '@/lib/message-guards'
 import { enviarMensajeEvolution } from '@/lib/evolution'
+import { markConnected, markDisconnected } from '@/lib/sender-pool'
+import { fetchPhoneNumber } from '@/lib/evolution-instance'
 import { normalizarTelefonoArg, soloDigitos, variantesTelefonoMismaLinea } from '@/lib/phone'
 import { debePersistirBocetoAceptado } from '@/lib/boceto-aceptacion'
 import { MENSAJE_COMPROMISO_BOCETO_24H } from '@/lib/mensaje-boceto-24h'
@@ -98,10 +100,35 @@ interface EvolutionStatusUpdate {
   update: { status?: number }
 }
 
+interface EvolutionConnectionUpdate {
+  /** Estado actual de la sesión Multi-Device. */
+  state?: 'open' | 'close' | 'connecting' | string
+  /**
+   * Status code emitido por Baileys cuando la conexión cae:
+   *   401 → device_removed (cuenta eliminada en el celular).
+   *   409 → conflict (otra sesión Multi-Device tomó el lugar).
+   *   408 → timeout.
+   *   500 → unavailable.
+   */
+  statusReason?: number
+  /** A veces viene como `lastDisconnect.error.output.statusCode`. */
+  lastDisconnect?: {
+    error?: { output?: { statusCode?: number } }
+  }
+  /** Algunos builds de Evolution emiten el estado bajo `connection`. */
+  connection?: 'open' | 'close' | 'connecting' | string
+  /** Número que quedó vinculado (en `state=open`). */
+  wuid?: string
+}
+
 interface EvolutionWebhookPayload {
   event: string
   instance: string
-  data: EvolutionMessageData | EvolutionStatusUpdate | EvolutionStatusUpdate[]
+  data:
+    | EvolutionMessageData
+    | EvolutionStatusUpdate
+    | EvolutionStatusUpdate[]
+    | EvolutionConnectionUpdate
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -879,6 +906,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true })
   }
 
+  // ── Manejar cambios de estado de la sesión Multi-Device ──
+  // Evolution emite con varios nombres según versión: connection.update, connection_update,
+  // CONNECTION_UPDATE. Normalizamos.
+  if (event === 'connection.update' || event === 'connection_update' || event === 'CONNECTION_UPDATE') {
+    await handleConnectionUpdate(instanceName, data as EvolutionConnectionUpdate)
+    return NextResponse.json({ ok: true })
+  }
+
   // Solo procesar messages.upsert
   if (event !== 'messages.upsert') {
     return NextResponse.json({ ok: true })
@@ -1043,6 +1078,95 @@ async function handleStatusUpdates(updates: EvolutionStatusUpdate[]) {
 
     console.log(`[Evolution Status] messageId=${messageId} status=ERROR lead=${conv.lead_id}`)
   }
+}
+
+// ── Manejo de cambios de estado de la sesión Multi-Device ─────────────────────
+// Evolution emite `connection.update` cada vez que la sesión Baileys cambia
+// de estado. Es la fuente de verdad MÁS RÁPIDA para detectar caídas — antes
+// de que el cron health-check corra, antes de que un envío falle.
+//
+// Mapeo de statusReason (códigos Baileys):
+//   401 → device_removed: la cuenta fue eliminada en el celular principal.
+//          La sesión Multi-Device está muerta. Hay que rescaneer QR.
+//   409 → conflict: otra sesión Multi-Device tomó el lugar (ej: WhatsApp Web).
+//   408 → timeout: red caída entre Evolution y WhatsApp.
+//   500 → unavailable: problema interno de WhatsApp.
+//   restart_required → necesita reinicio manual.
+const STATUS_REASON_MAP: Record<number, string> = {
+  401: 'device_removed',
+  408: 'timeout',
+  409: 'conflict',
+  500: 'unavailable',
+  503: 'service_unavailable',
+}
+
+function reasonFromStatusCode(code: number | null | undefined): string {
+  if (code == null) return 'unknown'
+  return STATUS_REASON_MAP[code] ?? `code_${code}`
+}
+
+async function handleConnectionUpdate(
+  instanceName: string,
+  payload: EvolutionConnectionUpdate
+) {
+  const supabase = createSupabaseServer()
+
+  // Resolver state — algunas versiones lo envían como `state`, otras como `connection`.
+  const rawState = payload?.state ?? payload?.connection ?? 'unknown'
+  const state = String(rawState).toLowerCase()
+
+  // Resolver statusReason — puede venir flat o anidado en lastDisconnect.
+  const statusCode =
+    payload?.statusReason ??
+    payload?.lastDisconnect?.error?.output?.statusCode ??
+    null
+
+  console.log(
+    `[Evolution Webhook] connection.update instance=${instanceName} state=${state} statusCode=${statusCode}`
+  )
+
+  // Buscar el sender correspondiente.
+  const { data: sender } = await supabase
+    .from('senders')
+    .select('id, alias, instance_name, connected, phone_number')
+    .eq('provider', 'evolution')
+    .eq('instance_name', instanceName)
+    .maybeSingle()
+
+  if (!sender) {
+    // Instancia huérfana (no registrada como sender). Solo logueamos.
+    console.warn(`[Evolution Webhook] connection.update para instancia desconocida: ${instanceName}`)
+    return
+  }
+
+  if (state === 'open') {
+    // La sesión se vinculó (escaneo de QR exitoso o reconexión automática).
+    // Intentamos resolver el número si todavía no lo tenemos.
+    let phone: string | null = sender.phone_number ?? null
+    if (!phone) {
+      try {
+        phone = await fetchPhoneNumber(instanceName)
+      } catch (err) {
+        console.warn('[Evolution Webhook] fetchPhoneNumber falló (no bloquea):', err)
+      }
+    }
+    await markConnected(supabase, sender.id, { phoneNumber: phone })
+    console.log(`[Evolution Webhook] sender ${sender.alias ?? instanceName} → connected`)
+    return
+  }
+
+  if (state === 'close') {
+    const reason = reasonFromStatusCode(statusCode)
+    await markDisconnected(supabase, sender.id, reason)
+    console.error(
+      `[Evolution Webhook] sender ${sender.alias ?? instanceName} → disconnected (reason=${reason}, code=${statusCode})`
+    )
+    return
+  }
+
+  // state === 'connecting' o cualquier otro: no tocamos DB. La instancia está
+  // en transición. Si termina en `close`, recibiremos otro `connection.update`.
+  console.log(`[Evolution Webhook] sender ${sender.alias ?? instanceName} → state=${state} (sin cambios en DB)`)
 }
 
 export async function GET() {

@@ -11,6 +11,10 @@ import {
   resetDailyCountersIfNeeded,
   getCapacityStats,
   markDisconnected,
+  markConnected,
+  incrementSendFailures,
+  resetSendFailures,
+  updateHealthCheck,
   todayInArgentina,
 } from '@/lib/sender-pool'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -366,7 +370,24 @@ describe('getCapacityStats', () => {
 // ───────────────────────────────────────────────────────────────────────────
 
 describe('markDisconnected', () => {
-  it('llama UPDATE { connected: false } WHERE id = senderId', async () => {
+  it('llama UPDATE { connected:false, disconnection_reason, disconnected_at } WHERE id', async () => {
+    const chain: Record<string, unknown> = {
+      update: jest.fn(() => chain),
+      eq: jest.fn(() => chain),
+    }
+    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then =
+      (cb) => cb({ data: null, error: null })
+    const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
+
+    await markDisconnected(supa, 'sender-1', 'device_removed')
+    const call = (chain.update as jest.Mock).mock.calls[0][0] as Record<string, unknown>
+    expect(call.connected).toBe(false)
+    expect(call.disconnection_reason).toBe('device_removed')
+    expect(typeof call.disconnected_at).toBe('string')
+    expect(chain.eq).toHaveBeenCalledWith('id', 'sender-1')
+  })
+
+  it('default reason="unknown" cuando no se pasa', async () => {
     const chain: Record<string, unknown> = {
       update: jest.fn(() => chain),
       eq: jest.fn(() => chain),
@@ -376,8 +397,8 @@ describe('markDisconnected', () => {
     const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
 
     await markDisconnected(supa, 'sender-1')
-    expect(chain.update).toHaveBeenCalledWith({ connected: false })
-    expect(chain.eq).toHaveBeenCalledWith('id', 'sender-1')
+    const call = (chain.update as jest.Mock).mock.calls[0][0] as Record<string, unknown>
+    expect(call.disconnection_reason).toBe('unknown')
   })
 
   it('throwea si Supabase devuelve error', async () => {
@@ -389,6 +410,188 @@ describe('markDisconnected', () => {
       (cb) => cb({ data: null, error: { message: 'boom' } })
     const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
 
-    await expect(markDisconnected(supa, 'sender-1')).rejects.toThrow(/boom/)
+    await expect(markDisconnected(supa, 'sender-1', 'foo')).rejects.toThrow(/boom/)
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// markConnected
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('markConnected', () => {
+  it('setea connected=true, limpia disconnection_reason y resetea failures', async () => {
+    const chain: Record<string, unknown> = {
+      update: jest.fn(() => chain),
+      eq: jest.fn(() => chain),
+    }
+    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then =
+      (cb) => cb({ data: null, error: null })
+    const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
+
+    await markConnected(supa, 'sender-1')
+    const call = (chain.update as jest.Mock).mock.calls[0][0] as Record<string, unknown>
+    expect(call.connected).toBe(true)
+    expect(call.disconnection_reason).toBeNull()
+    expect(call.disconnected_at).toBeNull()
+    expect(call.consecutive_send_failures).toBe(0)
+    expect(typeof call.connected_at).toBe('string')
+    expect(typeof call.health_checked_at).toBe('string')
+  })
+
+  it('actualiza phone_number si se pasa', async () => {
+    const chain: Record<string, unknown> = {
+      update: jest.fn(() => chain),
+      eq: jest.fn(() => chain),
+    }
+    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then =
+      (cb) => cb({ data: null, error: null })
+    const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
+
+    await markConnected(supa, 'sender-1', { phoneNumber: '+5491111' })
+    const call = (chain.update as jest.Mock).mock.calls[0][0] as Record<string, unknown>
+    expect(call.phone_number).toBe('+5491111')
+  })
+
+  it('NO actualiza phone_number si phoneNumber=null', async () => {
+    const chain: Record<string, unknown> = {
+      update: jest.fn(() => chain),
+      eq: jest.fn(() => chain),
+    }
+    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then =
+      (cb) => cb({ data: null, error: null })
+    const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
+
+    await markConnected(supa, 'sender-1', { phoneNumber: null })
+    const call = (chain.update as jest.Mock).mock.calls[0][0] as Record<string, unknown>
+    expect('phone_number' in call).toBe(false)
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// incrementSendFailures / resetSendFailures
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('incrementSendFailures', () => {
+  it('lee actual y suma 1, devolviendo el nuevo valor', async () => {
+    let phase: 'read' | 'update' = 'read'
+    const chain: Record<string, unknown> = {
+      select: jest.fn(() => chain),
+      update: jest.fn((_arg) => {
+        phase = 'update'
+        return chain
+      }),
+      eq: jest.fn(() => chain),
+      maybeSingle: jest.fn(() =>
+        Promise.resolve({ data: { consecutive_send_failures: 2 }, error: null })
+      ),
+    }
+    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then = (cb) =>
+      cb(phase === 'update' ? { data: null, error: null } : { data: null, error: null })
+    const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
+
+    const next = await incrementSendFailures(supa, 'sender-1')
+    expect(next).toBe(3)
+    expect(chain.update).toHaveBeenCalledWith({ consecutive_send_failures: 3 })
+  })
+
+  it('si el sender no existe, devuelve 0', async () => {
+    const chain: Record<string, unknown> = {
+      select: jest.fn(() => chain),
+      eq: jest.fn(() => chain),
+      maybeSingle: jest.fn(() => Promise.resolve({ data: null, error: null })),
+    }
+    const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
+    const next = await incrementSendFailures(supa, 'sender-noexiste')
+    expect(next).toBe(0)
+  })
+
+  it('arranca desde 0 si consecutive_send_failures es null', async () => {
+    let phase: 'read' | 'update' = 'read'
+    const chain: Record<string, unknown> = {
+      select: jest.fn(() => chain),
+      update: jest.fn(() => {
+        phase = 'update'
+        return chain
+      }),
+      eq: jest.fn(() => chain),
+      maybeSingle: jest.fn(() =>
+        Promise.resolve({ data: { consecutive_send_failures: null }, error: null })
+      ),
+    }
+    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then = (cb) =>
+      cb(phase === 'update' ? { data: null, error: null } : { data: null, error: null })
+    const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
+    const next = await incrementSendFailures(supa, 'sender-1')
+    expect(next).toBe(1)
+  })
+})
+
+describe('resetSendFailures', () => {
+  it('setea consecutive_send_failures=0', async () => {
+    const chain: Record<string, unknown> = {
+      update: jest.fn(() => chain),
+      eq: jest.fn(() => chain),
+    }
+    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then =
+      (cb) => cb({ data: null, error: null })
+    const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
+
+    await resetSendFailures(supa, 'sender-1')
+    expect(chain.update).toHaveBeenCalledWith({ consecutive_send_failures: 0 })
+    expect(chain.eq).toHaveBeenCalledWith('id', 'sender-1')
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// updateHealthCheck
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('updateHealthCheck', () => {
+  it('connected=true: limpia disconnection_reason y resetea failures', async () => {
+    const chain: Record<string, unknown> = {
+      update: jest.fn(() => chain),
+      eq: jest.fn(() => chain),
+    }
+    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then =
+      (cb) => cb({ data: null, error: null })
+    const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
+
+    await updateHealthCheck(supa, 'sender-1', { connected: true })
+    const call = (chain.update as jest.Mock).mock.calls[0][0] as Record<string, unknown>
+    expect(call.connected).toBe(true)
+    expect(call.disconnection_reason).toBeNull()
+    expect(call.consecutive_send_failures).toBe(0)
+    expect(typeof call.health_checked_at).toBe('string')
+  })
+
+  it('connected=false: setea disconnection_reason, NO toca consecutive_send_failures', async () => {
+    const chain: Record<string, unknown> = {
+      update: jest.fn(() => chain),
+      eq: jest.fn(() => chain),
+    }
+    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then =
+      (cb) => cb({ data: null, error: null })
+    const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
+
+    await updateHealthCheck(supa, 'sender-1', { connected: false, reason: 'health_check_close' })
+    const call = (chain.update as jest.Mock).mock.calls[0][0] as Record<string, unknown>
+    expect(call.connected).toBe(false)
+    expect(call.disconnection_reason).toBe('health_check_close')
+    expect('consecutive_send_failures' in call).toBe(false)
+  })
+
+  it('connected omitido: solo refresca health_checked_at', async () => {
+    const chain: Record<string, unknown> = {
+      update: jest.fn(() => chain),
+      eq: jest.fn(() => chain),
+    }
+    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then =
+      (cb) => cb({ data: null, error: null })
+    const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
+
+    await updateHealthCheck(supa, 'sender-1', {})
+    const call = (chain.update as jest.Mock).mock.calls[0][0] as Record<string, unknown>
+    expect('connected' in call).toBe(false)
+    expect(typeof call.health_checked_at).toBe('string')
   })
 })

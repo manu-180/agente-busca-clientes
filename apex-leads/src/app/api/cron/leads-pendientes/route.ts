@@ -14,12 +14,14 @@ import {
   resolveWhatsAppDemoHost,
   SITIO_PRINCIPAL_APEX,
 } from '@/lib/whatsapp-template-demos'
-import { enviarMensajeEvolution } from '@/lib/evolution'
+import { enviarMensajeEvolution, EVO_ERR, isEvolutionError } from '@/lib/evolution'
 import {
   selectNextSender,
   incrementMsgsToday,
   resetDailyCountersIfNeeded,
   markDisconnected,
+  incrementSendFailures,
+  resetSendFailures,
   type PoolSender,
 } from '@/lib/sender-pool'
 
@@ -29,7 +31,10 @@ export const maxDuration = 30
 const LEADS_TABLE = 'leads'
 const MAX_REINTENTOS_LEAD = 3
 const MAX_REINTENTOS_POOL = 3
-const MAX_FALLOS_CONSECUTIVOS = 10
+// Umbral de fallos consecutivos antes de marcar sender disconnected.
+// Pre-blindaje era 10 (mensajes al vacío). Ahora con preflight + connection.update,
+// 3 fallos seguidos ya es señal fuerte de que la sesión está rota.
+const MAX_FALLOS_CONSECUTIVOS = 3
 
 type SupabaseClient = ReturnType<typeof createSupabaseServer>
 
@@ -173,11 +178,8 @@ async function claimYEnviarLead(
         procesando_hasta: null,
       }).eq('id', lead.id)
 
-      // Reset contador de fallos consecutivos del sender.
-      await sup.from('configuracion').upsert(
-        { clave: `${sender.instance_name}_primer_fallos`, valor: '0' },
-        { onConflict: 'clave' }
-      )
+      // Reset contador de fallos consecutivos del sender (sender está sano).
+      await resetSendFailures(sup, sender.id)
 
       return {
         status: 'ok',
@@ -190,37 +192,70 @@ async function claimYEnviarLead(
       const msg = e instanceof Error ? e.message : String(e)
       console.error(`[cron] Error envío sender=${sender.instance_name} lead=${lead.id}:`, msg)
 
+      // ── Liberar el lock SIEMPRE ──
+      // (lo seteamos antes; si no liberamos, el lead queda 5 min en limbo aunque después lo
+      // procesemos exitosamente con otro sender en el siguiente intento del pool).
+      await sup.from(LEADS_TABLE).update({ procesando_hasta: null }).eq('id', lead.id)
+
+      // ── Clasificar el error: del sender vs. del lead ──
+      const isEvoErr = isEvolutionError(e)
+      const code = isEvoErr ? e.code : null
+
+      // Caso 1: la sesión Multi-Device del sender está caída (preflight detectó close).
+      // No es culpa del lead → no incrementar intentos del lead. Marcar sender disconnected
+      // de inmediato y devolver señal de failover para que se elija otro sender.
+      if (code === EVO_ERR.INSTANCE_NOT_CONNECTED) {
+        await markDisconnected(sup, sender.id, 'preflight_close')
+        console.error(
+          `[cron] sender ${sender.instance_name}: preflight detectó close → markDisconnected (failover)`
+        )
+        return {
+          status: 'sender_caido_failover',
+          sender_id: sender.id,
+          ultimo_error: msg,
+        }
+      }
+
+      // Caso 2: error 4xx de Evolution (número mal formado, contenido inválido).
+      // Es culpa del lead. Incrementar intentos, descartar si llega al límite. Sender intacto.
+      if (code === EVO_ERR.CLIENT_ERROR || code === EVO_ERR.TELEFONO_BLOQUEADO) {
+        const nuevoIntentos = (lead.primer_envio_intentos ?? 0) + 1
+        const esUltimoIntento = nuevoIntentos >= MAX_REINTENTOS_LEAD
+        await sup.from(LEADS_TABLE).update({
+          primer_envio_intentos: nuevoIntentos,
+          primer_envio_error: msg.slice(0, 500),
+          ...(esUltimoIntento ? { estado: 'descartado', primer_envio_fallido_at: new Date().toISOString() } : {}),
+        }).eq('id', lead.id)
+        return { status: 'lead_invalido', lead_id: lead.id, error: msg, code }
+      }
+
+      // Caso 3: timeout / 5xx / error desconocido. Tratamos como problema temporal/del sender.
+      // Incrementar intentos del lead (porque sí gastó un slot del pool) y fallos del sender.
+      // Si supera el umbral, marcar disconnected y failover.
       const nuevoIntentos = (lead.primer_envio_intentos ?? 0) + 1
       const esUltimoIntento = nuevoIntentos >= MAX_REINTENTOS_LEAD
       await sup.from(LEADS_TABLE).update({
         primer_envio_intentos: nuevoIntentos,
         primer_envio_error: msg.slice(0, 500),
-        procesando_hasta: null,
         ...(esUltimoIntento ? { estado: 'descartado', primer_envio_fallido_at: new Date().toISOString() } : {}),
       }).eq('id', lead.id)
 
-      // Incrementar fallos consecutivos del sender.
-      const { data: cfgFallos } = await sup.from('configuracion').select('valor')
-        .eq('clave', `${sender.instance_name}_primer_fallos`).maybeSingle()
-      const fallosAntes = parseInt(cfgFallos?.valor ?? '0', 10) || 0
-      const fallosAhora = fallosAntes + 1
-      await sup.from('configuracion').upsert(
-        { clave: `${sender.instance_name}_primer_fallos`, valor: String(fallosAhora) },
-        { onConflict: 'clave' }
-      )
+      const fallosAhora = await incrementSendFailures(sup, sender.id)
 
       if (fallosAhora >= MAX_FALLOS_CONSECUTIVOS) {
-        await markDisconnected(sup, sender.id)
-        console.error(`[cron] sender ${sender.instance_name}: ${fallosAhora} fallos → markDisconnected`)
+        await markDisconnected(sup, sender.id, 'send_failure_threshold')
+        console.error(
+          `[cron] sender ${sender.instance_name}: ${fallosAhora} fallos consecutivos → markDisconnected (failover)`
+        )
         return {
-          status: 'sender_marcado_disconnected',
+          status: 'sender_caido_failover',
           sender_id: sender.id,
           fallos: fallosAhora,
           ultimo_error: msg,
         }
       }
 
-      return { status: 'envio_fallido', lead_id: lead.id, error: msg, fallos_sender: fallosAhora }
+      return { status: 'envio_fallido', lead_id: lead.id, error: msg, fallos_sender: fallosAhora, code }
     }
   }
 
@@ -247,16 +282,33 @@ async function procesarUnTick(
     }
   }
 
+  // Reintentar hasta MAX_REINTENTOS_POOL veces si el sender elegido se cae.
+  // Cada iteración: selectNextSender excluirá automáticamente al que recién marcamos
+  // disconnected porque markDisconnected pone connected=false.
+  const sendersIntentados: string[] = []
   for (let intentoPool = 0; intentoPool < MAX_REINTENTOS_POOL; intentoPool++) {
     const sender = await selectNextSender(sup)
     if (!sender) {
-      return { status: 'pool_agotado', intento: intentoPool + 1 }
+      return {
+        status: 'pool_agotado',
+        intento: intentoPool + 1,
+        senders_intentados: sendersIntentados,
+      }
     }
+    sendersIntentados.push(sender.alias ?? sender.instance_name)
 
     const leadResult = await claimYEnviarLead(sup, sender)
 
     if (leadResult.status === 'sin_pendientes') {
       return { status: 'sin_pendientes', sender_intentado: sender.alias ?? sender.instance_name }
+    }
+
+    // Failover: el sender elegido está caído. Reintentar con el siguiente del pool.
+    if (leadResult.status === 'sender_caido_failover') {
+      console.warn(
+        `[cron] failover #${intentoPool + 1}: sender ${sender.alias ?? sender.instance_name} marcado disconnected, reintentando con siguiente`
+      )
+      continue
     }
 
     if (leadResult.status === 'race_pool') {
@@ -267,10 +319,11 @@ async function procesarUnTick(
     return {
       ...leadResult,
       sender: { id: sender.id, alias: sender.alias, instance_name: sender.instance_name },
+      senders_intentados: sendersIntentados,
     }
   }
 
-  return { status: 'race_pool_max_reintentos' }
+  return { status: 'pool_agotado_failover', senders_intentados: sendersIntentados }
 }
 
 export async function GET(req: NextRequest) {
