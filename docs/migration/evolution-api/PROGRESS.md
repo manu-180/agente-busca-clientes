@@ -6,9 +6,9 @@
 
 ## Estado actual
 
-**Ultima sesion completada:** SESSION-EVO-05 (2026-04-29) — sender-pool LRU + tests round-robin.
-**Proxima sesion:** SESSION-EVO-06 — Refactor cron 1-msg-per-tick
-**Siguiente prompt:** `docs/migration/evolution-api/prompts/SESSION-EVO-06.md`
+**Ultima sesion completada:** SESSION-EVO-06 (2026-04-29) — Refactor cron 1-msg-per-tick con sender-pool LRU.
+**Proxima sesion:** SESSION-EVO-07 — Dashboard de capacidad UI premium
+**Siguiente prompt:** `docs/migration/evolution-api/prompts/SESSION-EVO-07.md`
 
 > **Re-scope 2026-04-29:** El "big bang cutover" original (EVO-04 viejo, archivado) se reemplazó por un proyecto de 5 sesiones que entrega QR onboarding premium, pool round-robin LRU, dashboard de capacidad y cleanup. Spec doc canónico: [`docs/superpowers/specs/2026-04-29-evolution-pool-design.md`](../../superpowers/specs/2026-04-29-evolution-pool-design.md).
 >
@@ -23,7 +23,7 @@
 - [x] SESSION-EVO-03 (Sonnet) · Callers + cleanup Twilio — **COMPLETO** (2026-04-28, combinado con EVO-02)
 - [x] SESSION-EVO-04 (Sonnet) · Schema pool + QR onboarding premium + helpers — **COMPLETO** (2026-04-29)
 - [x] SESSION-EVO-05 (Sonnet) · Sender pool LRU + tests round-robin — **COMPLETO** (2026-04-29)
-- [ ] SESSION-EVO-06 (Sonnet) · Refactor cron 1-msg-per-tick — pendiente
+- [x] SESSION-EVO-06 (Opus) · Refactor cron 1-msg-per-tick — **COMPLETO** (2026-04-29)
 - [ ] SESSION-EVO-07 (Sonnet) · Dashboard de capacidad UI premium — pendiente
 - [ ] SESSION-EVO-08 (Sonnet) · Cleanup, sin tarjetita, tests E2E — pendiente
 
@@ -93,6 +93,25 @@
 - **Smoke físico (escaneo QR con celular) queda para Manuel** — código y endpoints listos, falta confirmar el round-trip completo abriendo `/senders` localmente o en producción.
 
 **Decisión no en el plan:** se agregó `'evolution'` al CHECK de `provider` en la migración. El plan asumía que ya existía pero la DB seguía con `['twilio','wassenger']`.
+
+### SESSION-EVO-06 (2026-04-29)
+
+**Lo que se hizo:**
+- `apex-leads/src/app/api/cron/leads-pendientes/route.ts` reescrito: pasa de N-msgs-por-tick (loop por sender) a 1-msg-por-tick con round-robin LRU. Estructura nueva:
+  - `procesarUnTick(sup, forced)` — orquesta: `resetDailyCountersIfNeeded` → check switch global y ventana → loop con hasta 3 reintentos sobre `selectNextSender` → `claimYEnviarLead`. Devuelve `pool_agotado` si no hay sender disponible y `race_pool_max_reintentos` si la concurrencia tira el sender 3 veces seguidas.
+  - `claimYEnviarLead(sup, sender)` — claim atómico de un lead pendiente con misma lógica que el viejo (verif WA, bloqueo hard, dedupe `yaConv`/`yaLead`/`yaConvPorLead`, lock `procesando_hasta`). Tras envío exitoso a Evolution: `incrementMsgsToday` (race tras envío = solo log, sin rollback porque el msg ya está), `INSERT` en `conversaciones`, `UPDATE` lead a `contactado`, reset `_primer_fallos` del sender. Tras error: incrementa `_primer_fallos`; al llegar a 10 llama a `markDisconnected` (no desactiva — Manuel reconecta desde UI).
+- Imports nuevos desde `lib/sender-pool`: `selectNextSender`, `incrementMsgsToday`, `resetDailyCountersIfNeeded`, `markDisconnected`, `PoolSender`.
+- `maxDuration` bajado de 60 → 30 (1 envío por tick).
+- Helpers viejos `leerDailyCount`/`incrementarDailyCount`/`escribirConfig` mantenidos como `*Deprecated` (rollback fallback hasta EVO-08), suprimidos con `void` para evitar warnings de unused.
+- `procesarSender` (loop viejo de N-msgs-por-tick) eliminado — el nuevo handler no lo usa y mantenerlo como dead-code confunde más de lo que ayuda; rollback es vía `git revert`.
+- `tsc --noEmit` exit 0. 147/147 tests del repo verdes (sin tests nuevos — el smoke E2E del cron queda para EVO-08).
+
+**Diferencias respecto al plan:**
+- Se borró `procesarSender` (~240 líneas) en lugar de dejarlo deprecated. Razón: `git revert` provee el mismo rollback sin contaminar el archivo activo.
+- Se mantuvieron como deprecated solo los 3 helpers que el plan pidió explícitamente (`leerDailyCount`, `incrementarDailyCount`, `escribirConfig`).
+
+**Pendiente humano:**
+- Smoke 6-tick (curl `?force=true` × 6 con dev server) — Manuel lo corre cuando tenga 2+ SIMs conectadas y leads en cola. Verificar distribución round-robin ~3/3 en `senders.msgs_today`.
 
 ### SESSION-EVO-05 (2026-04-29)
 

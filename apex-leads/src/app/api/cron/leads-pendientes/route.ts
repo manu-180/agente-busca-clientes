@@ -15,17 +15,21 @@ import {
   SITIO_PRINCIPAL_APEX,
 } from '@/lib/whatsapp-template-demos'
 import { enviarMensajeEvolution } from '@/lib/evolution'
+import {
+  selectNextSender,
+  incrementMsgsToday,
+  resetDailyCountersIfNeeded,
+  markDisconnected,
+  type PoolSender,
+} from '@/lib/sender-pool'
 
 export const dynamic = 'force-dynamic'
-export const maxDuration = 60
+export const maxDuration = 30
 
-const TZ_OFFSET_HOURS_AR = -3
 const LEADS_TABLE = 'leads'
-const MAX_REINTENTOS = 3
-// Límite diario de mensajes por sender. Se respeta aunque ?force=true no lo omite.
-const MAX_DIARIO_POR_SENDER = 200
-// Cuántos leads intentar por tick antes de rendirse
-const MAX_LEADS_POR_TICK = 10
+const MAX_REINTENTOS_LEAD = 3
+const MAX_REINTENTOS_POOL = 3
+const MAX_FALLOS_CONSECUTIVOS = 10
 
 type SupabaseClient = ReturnType<typeof createSupabaseServer>
 
@@ -47,55 +51,42 @@ interface LeadColaRow {
   primer_envio_completado_at: string | null
 }
 
-interface SenderRow {
-  id: string
-  instance_name: string
-  phone_number: string
-  alias: string | null
-  activo: boolean
-}
-
 function authCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
   if (!secret) return false
   return req.headers.get('authorization') === `Bearer ${secret}`
 }
 
+// ─── DEPRECATED helpers (rollback fallback hasta EVO-08) ──────────────
+// El nuevo cron usa `senders.msgs_today` (sender-pool) en vez de leer/escribir
+// `${instance}_primer_enviados_hoy` en tabla `configuracion`. Estas funciones se
+// dejan importadas para poder hacer rollback rápido a la lógica vieja sin un
+// nuevo deploy. Se borran en EVO-08.
+const TZ_OFFSET_HOURS_AR = -3
 function fechaArHoy(): string {
   const ar = new Date(Date.now() + TZ_OFFSET_HOURS_AR * 3600_000)
   return ar.toISOString().slice(0, 10)
 }
-
-function minAleatorio(min: number, max: number): number {
-  return Math.floor(Math.random() * (max - min + 1)) + min
-}
-
-async function leerConfig(sup: SupabaseClient, clave: string, def: string): Promise<string> {
+async function leerConfigDeprecated(sup: SupabaseClient, clave: string, def: string): Promise<string> {
   const { data } = await sup.from('configuracion').select('valor').eq('clave', clave).maybeSingle()
   return data?.valor ?? def
 }
-
-async function escribirConfig(sup: SupabaseClient, clave: string, valor: string) {
+async function escribirConfigDeprecated(sup: SupabaseClient, clave: string, valor: string) {
   await sup.from('configuracion').upsert({ clave, valor }, { onConflict: 'clave' })
 }
-
-async function actualizarLead(sup: SupabaseClient, id: string, updates: Record<string, unknown>) {
-  const { error } = await sup.from(LEADS_TABLE).update(updates).eq('id', id)
-  if (error) console.error('[cron leads-pendientes] Error update lead:', error.message)
-}
-
-async function leerDailyCount(sup: SupabaseClient, key: string): Promise<number> {
-  const raw = await leerConfig(sup, `${key}_primer_enviados_hoy`, `0|1970-01-01`)
+async function leerDailyCountDeprecated(sup: SupabaseClient, key: string): Promise<number> {
+  const raw = await leerConfigDeprecated(sup, `${key}_primer_enviados_hoy`, `0|1970-01-01`)
   const [countStr, fecha] = raw.split('|')
   return fecha === fechaArHoy() ? (parseInt(countStr, 10) || 0) : 0
 }
-
-async function incrementarDailyCount(sup: SupabaseClient, key: string, actual: number) {
-  await escribirConfig(sup, `${key}_primer_enviados_hoy`, `${actual + 1}|${fechaArHoy()}`)
+async function incrementarDailyCountDeprecated(sup: SupabaseClient, key: string, actual: number) {
+  await escribirConfigDeprecated(sup, `${key}_primer_enviados_hoy`, `${actual + 1}|${fechaArHoy()}`)
 }
+// Suprime warnings de "unused" — son intencionales, las usaríamos en rollback.
+void leerDailyCountDeprecated
+void incrementarDailyCountDeprecated
+// ─── /DEPRECATED helpers ──────────────────────────────────────────────
 
-// Construye el mensaje de primer contacto como texto libre (sin template Meta).
-// El mismo texto se usa para el envío y para guardar en la tabla conversaciones.
 function construirMensajePrimerContacto(lead: LeadColaRow): string {
   const rating = extraerRatingParaPlantilla(lead.descripcion)
   const demoHost = resolveWhatsAppDemoHost(lead.rubro, lead.descripcion)
@@ -108,148 +99,68 @@ function construirMensajePrimerContacto(lead: LeadColaRow): string {
   ].join('\n')
 }
 
-// ─── Procesar un sender ────────────────────────────────────────────────────────
-async function procesarSender(
+async function claimYEnviarLead(
   sup: SupabaseClient,
-  sender: SenderRow,
-  forced: boolean,
-  yaProcesoIds: string[]
+  sender: PoolSender
 ): Promise<Record<string, unknown>> {
-  const key = sender.instance_name
+  const { data: candidatos, error: candidatosErr } = await sup
+    .from(LEADS_TABLE)
+    .select('*')
+    .eq('origen', 'outbound')
+    .eq('mensaje_enviado', false)
+    .eq('estado', 'pendiente')
+    .lt('primer_envio_intentos', MAX_REINTENTOS_LEAD)
+    .not('telefono', 'is', null)
+    .order('created_at', { ascending: true })
+    .limit(50)
 
-  console.log(`[DBG sender] ── INICIO procesarSender key=${key} phone=${sender.phone_number} forced=${forced} ──`)
-
-  if (!sender.activo) {
-    console.log(`[DBG sender] [${key}] → INACTIVO en DB`)
-    return { status: 'inactivo' }
+  if (candidatosErr) {
+    console.error(`[cron] Error cargando candidatos: ${candidatosErr.message}`)
+    return { status: 'error_candidatos', error: candidatosErr.message }
   }
 
-  const fallosActuales = parseInt(await leerConfig(sup, `${key}_primer_fallos`, '0'), 10) || 0
-  console.log(`[DBG sender] [${key}] senderId=${sender.id} fallosActuales=${fallosActuales}`)
-
-  if (!forced && !estaEnVentanaPrimerContacto()) {
-    const h = getHoraArgentina()
-    console.log(`[DBG sender] [${key}] → fuera_de_ventana hora=${h}`)
-    return {
-      status: 'fuera_de_ventana',
-      hora_argentina: h,
-      ventana: {
-        inicio: PRIMER_CONTACTO_HORA_INICIO_AR,
-        fin: PRIMER_CONTACTO_HORA_FIN_AR,
-      },
-    }
-  }
-
-  const enviados = await leerDailyCount(sup, key)
-  console.log(`[DBG sender] [${key}] enviados_hoy=${enviados}/${MAX_DIARIO_POR_SENDER}`)
-
-  if (!forced && enviados >= MAX_DIARIO_POR_SENDER) {
-    console.log(`[DBG sender] [${key}] → limite_diario_alcanzado (${enviados}/${MAX_DIARIO_POR_SENDER})`)
-    return {
-      status: 'limite_diario_alcanzado',
-      enviados_hoy: enviados,
-      limite: MAX_DIARIO_POR_SENDER,
-    }
-  }
-
-  // Slot de cadencia (por ahora sin delay: intMin=intMax=0)
-  // Para agregar delay por sender, agregar columnas int_min/int_max a la tabla senders.
-  const nextSlotStr = await leerConfig(sup, `${key}_primer_next_slot_at`, '1970-01-01T00:00:00.000Z')
-  if (!forced && new Date(nextSlotStr).getTime() > Date.now()) {
-    const faltanMin = Math.ceil((new Date(nextSlotStr).getTime() - Date.now()) / 60_000)
-    console.log(`[DBG sender] [${key}] → slot_no_alcanzado next=${nextSlotStr} faltan=${faltanMin}min`)
-    return { status: 'slot_no_alcanzado', next_slot_at: nextSlotStr, faltan_min: faltanMin }
-  }
-
-  const erroresTick: Array<{ lead_id: string; error: string }> = []
-
-  for (let i = 0; i < MAX_LEADS_POR_TICK; i++) {
-    console.log(`[DBG sender] [${key}] ── intento ${i + 1}/${MAX_LEADS_POR_TICK} ──`)
-
-    const { data: candidatos, error: candidatosErr } = await sup
-      .from(LEADS_TABLE)
-      .select('*')
-      .eq('origen', 'outbound')
-      .eq('mensaje_enviado', false)
-      .eq('estado', 'pendiente')
-      .lt('primer_envio_intentos', MAX_REINTENTOS)
-      .not('telefono', 'is', null)
-      .order('created_at', { ascending: true })
-      .limit(200)
-
-    console.log(`[DBG sender] [${key}] candidatos DB: count=${candidatos?.length ?? 0} error=${candidatosErr?.message ?? 'none'}`)
-
-    const lead = (candidatos ?? []).find(
-      (l: LeadColaRow) => !yaProcesoIds.includes(l.id)
-    ) as LeadColaRow | undefined
-
-    if (!lead) {
-      console.log(`[DBG sender] [${key}] → sin lead disponible`)
-      return {
-        status: erroresTick.length > 0 ? 'error_sin_mas_candidatos' : 'sin_pendientes',
-        errores: erroresTick,
-      }
-    }
-
-    console.log(`[DBG sender] [${key}] lead elegido id=${lead.id} tel_raw=${lead.telefono} nombre=${lead.nombre} intentos=${lead.primer_envio_intentos}`)
-    yaProcesoIds.push(lead.id)
-
-    const verificacion = verificarNumeroWhatsApp(String(lead.telefono))
-    console.log(`[DBG sender] [${key}] verificacion tel="${lead.telefono}": ${JSON.stringify(verificacion)}`)
-
-    if (!verificacion.valido) {
-      console.warn(`[DBG sender] [${key}] verificacion fallida razon=${verificacion.razon} → descartando`)
-      await actualizarLead(sup, lead.id, {
+  for (const lead of (candidatos ?? []) as LeadColaRow[]) {
+    const verif = verificarNumeroWhatsApp(String(lead.telefono))
+    if (!verif.valido) {
+      await sup.from(LEADS_TABLE).update({
         estado: 'descartado',
-        primer_envio_error: verificacion.razon,
+        primer_envio_error: verif.razon,
         primer_envio_fallido_at: new Date().toISOString(),
         procesando_hasta: null,
-      })
+      }).eq('id', lead.id)
       continue
     }
 
-    const telefono = verificacion.normalizado
-    const telsMismaLinea = variantesTelefonoMismaLinea(telefono)
-
+    const telefono = verif.normalizado
     if (isTelefonoHardBlocked(telefono)) {
-      await actualizarLead(sup, lead.id, {
+      await sup.from(LEADS_TABLE).update({
         estado: 'descartado',
         primer_envio_error: 'telefono_bloqueado',
         primer_envio_fallido_at: new Date().toISOString(),
         procesando_hasta: null,
-      })
-      console.warn(`[DBG sender] [${key}] tel ${telefono} bloqueado → saltando`)
+      }).eq('id', lead.id)
       continue
     }
 
+    const telsMismaLinea = variantesTelefonoMismaLinea(telefono)
     const [{ data: yaConv }, { data: yaLead }, { data: yaConvPorLead }] = await Promise.all([
       sup.from('conversaciones').select('id').in('telefono', telsMismaLinea).limit(1).maybeSingle(),
-      sup
-        .from(LEADS_TABLE)
-        .select('id')
-        .in('telefono', telsMismaLinea)
-        .eq('mensaje_enviado', true)
-        .neq('id', lead.id)
-        .limit(1)
-        .maybeSingle(),
+      sup.from(LEADS_TABLE).select('id').in('telefono', telsMismaLinea).eq('mensaje_enviado', true).neq('id', lead.id).limit(1).maybeSingle(),
       sup.from('conversaciones').select('id').eq('lead_id', lead.id).limit(1).maybeSingle(),
     ])
 
-    console.log(`[DBG sender] [${key}] yaConv=${!!yaConv} yaLead=${!!yaLead} yaConvPorLead=${!!yaConvPorLead}`)
-
     if (yaConv || yaLead || yaConvPorLead) {
-      await actualizarLead(sup, lead.id, {
+      await sup.from(LEADS_TABLE).update({
         estado: 'contactado',
         mensaje_enviado: true,
         primer_envio_error: 'telefono_ya_contactado',
-      })
-      console.warn(`[DBG sender] [${key}] tel ${telefono} ya contactado → saltando`)
+      }).eq('id', lead.id)
       continue
     }
 
-    // Lock atómico
+    // Lock atómico del lead.
     const procesandoHasta = new Date(Date.now() + 5 * 60_000).toISOString()
-    const { data: claimed, error: claimErr } = await sup
+    const { data: claimed } = await sup
       .from(LEADS_TABLE)
       .update({ procesando_hasta: procesandoHasta })
       .eq('id', lead.id)
@@ -259,16 +170,18 @@ async function procesarSender(
       .select('id')
       .maybeSingle()
 
-    console.log(`[DBG sender] [${key}] claim lead ${lead.id}: claimed=${!!claimed} claimErr=${claimErr?.message ?? 'none'}`)
-
-    if (claimErr || !claimed) {
-      console.warn(`[DBG sender] [${key}] lead ${lead.id} ya reclamado → saltando`)
-      continue
-    }
+    if (!claimed) continue // alguien más se lo llevó
 
     try {
       const mensajeTexto = construirMensajePrimerContacto(lead)
-      const result = await enviarMensajeEvolution(telefono, mensajeTexto, key)
+      const result = await enviarMensajeEvolution(telefono, mensajeTexto, sender.instance_name)
+
+      // Increment atómico DESPUÉS del envío exitoso. Si falla por race no rollback
+      // — el mensaje ya fue enviado. Solo se loggea.
+      const incrementOk = await incrementMsgsToday(sup, sender.id)
+      if (!incrementOk) {
+        console.warn(`[cron] Race en increment tras envío exitoso. sender=${sender.id} lead=${lead.id}`)
+      }
 
       await sup.from('conversaciones').insert({
         lead_id: lead.id,
@@ -281,128 +194,125 @@ async function procesarSender(
         twilio_message_sid: result.messageId,
       })
 
-      await actualizarLead(sup, lead.id, {
+      await sup.from(LEADS_TABLE).update({
         mensaje_enviado: true,
         estado: 'contactado',
         mensaje_inicial: mensajeTexto,
         primer_envio_completado_at: new Date().toISOString(),
         primer_envio_error: null,
         procesando_hasta: null,
-      })
+      }).eq('id', lead.id)
 
-      await incrementarDailyCount(sup, key, enviados)
-      await escribirConfig(sup, `${key}_primer_fallos`, '0')
-
-      // Sin delay entre envíos por defecto; agregar lógica de slot si se necesita
-      const proximoMin = minAleatorio(0, 0)
-      await escribirConfig(sup, `${key}_primer_next_slot_at`, '1970-01-01T00:00:00.000Z')
+      // Reset contador de fallos consecutivos del sender.
+      await sup.from('configuracion').upsert(
+        { clave: `${sender.instance_name}_primer_fallos`, valor: '0' },
+        { onConflict: 'clave' }
+      )
 
       return {
         status: 'ok',
         lead_id: lead.id,
         nombre: lead.nombre,
         message_id: result.messageId,
-        enviados_hoy: enviados + 1,
-        intentos_hasta_envio: i + 1,
-        ...(erroresTick.length > 0 ? { saltados: erroresTick.length } : {}),
-        proximo_min: proximoMin,
+        race_increment: !incrementOk,
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      const stack = e instanceof Error ? (e.stack ?? '') : ''
-      console.error(`[DBG sender] [${key}] ❌ CATCH lead=${lead.id} error="${msg}"`)
-      console.error(`[DBG sender] [${key}] stack: ${stack.slice(0, 800)}`)
-
-      erroresTick.push({ lead_id: lead.id, error: msg })
+      console.error(`[cron] Error envío sender=${sender.instance_name} lead=${lead.id}:`, msg)
 
       const nuevoIntentos = (lead.primer_envio_intentos ?? 0) + 1
-      const esUltimoIntento = nuevoIntentos >= MAX_REINTENTOS
-      await actualizarLead(sup, lead.id, {
+      const esUltimoIntento = nuevoIntentos >= MAX_REINTENTOS_LEAD
+      await sup.from(LEADS_TABLE).update({
         primer_envio_intentos: nuevoIntentos,
         primer_envio_error: msg.slice(0, 500),
         procesando_hasta: null,
-        ...(esUltimoIntento
-          ? { estado: 'descartado', primer_envio_fallido_at: new Date().toISOString() }
-          : {}),
-      })
+        ...(esUltimoIntento ? { estado: 'descartado', primer_envio_fallido_at: new Date().toISOString() } : {}),
+      }).eq('id', lead.id)
 
-      const fallosAntes = parseInt(await leerConfig(sup, `${key}_primer_fallos`, '0'), 10) || 0
-      const fallos = fallosAntes + 1
-      await escribirConfig(sup, `${key}_primer_fallos`, String(fallos))
+      // Incrementar fallos consecutivos del sender.
+      const { data: cfgFallos } = await sup.from('configuracion').select('valor')
+        .eq('clave', `${sender.instance_name}_primer_fallos`).maybeSingle()
+      const fallosAntes = parseInt(cfgFallos?.valor ?? '0', 10) || 0
+      const fallosAhora = fallosAntes + 1
+      await sup.from('configuracion').upsert(
+        { clave: `${sender.instance_name}_primer_fallos`, valor: String(fallosAhora) },
+        { onConflict: 'clave' }
+      )
 
-      console.error(`[DBG sender] [${key}] fallos_sender=${fallos}/10`)
-
-      if (fallos >= 10) {
-        await sup.from('senders').update({ activo: false }).eq('id', sender.id)
-        console.error(`[DBG sender] [${key}] ❌❌ 10 fallos consecutivos → SENDER PAUSADO`)
+      if (fallosAhora >= MAX_FALLOS_CONSECUTIVOS) {
+        await markDisconnected(sup, sender.id)
+        console.error(`[cron] sender ${sender.instance_name}: ${fallosAhora} fallos → markDisconnected`)
         return {
-          status: 'pausado_auto',
-          lead_id: lead.id,
-          error: msg,
-          fallos_consecutivos: fallos,
-          errores_tick: erroresTick,
+          status: 'sender_marcado_disconnected',
+          sender_id: sender.id,
+          fallos: fallosAhora,
+          ultimo_error: msg,
         }
       }
 
-      console.warn(`[DBG sender] [${key}] fallo ${fallos}/10 → continuando con siguiente lead`)
+      return { status: 'envio_fallido', lead_id: lead.id, error: msg, fallos_sender: fallosAhora }
     }
   }
 
-  return { status: 'error_max_intentos_tick', intentos: MAX_LEADS_POR_TICK, errores: erroresTick }
+  return { status: 'sin_pendientes' }
 }
 
-// ─── Handler ──────────────────────────────────────────────────────────────────
-export async function GET(req: NextRequest) {
-  console.log(`[DBG cron] ════ TICK INICIO ${new Date().toISOString()} ════`)
+async function procesarUnTick(
+  sup: SupabaseClient,
+  forced: boolean
+): Promise<Record<string, unknown>> {
+  await resetDailyCountersIfNeeded(sup)
 
+  const { data: cfgActivo } = await sup
+    .from('configuracion').select('valor').eq('clave', 'first_contact_activo').maybeSingle()
+  if (cfgActivo?.valor !== 'true') {
+    return { status: 'skipped_first_contact_inactivo' }
+  }
+
+  if (!forced && !estaEnVentanaPrimerContacto()) {
+    return {
+      status: 'fuera_de_ventana',
+      hora_argentina: getHoraArgentina(),
+      ventana: { inicio: PRIMER_CONTACTO_HORA_INICIO_AR, fin: PRIMER_CONTACTO_HORA_FIN_AR },
+    }
+  }
+
+  for (let intentoPool = 0; intentoPool < MAX_REINTENTOS_POOL; intentoPool++) {
+    const sender = await selectNextSender(sup)
+    if (!sender) {
+      return { status: 'pool_agotado', intento: intentoPool + 1 }
+    }
+
+    const leadResult = await claimYEnviarLead(sup, sender)
+
+    if (leadResult.status === 'sin_pendientes') {
+      return { status: 'sin_pendientes', sender_intentado: sender.alias ?? sender.instance_name }
+    }
+
+    if (leadResult.status === 'race_pool') {
+      // El sender se nos escapó entre select e increment — reintento.
+      continue
+    }
+
+    return {
+      ...leadResult,
+      sender: { id: sender.id, alias: sender.alias, instance_name: sender.instance_name },
+    }
+  }
+
+  return { status: 'race_pool_max_reintentos' }
+}
+
+export async function GET(req: NextRequest) {
   if (!authCron(req)) {
-    console.warn(`[DBG cron] ❌ Auth fallida. CRON_SECRET=${process.env.CRON_SECRET ? 'SET' : 'FALTA'}`)
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
   const forced = req.nextUrl.searchParams.get('force') === 'true'
-  console.log(`[DBG cron] forced=${forced}`)
-
   const sup = createSupabaseServer()
 
-  console.log(`[DBG cron] ENV: EVOLUTION_API_URL=${process.env.EVOLUTION_API_URL ? 'SET' : 'FALTA'} EVOLUTION_API_KEY=${process.env.EVOLUTION_API_KEY ? 'SET' : 'FALTA'}`)
-
-  // Verificar interruptor global
-  const { data: cfgActivo } = await sup
-    .from('configuracion').select('valor').eq('clave', 'first_contact_activo').maybeSingle()
-  console.log(`[DBG cron] first_contact_activo=${cfgActivo?.valor}`)
-  if (cfgActivo?.valor !== 'true') {
-    return NextResponse.json({ ok: true, skipped: 'first_contact_inactivo' })
-  }
-
-  // Cargar senders activos desde DB (N instancias Evolution API)
-  const { data: sendersDB, error: sendersErr } = await sup
-    .from('senders')
-    .select('id, instance_name, phone_number, alias, activo')
-    .eq('provider', 'evolution')
-    .eq('activo', true)
-    .not('instance_name', 'is', null)
-
-  if (sendersErr) {
-    console.error('[DBG cron] Error cargando senders:', sendersErr.message)
-    return NextResponse.json({ error: sendersErr.message }, { status: 500 })
-  }
-
-  const senders = (sendersDB ?? []) as SenderRow[]
-  console.log(`[DBG cron] senders activos: ${senders.length}`)
-
-  if (senders.length === 0) {
-    return NextResponse.json({ ok: true, skipped: 'sin_senders_activos' })
-  }
-
-  const yaProcesoIds: string[] = []
-  const results: Record<string, unknown> = {}
-
-  for (const sender of senders) {
-    results[sender.instance_name] = await procesarSender(sup, sender, forced, yaProcesoIds)
-  }
-
-  return NextResponse.json({ ok: true, results })
+  const result = await procesarUnTick(sup, forced)
+  return NextResponse.json({ ok: true, tick: result })
 }
 
 export async function POST(req: NextRequest) {
