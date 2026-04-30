@@ -60,6 +60,27 @@ interface QueueResult {
   duplicados: number
 }
 
+interface CapacitySender {
+  id: string
+  alias: string | null
+  instance_name: string
+  phone_number: string
+  color: string
+  msgs_today: number
+  daily_limit: number
+  remaining: number
+  connected: boolean
+}
+
+interface CapacityStats {
+  total_today: number
+  used_today: number
+  remaining: number
+  active_connected: number
+  active_total: number
+  per_sender: CapacitySender[]
+}
+
 type EstadoWorkerVisual = 'espera' | 'activo' | 'hecho' | 'pausa'
 
 interface WorkerSlotVisual {
@@ -89,6 +110,7 @@ export default function NuevoLeadClient() {
   const [encolando, setEncolando] = useState(false)
   const [errorBusqueda, setErrorBusqueda] = useState<string | null>(null)
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null)
+  const [capacity, setCapacity] = useState<CapacityStats | null>(null)
   const [ultimoResultadoCola, setUltimoResultadoCola] = useState<QueueResult | null>(null)
 
   const [progresoActual, setProgresoActual] = useState(0)
@@ -164,9 +186,25 @@ export default function NuevoLeadClient() {
     }
   }
 
+  async function cargarCapacity() {
+    try {
+      const res = await fetch('/api/senders/capacity', { cache: 'no-store' })
+      if (res.ok) {
+        const data = (await res.json()) as CapacityStats
+        setCapacity(data)
+      }
+    } catch {
+      // silencioso, no es crítico
+    }
+  }
+
   useEffect(() => {
     cargarStats()
-    const intervalo = setInterval(cargarStats, 30_000)
+    cargarCapacity()
+    const intervalo = setInterval(() => {
+      cargarStats()
+      cargarCapacity()
+    }, 30_000)
     return () => clearInterval(intervalo)
   }, [])
 
@@ -482,6 +520,93 @@ export default function NuevoLeadClient() {
             <div className={`text-2xl font-bold mt-1 ${queueStats.activo ? 'text-apex-lime' : 'text-red-400'}`}>
               {queueStats.activo ? 'ACTIVO' : 'PAUSADO'}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Capacidad del pool de SIMs */}
+      {capacity && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="bg-apex-card border border-apex-border rounded-lg p-3">
+            <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Pool restante</div>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-2xl font-bold text-apex-lime tabular-nums">{capacity.remaining}</span>
+              <span className="text-sm text-apex-muted font-mono">de {capacity.total_today} msgs</span>
+            </div>
+            <div className="w-full h-1 bg-apex-border rounded-full overflow-hidden mt-2">
+              <div
+                className="h-full bg-apex-lime rounded-full transition-all"
+                style={{
+                  width: `${
+                    capacity.total_today > 0
+                      ? Math.min(100, (capacity.used_today / capacity.total_today) * 100)
+                      : 0
+                  }%`,
+                }}
+              />
+            </div>
+          </div>
+
+          <div className="bg-apex-card border border-apex-border rounded-lg p-3">
+            <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">SIMs activas</div>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-2xl font-bold text-apex-lime tabular-nums">{capacity.active_connected}</span>
+              <span className="text-sm text-apex-muted font-mono">de {capacity.active_total} conectadas</span>
+            </div>
+            <div className="flex gap-1 mt-2 flex-wrap">
+              {capacity.per_sender.map((s) => (
+                <div
+                  key={s.id}
+                  className={`w-2 h-2 rounded-full ${s.connected ? 'bg-apex-lime' : 'bg-red-500/50'}`}
+                  title={`${s.alias ?? s.instance_name} — ${s.connected ? 'conectada' : 'desconectada'}`}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mini-grid por SIM */}
+      {capacity && capacity.per_sender.length > 0 && (
+        <div className="bg-apex-card/60 border border-apex-border/60 rounded-xl p-4">
+          <h3 className="text-xs font-mono uppercase tracking-wider text-apex-muted mb-3">
+            Capacidad por SIM
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {capacity.per_sender.map((s) => {
+              const pct = s.daily_limit > 0 ? (s.msgs_today / s.daily_limit) * 100 : 0
+              return (
+                <div key={s.id} className="flex items-center gap-3 bg-apex-black/40 rounded-lg p-3">
+                  <div
+                    className={`w-2 h-8 rounded-full flex-shrink-0 ${s.connected ? '' : 'opacity-30'}`}
+                    style={{ background: s.color }}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm font-syne font-semibold truncate">
+                        {s.alias ?? s.instance_name}
+                      </span>
+                      <span className="text-xs font-mono text-apex-muted tabular-nums whitespace-nowrap">
+                        {s.msgs_today}/{s.daily_limit}
+                      </span>
+                    </div>
+                    <div className="w-full h-1 bg-apex-border rounded-full overflow-hidden mt-1.5">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${Math.min(100, pct)}%`,
+                          background: s.color,
+                          opacity: s.connected ? 1 : 0.3,
+                        }}
+                      />
+                    </div>
+                    {!s.connected && (
+                      <span className="text-[10px] font-mono text-red-400/80">desconectada</span>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </div>
       )}

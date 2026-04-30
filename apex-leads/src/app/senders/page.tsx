@@ -34,6 +34,27 @@ interface Orphan {
   phone: string | null
 }
 
+interface CapacitySender {
+  id: string
+  alias: string | null
+  instance_name: string
+  phone_number: string
+  color: string
+  msgs_today: number
+  daily_limit: number
+  remaining: number
+  connected: boolean
+}
+
+interface CapacityStats {
+  total_today: number
+  used_today: number
+  remaining: number
+  active_connected: number
+  active_total: number
+  per_sender: CapacitySender[]
+}
+
 const COLORS = ['#84cc16', '#22d3ee', '#f97316', '#a855f7', '#ec4899', '#ef4444', '#3b82f6', '#f59e0b']
 const DAILY_LIMIT_OPTIONS = [10, 15, 20, 25, 30]
 
@@ -46,6 +67,7 @@ type AddStep = 'form' | 'qr'
 export default function SendersPage() {
   const [senders, setSenders] = useState<Sender[]>([])
   const [orphans, setOrphans] = useState<Orphan[]>([])
+  const [capacity, setCapacity] = useState<CapacityStats | null>(null)
   const [loading, setLoading] = useState(true)
 
   // Modal Add (2 pantallas)
@@ -86,14 +108,19 @@ export default function SendersPage() {
 
   const cargar = async () => {
     try {
-      const [sendersRes, orphansRes] = await Promise.all([
+      const [sendersRes, orphansRes, capacityRes] = await Promise.all([
         fetch('/api/senders'),
         fetch('/api/senders/orphans'),
+        fetch('/api/senders/capacity', { cache: 'no-store' }),
       ])
       const sendersData = await sendersRes.json()
       setSenders(Array.isArray(sendersData) ? sendersData : [])
       const orphansData = orphansRes.ok ? await orphansRes.json() : { orphans: [] }
       setOrphans(Array.isArray(orphansData?.orphans) ? orphansData.orphans : [])
+      if (capacityRes.ok) {
+        const cap = (await capacityRes.json()) as CapacityStats
+        setCapacity(cap)
+      }
     } catch (e) {
       console.error(e)
     } finally {
@@ -101,7 +128,11 @@ export default function SendersPage() {
     }
   }
 
-  useEffect(() => { cargar() }, [])
+  useEffect(() => {
+    cargar()
+    const intervalo = setInterval(cargar, 30_000)
+    return () => clearInterval(intervalo)
+  }, [])
 
   // ─── ADD FLOW ─────────────────────────────────────────────────────────
   const abrirAgregar = () => {
@@ -275,21 +306,13 @@ export default function SendersPage() {
     }
   }
 
-  // ─── Stats header ──────────────────────────────────────────────────────
-  const evolutionSenders = senders.filter(s => s.provider === 'evolution' && s.activo)
-  const totalDaily = evolutionSenders.reduce((acc, s) => acc + (s.daily_limit ?? 0), 0)
-  const usedDaily = evolutionSenders.reduce((acc, s) => acc + (s.msgs_today ?? 0), 0)
-  const connectedCount = evolutionSenders.filter(s => s.connected).length
-
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-syne font-bold text-3xl tracking-tight">Senders</h1>
           <p className="text-apex-muted text-sm mt-1 font-mono">
-            Pool de SIMs WhatsApp · Pool restante hoy: <span className="text-apex-lime">{Math.max(0, totalDaily - usedDaily)}/{totalDaily}</span>
-            {' · '}SIMs conectadas: <span className="text-apex-lime">{connectedCount}/{evolutionSenders.length}</span>
-            {' '}{Array.from({ length: connectedCount }).map((_, i) => '●').join('')}
+            Pool de SIMs WhatsApp
           </p>
         </div>
         <button
@@ -300,6 +323,43 @@ export default function SendersPage() {
           Agregar SIM
         </button>
       </div>
+
+      {/* Stats agregados del pool */}
+      {capacity && (
+        <div className="flex flex-wrap items-center gap-4 px-4 py-3 bg-apex-card border border-apex-border rounded-lg">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono uppercase tracking-wider text-apex-muted">Pool hoy</span>
+            <span className="text-lg font-syne font-bold tabular-nums">
+              <span className="text-apex-lime">{capacity.used_today}</span>
+              <span className="text-apex-muted text-sm">/</span>
+              <span>{capacity.total_today}</span>
+            </span>
+            <span className="text-xs font-mono text-apex-muted">
+              ({capacity.remaining} restantes)
+            </span>
+          </div>
+
+          <div className="h-4 w-px bg-apex-border" />
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono uppercase tracking-wider text-apex-muted">SIMs</span>
+            <span className="text-lg font-syne font-bold tabular-nums">
+              <span className="text-apex-lime">{capacity.active_connected}</span>
+              <span className="text-apex-muted text-sm">/</span>
+              <span>{capacity.active_total}</span>
+            </span>
+            <div className="flex gap-1 flex-wrap">
+              {capacity.per_sender.map(s => (
+                <div
+                  key={s.id}
+                  className={`w-2 h-2 rounded-full ${s.connected ? 'bg-apex-lime' : 'bg-red-500/50'}`}
+                  title={`${s.alias ?? s.instance_name} — ${s.connected ? 'conectada' : 'desconectada'}`}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Banda de huérfanas */}
       {orphans.length > 0 && (
@@ -418,17 +478,27 @@ export default function SendersPage() {
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between text-xs font-mono">
                       <span className="text-apex-muted">msgs hoy</span>
-                      <span className="text-white">{used}/{limit}</span>
+                      <span className="tabular-nums">
+                        <span className={used >= limit ? 'text-amber-400' : 'text-apex-lime'}>
+                          {used}
+                        </span>
+                        <span className="text-apex-muted">/{limit}</span>
+                      </span>
                     </div>
                     <div className="w-full h-2 bg-apex-border rounded-full overflow-hidden">
                       <div
                         className="h-full rounded-full transition-all"
                         style={{
                           width: `${pct}%`,
-                          background: pct >= 100 ? '#ef4444' : s.color,
+                          background: used >= limit ? '#f59e0b' : s.color,
                         }}
                       />
                     </div>
+                    {used >= limit && (
+                      <p className="text-[10px] text-amber-400/90 font-mono">
+                        Límite diario alcanzado
+                      </p>
+                    )}
                     <p className="text-[10px] text-apex-muted font-mono">
                       Actualizado: {new Date(s.updated_at).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
                     </p>

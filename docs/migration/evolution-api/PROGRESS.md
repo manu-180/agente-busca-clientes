@@ -6,9 +6,9 @@
 
 ## Estado actual
 
-**Ultima sesion completada:** SESSION-EVO-06 (2026-04-29) — Refactor cron 1-msg-per-tick con sender-pool LRU.
-**Proxima sesion:** SESSION-EVO-07 — Dashboard de capacidad UI premium
-**Siguiente prompt:** `docs/migration/evolution-api/prompts/SESSION-EVO-07.md`
+**Ultima sesion completada:** SESSION-EVO-07 (2026-04-29) — Dashboard de capacidad UI premium.
+**Proxima sesion:** SESSION-EVO-08 — Cleanup, sin tarjetita, tests E2E (última de la serie)
+**Siguiente prompt:** `docs/migration/evolution-api/prompts/SESSION-EVO-08.md`
 
 > **Re-scope 2026-04-29:** El "big bang cutover" original (EVO-04 viejo, archivado) se reemplazó por un proyecto de 5 sesiones que entrega QR onboarding premium, pool round-robin LRU, dashboard de capacidad y cleanup. Spec doc canónico: [`docs/superpowers/specs/2026-04-29-evolution-pool-design.md`](../../superpowers/specs/2026-04-29-evolution-pool-design.md).
 >
@@ -24,7 +24,7 @@
 - [x] SESSION-EVO-04 (Sonnet) · Schema pool + QR onboarding premium + helpers — **COMPLETO** (2026-04-29)
 - [x] SESSION-EVO-05 (Sonnet) · Sender pool LRU + tests round-robin — **COMPLETO** (2026-04-29)
 - [x] SESSION-EVO-06 (Opus) · Refactor cron 1-msg-per-tick — **COMPLETO** (2026-04-29)
-- [ ] SESSION-EVO-07 (Sonnet) · Dashboard de capacidad UI premium — pendiente
+- [x] SESSION-EVO-07 (Opus) · Dashboard de capacidad UI premium — **COMPLETO** (2026-04-29)
 - [ ] SESSION-EVO-08 (Sonnet) · Cleanup, sin tarjetita, tests E2E — pendiente
 
 ---
@@ -112,6 +112,31 @@
 
 **Pendiente humano:**
 - Smoke 6-tick (curl `?force=true` × 6 con dev server) — Manuel lo corre cuando tenga 2+ SIMs conectadas y leads en cola. Verificar distribución round-robin ~3/3 en `senders.msgs_today`.
+
+### SESSION-EVO-07 (2026-04-29)
+
+**Lo que se hizo:**
+- `apex-leads/src/app/api/senders/capacity/route.ts` creado — endpoint público read-only que devuelve `getCapacityStats(supabase)`. Sin auth (no expone API keys), `dynamic = 'force-dynamic'` para evitar cacheo de Vercel. Devuelve 500 con mensaje en caso de error.
+- `apex-leads/src/app/leads/nuevo/NuevoLeadClient.tsx`:
+  - Tipos `CapacitySender` y `CapacityStats` agregados.
+  - State `capacity` + función `cargarCapacity()` con polling cada 30s en paralelo a `cargarStats()`.
+  - Nuevo bloque "Capacidad del pool de SIMs" después del stats bar de cola con 2 cards: **Pool restante** (con barra de progreso lime) y **SIMs activas** (con dot-grid coloreado por estado de conexión).
+  - Nuevo bloque "Capacidad por SIM" debajo: mini-grid con barra `msgs_today/daily_limit` por sender, color del sender, opacidad reducida y label "desconectada" cuando aplica.
+- `apex-leads/src/app/senders/page.tsx`:
+  - Tipos `CapacitySender` y `CapacityStats` agregados.
+  - State `capacity` + fetch a `/api/senders/capacity` integrado en `cargar()` (paralelo a `senders` y `orphans`); polling cada 30s para mantener stats vivos.
+  - Subtítulo del header simplificado a "Pool de SIMs WhatsApp"; el strip de stats text-based (`Pool restante hoy: X/Y · SIMs conectadas: ...`) se reemplazó por una card horizontal que muestra `Pool hoy: usado/total (restantes)` + `SIMs: connected/total` con dot-grid por SIM, divisor vertical entre ambos grupos.
+  - Cards de senders Evolution: la barra `msgs_today/daily_limit` ahora pinta **ámbar** (`#f59e0b`) cuando `used >= limit` (antes pintaba rojo solo a `pct === 100`), el número de mensajes pinta lime mientras hay cupo y ámbar al alcanzar el límite, y aparece un texto "Límite diario alcanzado" cuando aplica. Eliminadas variables locales `totalDaily`/`usedDaily`/`connectedCount` (ahora vienen del endpoint).
+- Polling de capacity: 30s en ambas pantallas. La `cargarStats()` de `/leads/nuevo` mantiene su frecuencia (sigue compartiendo el mismo intervalo).
+- `tsc --noEmit` exit 0. 147/147 tests verdes (sin tests nuevos — endpoint thin wrapper sobre `getCapacityStats` ya cubierto por `__tests__/sender-pool.test.ts`).
+
+**Diferencias respecto al plan:**
+- Plan dijo "extender el stats bar (después del bloque queueStats)" con `grid-cols-2 md:grid-cols-4` reusando 2 cards existentes. En la práctica las 4 cards de queueStats (En cola / Hoy / Horario / Sistema) son ortogonales a las 2 nuevas (Pool / SIMs), así que el bloque nuevo es independiente con `grid-cols-1 md:grid-cols-2` para mantener proporción visual.
+- Plan dijo trabajar sobre `main`. Repo está en `master` (Manuel: no usa feature branches). Commit en `master`.
+- Plan dijo "agregar header con stats" en `/senders`; ese header ya existía pero text-based con backticks de `senders` array. Reemplazado por la card horizontal nueva que tira de `/api/senders/capacity` (consistente con `/leads/nuevo` y diferencia "total" en sólo SIMs conectadas).
+
+**Pendiente humano:**
+- Smoke visual con `npm run dev`: `/senders` y `/leads/nuevo` con SIMs conectadas y leads encolados. Verificar polling 30s en Network tab y comportamiento ámbar al alcanzar límite diario.
 
 ### SESSION-EVO-05 (2026-04-29)
 
