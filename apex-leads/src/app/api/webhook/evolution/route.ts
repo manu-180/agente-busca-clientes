@@ -879,38 +879,64 @@ async function procesarConLock(
 }
 
 // ─── Handler principal ─────────────────────────────────────────────────────────
+//
+// CRÍTICO: este handler DEBE responder 200 lo más rápido posible (idealmente
+// < 200 ms) y delegar todo el trabajo a `waitUntil`. Si tardamos > 10 s,
+// Evolution interpreta "cliente caído" y mata la sesión Baileys ↔ WhatsApp,
+// que fue exactamente la causa de la desconexión al primer envío de SIM 2.
+//
+// Garantías:
+// - Siempre devolvemos 200 (incluso ante errores de auth o parse): un 5xx
+//   gatilla retry storm en Evolution que también puede romper la sesión.
+// - Auth failures se loguean pero no rechazan: confiamos en que sin payload
+//   válido, el procesamiento BG no hace nada.
+// - Todo el trabajo (lookup lead, insert msg, decisión, envío respuesta) corre
+//   en `waitUntil` con catch global.
 export async function POST(req: NextRequest) {
-  // Verificar API key de Evolution API
+  // Auth: si falla, log + 200 silencioso (NO 401 — evita retry storm).
   const apiKey = req.headers.get('apikey') ?? ''
   if (process.env.NODE_ENV === 'production') {
     const expectedKey = process.env.EVOLUTION_API_KEY ?? ''
     if (!expectedKey || apiKey !== expectedKey) {
-      console.warn('[Evolution Webhook] API key inválida')
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      console.warn('[Evolution Webhook] API key inválida — descartando payload')
+      return NextResponse.json({ ok: true })
     }
   }
 
   let payload: EvolutionWebhookPayload
   try {
-    payload = await req.json() as EvolutionWebhookPayload
+    payload = (await req.json()) as EvolutionWebhookPayload
   } catch {
     return NextResponse.json({ ok: true })
   }
 
   const { event, instance: instanceName, data } = payload
 
-  // ── Manejar status updates (messages.update) ──
+  // ── Despachar todo a background con waitUntil ──
+  // El handler retorna 200 INMEDIATAMENTE y Vercel mantiene la lambda viva
+  // hasta que termine el promise pasado a waitUntil (hasta maxDuration).
   if (event === 'messages.update') {
-    const updates = Array.isArray(data) ? data as EvolutionStatusUpdate[] : [data as EvolutionStatusUpdate]
-    await handleStatusUpdates(updates)
+    const updates = Array.isArray(data)
+      ? (data as EvolutionStatusUpdate[])
+      : [data as EvolutionStatusUpdate]
+    waitUntil(
+      handleStatusUpdates(updates).catch(err =>
+        console.error('[Evolution Webhook] handleStatusUpdates error:', err)
+      )
+    )
     return NextResponse.json({ ok: true })
   }
 
-  // ── Manejar cambios de estado de la sesión Multi-Device ──
-  // Evolution emite con varios nombres según versión: connection.update, connection_update,
-  // CONNECTION_UPDATE. Normalizamos.
-  if (event === 'connection.update' || event === 'connection_update' || event === 'CONNECTION_UPDATE') {
-    await handleConnectionUpdate(instanceName, data as EvolutionConnectionUpdate)
+  if (
+    event === 'connection.update' ||
+    event === 'connection_update' ||
+    event === 'CONNECTION_UPDATE'
+  ) {
+    waitUntil(
+      handleConnectionUpdate(instanceName, data as EvolutionConnectionUpdate).catch(err =>
+        console.error('[Evolution Webhook] handleConnectionUpdate error:', err)
+      )
+    )
     return NextResponse.json({ ok: true })
   }
 
@@ -922,21 +948,47 @@ export async function POST(req: NextRequest) {
   const msgData = data as EvolutionMessageData
   const { key, message, messageType } = msgData
 
-  // Ignorar mensajes enviados por nosotros (ecos de outbound)
+  // Filtros baratos sync (no DB): ecos, grupos, JID inválido.
   if (key.fromMe) return NextResponse.json({ ok: true })
-
   const remoteJid = key.remoteJid ?? ''
-
-  // Ignorar grupos
   if (isGroupJid(remoteJid)) return NextResponse.json({ ok: true })
-
   const telefono = extractPhoneFromJid(remoteJid)
   if (!telefono) return NextResponse.json({ ok: true })
 
   const mensaje = extractMessageText(message)
   const tipoMensaje = detectarTipoMensaje(messageType)
 
-  console.log('[Evolution Webhook] From:', telefono, 'Instance:', instanceName, 'Body:', mensaje.slice(0, 80))
+  // Resto del trabajo (DB lookups, insert, decisión, envío respuesta) → BG.
+  waitUntil(
+    procesarMensajeEntrante({
+      telefono,
+      instanceName,
+      mensaje,
+      tipoMensaje,
+      messageId: key.id,
+    }).catch(err =>
+      console.error('[Evolution Webhook] procesarMensajeEntrante error:', err)
+    )
+  )
+
+  return NextResponse.json({ ok: true })
+}
+
+// ─── Procesamiento del mensaje entrante (todo en background) ──────────────────
+interface ProcesarEntranteParams {
+  telefono: string
+  instanceName: string
+  mensaje: string
+  tipoMensaje: 'texto' | 'audio' | 'imagen' | 'otro'
+  messageId: string
+}
+
+async function procesarMensajeEntrante(p: ProcesarEntranteParams): Promise<void> {
+  const { telefono, instanceName, mensaje, tipoMensaje, messageId } = p
+
+  console.log(
+    `[Evolution Webhook BG] From: ${telefono} Instance: ${instanceName} Body: ${mensaje.slice(0, 80)}`
+  )
 
   const supabase = createSupabaseServer()
 
@@ -993,7 +1045,7 @@ export async function POST(req: NextRequest) {
 
   if (!lead) {
     console.error('[Evolution] No se pudo crear/encontrar lead')
-    return NextResponse.json({ ok: true })
+    return
   }
 
   // Anclar sender al lead si corresponde
@@ -1018,7 +1070,7 @@ export async function POST(req: NextRequest) {
       leido: false,
       sender_id: senderId,
       media_url: null,
-      twilio_message_sid: key.id,
+      twilio_message_sid: messageId,
     })
     .select('id, timestamp')
     .single()
@@ -1029,7 +1081,9 @@ export async function POST(req: NextRequest) {
     await supabase.from('leads').update({ estado: 'respondio' }).eq('id', lead.id)
   }
 
-  // ── Procesamiento en background ──
+  // ── Procesamiento conversacional + envío respuesta en background ──
+  // Todo este bloque ya corre dentro del waitUntil del handler POST, así que
+  // simplemente lo encadenamos aquí (no hace falta otro waitUntil anidado).
   const bgParams: BgParams = {
     telefono,
     instanceName,
@@ -1042,13 +1096,7 @@ export async function POST(req: NextRequest) {
     miMsgTimestamp,
   }
 
-  waitUntil(
-    procesarEnBackground(bgParams).catch(err => {
-      console.error('[Evolution] Error no capturado en procesarEnBackground:', err)
-    })
-  )
-
-  return NextResponse.json({ ok: true })
+  await procesarEnBackground(bgParams)
 }
 
 // ── Manejo de status updates ───────────────────────────────────────────────────

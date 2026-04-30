@@ -16,7 +16,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
-import { fetchAllInstances } from '@/lib/evolution-instance'
+import { fetchAllInstances, restartInstance } from '@/lib/evolution-instance'
 import { updateHealthCheck } from '@/lib/sender-pool'
 
 export const dynamic = 'force-dynamic'
@@ -30,7 +30,23 @@ interface SenderRow {
   instance_name: string
   connected: boolean
   phone_number: string | null
+  disconnected_at: string | null
+  disconnection_reason: string | null
 }
+
+// Si una instancia está close/connecting por más de este threshold, intentamos
+// `restartInstance` automáticamente (sin necesidad de re-escanear QR — la cuenta
+// sigue vinculada en el celular). Manuel reportó que tras un envío la sesión
+// se cae, pero apretar "Reconectar QR" la levanta sin re-escanear: este cron
+// hace ese paso solo.
+const AUTO_RESTART_THRESHOLD_MS = 3 * 60_000
+
+// Razones de desconexión que NO se recuperan con restart (requieren QR humano).
+// Si el sender tiene una de éstas, no intentamos auto-restart.
+const REASONS_REQUIRING_QR = new Set<string>([
+  'device_removed',  // 401 Baileys: cuenta eliminada del celular
+  'health_check_instance_missing',  // la instance ni existe en Evolution
+])
 
 function authCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
@@ -46,6 +62,7 @@ interface SyncResult {
   next_connected: boolean
   changed: boolean
   reason: string | null
+  auto_restart_triggered: boolean
 }
 
 async function syncOne(
@@ -71,6 +88,40 @@ async function syncOne(
     phoneNumber: evoPhone,
   })
 
+  // ── Auto-restart ──
+  // Si la instancia lleva > AUTO_RESTART_THRESHOLD_MS caída y la razón NO es
+  // device_removed (que requiere QR humano), disparamos `restartInstance` para
+  // que Evolution intente reconectar el WebSocket. La cuenta sigue vinculada
+  // en el celular, así que con reabrir el socket alcanza.
+  let auto_restart_triggered = false
+  if (!next_connected && evoState != null) {
+    // Calcular cuánto lleva caída. Si `disconnected_at` está NULL pero `connected=false`
+    // (ej: arranque del sistema), lo consideramos "caído desde ahora" y NO restart en
+    // este tick (esperamos al próximo).
+    const downSinceMs = sender.disconnected_at
+      ? Date.now() - new Date(sender.disconnected_at).getTime()
+      : 0
+
+    const reasonExistente = sender.disconnection_reason ?? reason ?? ''
+    const recoverable = !REASONS_REQUIRING_QR.has(reasonExistente)
+
+    if (recoverable && downSinceMs >= AUTO_RESTART_THRESHOLD_MS) {
+      try {
+        await restartInstance(sender.instance_name)
+        auto_restart_triggered = true
+        console.log(
+          `[health-evolution] auto-restart disparado: ${sender.alias ?? sender.instance_name} ` +
+          `(down ${Math.floor(downSinceMs / 1000)}s, reason=${reasonExistente || 'unknown'})`
+        )
+      } catch (err) {
+        console.error(
+          `[health-evolution] auto-restart falló para ${sender.instance_name}:`,
+          err instanceof Error ? err.message : err
+        )
+      }
+    }
+  }
+
   return {
     instance_name: sender.instance_name,
     alias: sender.alias,
@@ -79,6 +130,7 @@ async function syncOne(
     next_connected,
     changed,
     reason,
+    auto_restart_triggered,
   }
 }
 
@@ -86,7 +138,7 @@ async function runHealthCheck(supabase: SupabaseClient) {
   // 1. Cargar todos los senders Evolution activos.
   const { data: senders, error } = await supabase
     .from('senders')
-    .select('id, alias, instance_name, connected, phone_number')
+    .select('id, alias, instance_name, connected, phone_number, disconnected_at, disconnection_reason')
     .eq('provider', 'evolution')
     .eq('activo', true)
     .order('created_at', { ascending: true })
@@ -124,15 +176,23 @@ async function runHealthCheck(supabase: SupabaseClient) {
           next_connected: s.connected,
           changed: false,
           reason: `sync_error: ${err instanceof Error ? err.message : String(err)}`,
+          auto_restart_triggered: false,
         }))
     })
   )
 
   const transitions = results.filter(r => r.changed)
+  const restarts = results.filter(r => r.auto_restart_triggered)
   if (transitions.length > 0) {
     console.log(
       `[health-evolution] ${transitions.length} transición(es): ` +
       transitions.map(t => `${t.alias ?? t.instance_name}:${t.prev_connected}→${t.next_connected}(${t.reason ?? 'open'})`).join(', ')
+    )
+  }
+  if (restarts.length > 0) {
+    console.log(
+      `[health-evolution] ${restarts.length} auto-restart(s): ` +
+      restarts.map(r => r.alias ?? r.instance_name).join(', ')
     )
   }
 
@@ -140,6 +200,7 @@ async function runHealthCheck(supabase: SupabaseClient) {
     ok: true,
     checked: results.length,
     transitions: transitions.length,
+    auto_restarts: restarts.length,
     results,
   }
 }

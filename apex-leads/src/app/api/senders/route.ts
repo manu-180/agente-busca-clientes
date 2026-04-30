@@ -4,6 +4,7 @@ import {
   buildWebhookUrl,
   createInstance,
   deleteInstance,
+  logoutInstance,
   slugifyAlias,
 } from '@/lib/evolution-instance'
 
@@ -142,6 +143,19 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'sin campos válidos para actualizar' }, { status: 400 })
   }
 
+  // Si vamos a desactivar el sender (activo: false), primero leemos el estado
+  // actual para decidir si hay que cerrar la instancia en Evolution.
+  type PrevSender = { activo: boolean; provider: string; instance_name: string | null }
+  let prev: PrevSender | null = null
+  if (Object.prototype.hasOwnProperty.call(safe, 'activo') && safe.activo === false) {
+    const { data } = await supabase
+      .from('senders')
+      .select('activo, provider, instance_name')
+      .eq('id', id)
+      .maybeSingle()
+    prev = (data as PrevSender | null) ?? null
+  }
+
   const { data, error } = await supabase
     .from('senders')
     .update(safe)
@@ -149,6 +163,26 @@ export async function PATCH(req: NextRequest) {
     .select()
     .single()
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // Cleanup post-update: si pasamos de activo=true a activo=false en una
+  // instancia Evolution, hacemos logout para liberar el WebSocket Baileys ↔
+  // WhatsApp. NO usamos deleteInstance (perdería la sesión y requeriría QR
+  // si Manuel quisiera reactivarla). logout solo cierra el socket; con un
+  // restart la cuenta vuelve sin re-escanear.
+  if (
+    prev &&
+    prev.activo === true &&
+    prev.provider === 'evolution' &&
+    prev.instance_name
+  ) {
+    try {
+      await logoutInstance(prev.instance_name)
+      console.log(`[PATCH /api/senders] logout post-deactivate: ${prev.instance_name}`)
+    } catch (err) {
+      console.warn(`[PATCH /api/senders] logoutInstance falló (no bloqueamos):`, err)
+    }
+  }
+
   return NextResponse.json(data)
 }
 
@@ -161,8 +195,26 @@ export async function DELETE(req: NextRequest) {
 
   if (!hard) {
     // Soft delete: marca activo=false. Preserva FK con conversaciones/leads.
+    // También cerramos el WebSocket en Evolution (logout) para que la instance
+    // no compita por slot de Multi-Device. La cuenta sigue vinculada en el
+    // celular — si Manuel reactiva, basta con restartInstance.
+    const { data: sender } = await supabase
+      .from('senders')
+      .select('provider, instance_name')
+      .eq('id', id)
+      .maybeSingle()
+
     const { error } = await supabase.from('senders').update({ activo: false }).eq('id', id)
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    if (sender?.provider === 'evolution' && sender.instance_name) {
+      try {
+        await logoutInstance(sender.instance_name)
+      } catch (err) {
+        console.warn(`[DELETE /api/senders soft] logoutInstance falló (no bloqueamos):`, err)
+      }
+    }
+
     return NextResponse.json({ ok: true, mode: 'soft' })
   }
 
