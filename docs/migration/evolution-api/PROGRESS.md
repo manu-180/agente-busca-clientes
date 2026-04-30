@@ -6,13 +6,10 @@
 
 ## Estado actual
 
-**Ultima sesion completada:** SESSION-EVO-07 (2026-04-29) — Dashboard de capacidad UI premium.
-**Proxima sesion:** SESSION-EVO-08 — Cleanup, sin tarjetita, tests E2E (última de la serie)
-**Siguiente prompt:** `docs/migration/evolution-api/prompts/SESSION-EVO-08.md`
+**Ultima sesion completada:** SESSION-EVO-08 (2026-04-29) — cleanup, sin tarjetita, tests E2E.
+**Proxima sesion:** ninguna — proyecto Pool & QR completo. Migración Twilio→Evolution finalizada con UX premium.
 
 > **Re-scope 2026-04-29:** El "big bang cutover" original (EVO-04 viejo, archivado) se reemplazó por un proyecto de 5 sesiones que entrega QR onboarding premium, pool round-robin LRU, dashboard de capacidad y cleanup. Spec doc canónico: [`docs/superpowers/specs/2026-04-29-evolution-pool-design.md`](../../superpowers/specs/2026-04-29-evolution-pool-design.md).
->
-> **Pre-requisitos para EVO-04:** Manuel debe confirmar que `DATABASE_ENABLED=true` en Railway está aplicado y redeployado (cambio hecho 2026-04-29 21:12 ART, falta confirmar redeploy).
 
 ---
 
@@ -25,7 +22,7 @@
 - [x] SESSION-EVO-05 (Sonnet) · Sender pool LRU + tests round-robin — **COMPLETO** (2026-04-29)
 - [x] SESSION-EVO-06 (Opus) · Refactor cron 1-msg-per-tick — **COMPLETO** (2026-04-29)
 - [x] SESSION-EVO-07 (Opus) · Dashboard de capacidad UI premium — **COMPLETO** (2026-04-29)
-- [ ] SESSION-EVO-08 (Sonnet) · Cleanup, sin tarjetita, tests E2E — pendiente
+- [x] SESSION-EVO-08 (Opus) · Cleanup, sin tarjetita, tests E2E — **COMPLETO** (2026-04-29)
 
 ---
 
@@ -112,6 +109,46 @@
 
 **Pendiente humano:**
 - Smoke 6-tick (curl `?force=true` × 6 con dev server) — Manuel lo corre cuando tenga 2+ SIMs conectadas y leads en cola. Verificar distribución round-robin ~3/3 en `senders.msgs_today`.
+
+### SESSION-EVO-08 (2026-04-29)
+
+**Lo que se hizo:**
+- **TASK 1 — Mensaje sin tarjetita:** verificación. `construirMensajePrimerContacto` en `apex-leads/src/app/api/cron/leads-pendientes/route.ts` ya no contenía 💳/cuotas/$ desde EVO-02. Confirmado por inspección. No requirió cambios.
+- **TASK 2 — Cleanup deuda técnica:**
+  - `apex-leads/supabase-migration-cleanup-evolution-old-keys.sql` creado con `DELETE FROM configuracion WHERE clave LIKE '%_primer_enviados_hoy' OR clave LIKE '%_primer_next_slot_at'`. Las claves `${instance}_primer_fallos` se mantienen — siguen usándose como contador de fallos consecutivos del sender.
+  - **Helpers deprecated eliminados** del cron route (líneas 60-88 originales): `TZ_OFFSET_HOURS_AR`, `fechaArHoy`, `leerConfigDeprecated`, `escribirConfigDeprecated`, `leerDailyCountDeprecated`, `incrementarDailyCountDeprecated` y los `void` de supresión. Código muerto: ~28 líneas + comentarios. Rollback queda vía `git revert`.
+  - `lib/` revisado — no había archivos huérfanos relacionados con el contador viejo. `TZ_OFFSET_HOURS_AR` aún existe localmente en `apex-leads/src/app/api/leads/queue-stats/route.ts` (no relacionado, otro uso).
+- **TASK 3 — Test E2E QR flow:** `apex-leads/e2e/sender-qr-flow.spec.ts` creado siguiendo el patrón de `admin-ig.spec.ts` (cookie `apex_auth` set en `beforeEach`). Mocks de Playwright `page.route()` para todos los endpoints `/api/senders*` (capacity, orphans, list, POST create, qr, state polling con escalada `connecting`→`open` tras 3 polls). Selectors actualizados a la UI real: botón `Agregar SIM`, placeholder `Ej: SIM 01`, alt `QR de conexión`, toast `SIM conectada`.
+- **TASK 4 — PROGRESS.md final:** este bloque + guías "post-proyecto" al final del documento.
+
+**Diferencias respecto al plan:**
+- Plan dijo "Aplicar via MCP Supabase". Las MCP de Supabase disponibles en esta sesión NO tienen acceso al project `hpbxscfbnhspeckdmkvu` (acceso restringido). La migración SQL queda en archivo listo para que Manuel la corra manualmente. Es un DELETE de 4 filas obsoletas, no bloquea ningún código.
+- TASK 1 fue solo verificación (no requirió edición). El template ya estaba sin precio desde EVO-02.
+- Helpers deprecated eliminados completamente (eran la base del rollback fallback de EVO-06). Spec EVO-08 lo pedía explícitamente.
+
+**Pendientes humanos:**
+- Aplicar `apex-leads/supabase-migration-cleanup-evolution-old-keys.sql` en Supabase (vía dashboard o SQL editor del project `hpbxscfbnhspeckdmkvu`). Verificar con `SELECT * FROM configuracion WHERE clave LIKE '%enviados_hoy' OR clave LIKE '%next_slot_at';` → debe devolver 0 filas.
+- Correr el test E2E (requiere `npm install` reciente y dev server arriba): `cd apex-leads && npx playwright test sender-qr-flow.spec.ts`. El test usa mocks así que no necesita Supabase ni Evolution API real.
+
+---
+
+## Cómo agregar una SIM nueva (post-proyecto)
+
+1. Ir a `https://leads.theapexweb.com/senders`.
+2. Click "Agregar SIM".
+3. Escribir alias (ej. "SIM 03"), elegir `daily_limit` (default 15), click "Conectar SIM".
+4. Escanear el QR con WhatsApp del celular: Configuración → Dispositivos vinculados → Vincular dispositivo.
+5. Listo — la SIM entra en el pool automáticamente y el cron empieza a usarla en el próximo tick.
+
+## Cómo cambiar el mensaje predefinido
+
+Editar `construirMensajePrimerContacto` en `apex-leads/src/app/api/cron/leads-pendientes/route.ts`. Commit + push a `master` → Vercel auto-deploy. ~5 min.
+
+## Cómo cambiar el daily_limit de una SIM
+
+Click "Editar" en la card del sender en `/senders` → cambiar `daily_limit` → guardar. Toma efecto en el próximo tick del cron.
+
+---
 
 ### SESSION-EVO-07 (2026-04-29)
 

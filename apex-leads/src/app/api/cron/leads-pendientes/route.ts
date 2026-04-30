@@ -57,36 +57,6 @@ function authCron(req: NextRequest): boolean {
   return req.headers.get('authorization') === `Bearer ${secret}`
 }
 
-// ─── DEPRECATED helpers (rollback fallback hasta EVO-08) ──────────────
-// El nuevo cron usa `senders.msgs_today` (sender-pool) en vez de leer/escribir
-// `${instance}_primer_enviados_hoy` en tabla `configuracion`. Estas funciones se
-// dejan importadas para poder hacer rollback rápido a la lógica vieja sin un
-// nuevo deploy. Se borran en EVO-08.
-const TZ_OFFSET_HOURS_AR = -3
-function fechaArHoy(): string {
-  const ar = new Date(Date.now() + TZ_OFFSET_HOURS_AR * 3600_000)
-  return ar.toISOString().slice(0, 10)
-}
-async function leerConfigDeprecated(sup: SupabaseClient, clave: string, def: string): Promise<string> {
-  const { data } = await sup.from('configuracion').select('valor').eq('clave', clave).maybeSingle()
-  return data?.valor ?? def
-}
-async function escribirConfigDeprecated(sup: SupabaseClient, clave: string, valor: string) {
-  await sup.from('configuracion').upsert({ clave, valor }, { onConflict: 'clave' })
-}
-async function leerDailyCountDeprecated(sup: SupabaseClient, key: string): Promise<number> {
-  const raw = await leerConfigDeprecated(sup, `${key}_primer_enviados_hoy`, `0|1970-01-01`)
-  const [countStr, fecha] = raw.split('|')
-  return fecha === fechaArHoy() ? (parseInt(countStr, 10) || 0) : 0
-}
-async function incrementarDailyCountDeprecated(sup: SupabaseClient, key: string, actual: number) {
-  await escribirConfigDeprecated(sup, `${key}_primer_enviados_hoy`, `${actual + 1}|${fechaArHoy()}`)
-}
-// Suprime warnings de "unused" — son intencionales, las usaríamos en rollback.
-void leerDailyCountDeprecated
-void incrementarDailyCountDeprecated
-// ─── /DEPRECATED helpers ──────────────────────────────────────────────
-
 function construirMensajePrimerContacto(lead: LeadColaRow): string {
   const rating = extraerRatingParaPlantilla(lead.descripcion)
   const demoHost = resolveWhatsAppDemoHost(lead.rubro, lead.descripcion)
