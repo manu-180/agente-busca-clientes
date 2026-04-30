@@ -6,18 +6,26 @@
 
 ## Estado actual
 
-**Ultima sesion completada:** SESSION-EVO-02 + EVO-03 (2026-04-28) — core lib, webhook, callers migrados. Twilio eliminado del código.
-**Proxima sesion:** SESSION-EVO-04 — Big bang cutover a producción
-**Siguiente prompt:** `docs/migration/evolution-api/prompts/SESSION-EVO-04.md`
+**Ultima sesion completada:** SESSION-EVO-04 (2026-04-29) — schema pool + QR onboarding premium + helpers Evolution.
+**Proxima sesion:** SESSION-EVO-05 — Sender pool LRU + tests round-robin
+**Siguiente prompt:** `docs/migration/evolution-api/prompts/SESSION-EVO-05.md`
+
+> **Re-scope 2026-04-29:** El "big bang cutover" original (EVO-04 viejo, archivado) se reemplazó por un proyecto de 5 sesiones que entrega QR onboarding premium, pool round-robin LRU, dashboard de capacidad y cleanup. Spec doc canónico: [`docs/superpowers/specs/2026-04-29-evolution-pool-design.md`](../../superpowers/specs/2026-04-29-evolution-pool-design.md).
+>
+> **Pre-requisitos para EVO-04:** Manuel debe confirmar que `DATABASE_ENABLED=true` en Railway está aplicado y redeployado (cambio hecho 2026-04-29 21:12 ART, falta confirmar redeploy).
 
 ---
 
 ## Progreso por sesion
 
-- [ ] SESSION-EVO-01 (Sonnet) · Infra Railway: deploy Evolution API + primera instancia QR — **DEFERIDO** (espera SIMs)
+- [x] SESSION-EVO-01 (Sonnet) · Infra Railway — **HECHO MANUALMENTE por Manuel** (Evolution API en `https://evolution-api-production-3571.up.railway.app`, instancia `wa-sim01` creada sin escanear). Prompt original archivado en `prompts/_archived/`.
 - [x] SESSION-EVO-02 (Sonnet) · Core lib `evolution.ts` + webhook route + Supabase schema — **COMPLETO** (2026-04-28)
 - [x] SESSION-EVO-03 (Sonnet) · Callers + cleanup Twilio — **COMPLETO** (2026-04-28, combinado con EVO-02)
-- [ ] SESSION-EVO-04 (Opus) · Big bang cutover — produccion
+- [x] SESSION-EVO-04 (Sonnet) · Schema pool + QR onboarding premium + helpers — **COMPLETO** (2026-04-29)
+- [ ] SESSION-EVO-05 (Sonnet) · Sender pool LRU + tests round-robin — pendiente
+- [ ] SESSION-EVO-06 (Sonnet) · Refactor cron 1-msg-per-tick — pendiente
+- [ ] SESSION-EVO-07 (Sonnet) · Dashboard de capacidad UI premium — pendiente
+- [ ] SESSION-EVO-08 (Sonnet) · Cleanup, sin tarjetita, tests E2E — pendiente
 
 ---
 
@@ -54,6 +62,37 @@
 - `conversaciones/media/route.ts` actualizado — proxy Evolution API con `apikey`, retorna 410 para URLs Twilio legacy.
 - Archivos eliminados: `lib/twilio.ts`, `webhook/twilio/route.ts`, `webhook/twilio-status/route.ts`.
 - `tsc --noEmit` verificado — cero errores nuevos (todos los errores pre-existentes de worktree sin `node_modules`).
+
+### SESSION-EVO-04 (2026-04-29)
+
+**Lo que se hizo:**
+- Migración SQL aplicada vía MCP Supabase (project `hpbxscfbnhspeckdmkvu`, name `evolution_pool_session_evo_04`):
+  - CHECK constraint de `senders.provider` actualizado para permitir `'evolution'` (antes solo `'twilio'`/`'wassenger'` — esto **no estaba en el plan original** y bloqueaba todos los inserts).
+  - 7 columnas nuevas: `daily_limit` (default 15), `msgs_today` (default 0), `last_reset_date`, `last_sent_at`, `connected` (default false), `connected_at`, `qr_requested_at`.
+  - Índice parcial `idx_senders_pool_lookup` para `selectNextSender` LRU.
+- `apex-leads/supabase-migration-evolution-pool.sql` guardado como registro local de la migración.
+- `apex-leads/src/lib/evolution-instance.ts` creado con helpers: `createInstance`, `connectInstance`, `getInstanceState`, `restartInstance`, `logoutInstance`, `deleteInstance`, `fetchAllInstances`, `fetchPhoneNumber`, `setWebhook`, `buildWebhookUrl`, `slugifyAlias`. Maneja ambos formatos de respuesta del QR (`{ base64, code }` y `{ qrcode: { base64, code } }`).
+- 5 API routes nuevos:
+  - `GET /api/senders/[id]/qr` — connect + reintento con restart si llega `count:0` sin base64.
+  - `GET /api/senders/[id]/state` — connectionState; auto-marca `connected=true` y completa `phone_number` si llega `open`.
+  - `POST /api/senders/[id]/reconnect` — restart + connect; baja `connected=false` y marca `qr_requested_at`.
+  - `GET /api/senders/orphans` — cruza `fetchAllInstances` con DB. `DELETE ?name=` para purgar instancias huérfanas.
+  - `POST /api/senders/adopt` — importa una instancia huérfana como sender + reconfigura webhook.
+- `POST /api/senders` modificado — provider 'evolution' por default, autoslugifica alias → `wa-...`, autocrea la instancia en Evolution con webhook configurado, hace cleanup best-effort si falla el insert.
+- `DELETE /api/senders` modificado — soft por default (`activo=false`); `?hard=true` solo si no hay convs/leads referenciando el sender, y borra la instancia en Evolution si era 'evolution'.
+- `PATCH /api/senders` modificado — whitelist de campos editables incluye `daily_limit`.
+- UI premium en `apex-leads/src/app/senders/page.tsx`:
+  - Stats header con pool restante hoy (`totalDaily - usedDaily`) y SIMs conectadas.
+  - Banda amarilla de huérfanas con botones Adoptar / Borrar.
+  - Modal Add 2 pantallas — pantalla 1 (alias + límite + color) → POST `/api/senders` → pantalla 2 (`<QRConnectModal>`).
+  - `<QRConnectModal>` reutilizable: trae QR vía API, countdown 40s, botón Regenerar al caducar, polling de `/state` cada 2s, animación check verde + toast cuando llega `open`.
+  - Cards de senders Evolution con badge `connected` / `disconnected`, instance_name, barra `msgs hoy: X/Y`, botón "Reconectar QR" cuando está disconnected.
+  - Modal Edit ahora soporta `daily_limit` para senders Evolution.
+  - Toast bottom-right para feedback de adopción/reconexión.
+- `tsc --noEmit` exit 0 (limpio).
+- **Smoke físico (escaneo QR con celular) queda para Manuel** — código y endpoints listos, falta confirmar el round-trip completo abriendo `/senders` localmente o en producción.
+
+**Decisión no en el plan:** se agregó `'evolution'` al CHECK de `provider` en la migración. El plan asumía que ya existía pero la DB seguía con `['twilio','wassenger']`.
 
 ---
 
@@ -94,10 +133,34 @@ EVOLUTION_API_KEY=<secret>
 
 ## Bloqueos / pendientes humanos
 
-- Manuel tiene 2 SIM cards disponibles. Conectar via QR en SESSION-EVO-04.
-- Decidir `daily_limit` por instancia antes de SESSION-EVO-04 (sugerencia: 15-20 msgs/dia para empezar).
-- Ejecutar `supabase-migration-evolution-api.sql` en Supabase antes del cutover.
-- Insertar filas de senders en Supabase con los datos reales de cada SIM.
+- **✅ RESUELTO 2026-04-29 22:51 ART: Railway healthy.** Diagnóstico completo: la imagen `atendai/evolution-api:latest` está abandonada desde feb 2025 (clavada en v2.2.3 con Baileys `2,3000,1015901307` que WhatsApp ya no acepta — handshake fallaba silencioso, nunca generaba QR). Solución aplicada: cambio de imagen Docker en Railway de `atendai/evolution-api:latest` a `evoapicloud/evolution-api:v2.3.7` (repo oficial, última estable de dic 2025). QR ahora se genera al primer intento. Instancia `wa-sim01` queda en Railway huérfana (sin escanear) lista para que EVO-04 la adopte desde la UI premium.
+- **Estado tabla `senders` (verificado vía MCP 2026-04-29):** 4 senders todos `provider='twilio'`, ninguno con `instance_name`. El cron Evolution no está enviando nada (filtra `provider='evolution'`). Cuando EVO-04 adopte `wa-sim01`, será el primer sender Evolution real.
+- **Limpieza Twilio aplicada 2026-04-29 22:42 ART (vía MCP):**
+  - `new apex` → DELETE (sin convs/leads).
+  - `APEX` (1060 convs, 42 leads) → `activo=false` (FK preservada).
+  - `APEX 2` (2570 convs, 82 leads) → `activo=false` (FK preservada).
+  - `Assistify Respaldo` (653 convs) → `activo=false` (estaba activo, ya no).
+  - Si en algún momento Manuel quiere hard-delete de los 3 inactivos: requiere primero `UPDATE conversaciones SET sender_id=NULL WHERE sender_id IN (...)` y `UPDATE leads SET sender_id=NULL WHERE sender_id IN (...)`. NO urgente.
+- Manuel tiene 2 SIM cards disponibles. Conectar via QR en SESSION-EVO-04 (ahora desde la UI premium nueva, no manualmente).
+- `daily_limit` por sender se decide al agregar cada SIM en la UI (default 15, Manuel pondrá 20 a una específica).
+- Ejecutar `supabase-migration-evolution-api.sql` (la vieja, EVO-02) ya estaba; la nueva `supabase-migration-evolution-pool.sql` se ejecuta dentro de SESSION-EVO-04 vía MCP Supabase.
+
+## Decisiones de diseño SESSION-EVO-04..08 (re-scope 2026-04-29)
+
+Resumen alto nivel — detalle completo en el spec doc.
+
+| # | Decisión | Razón |
+|---|---|---|
+| 1 | Cron + round-robin LRU (1 msg/tick) | Distribuye carga, evita rate-limit por número. |
+| 2 | Algoritmo: `ORDER BY msgs_today ASC, last_sent_at ASC NULLS FIRST` | Cumple el patrón 1A→1B→1C→2A. |
+| 3 | Onboarding QR premium automático (1 input: alias) | UX premium, cero fricción técnica. |
+| 4 | Adopción automática de `wa-sim01` | No perder la instancia ya creada. |
+| 5 | Mensaje hardcoded sin tarjetita 💳 | Manuel prefiere editar en código cuando quiera cambiar. |
+| 6 | Reset diario 00:00 ART, idempotente | Alineado con ventana 7-21 ART. |
+| 7 | Daily limit editable per-sender desde modal | 15 default + 20 para una SIM específica. |
+| 8 | Sender disconnect: 10-fallos + badge UI + Reconectar | Aprovecha lógica que ya funciona. |
+| 9 | Soft delete por default | Preserva FK con conversaciones.sender_id. |
+| 10 | Dashboard capacidad en `/leads/nuevo` y `/senders` | Visibilidad donde Manuel ya trabaja. |
 
 ---
 
