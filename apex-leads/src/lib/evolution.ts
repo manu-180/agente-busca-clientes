@@ -1,5 +1,10 @@
 import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
 
+// Re-export del tipo del pool para que callers (cron, dashboard) puedan
+// importar `PoolSender` desde `lib/evolution.ts` sin tirar de `lib/sender-pool.ts`
+// (evita imports cíclicos cuando el pool importe del cron en el futuro).
+export type { PoolSender } from './sender-pool'
+
 export type EvolutionSender = {
   id: string
   alias: string | null

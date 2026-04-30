@@ -6,9 +6,9 @@
 
 ## Estado actual
 
-**Ultima sesion completada:** SESSION-EVO-04 (2026-04-29) — schema pool + QR onboarding premium + helpers Evolution.
-**Proxima sesion:** SESSION-EVO-05 — Sender pool LRU + tests round-robin
-**Siguiente prompt:** `docs/migration/evolution-api/prompts/SESSION-EVO-05.md`
+**Ultima sesion completada:** SESSION-EVO-05 (2026-04-29) — sender-pool LRU + tests round-robin.
+**Proxima sesion:** SESSION-EVO-06 — Refactor cron 1-msg-per-tick
+**Siguiente prompt:** `docs/migration/evolution-api/prompts/SESSION-EVO-06.md`
 
 > **Re-scope 2026-04-29:** El "big bang cutover" original (EVO-04 viejo, archivado) se reemplazó por un proyecto de 5 sesiones que entrega QR onboarding premium, pool round-robin LRU, dashboard de capacidad y cleanup. Spec doc canónico: [`docs/superpowers/specs/2026-04-29-evolution-pool-design.md`](../../superpowers/specs/2026-04-29-evolution-pool-design.md).
 >
@@ -22,7 +22,7 @@
 - [x] SESSION-EVO-02 (Sonnet) · Core lib `evolution.ts` + webhook route + Supabase schema — **COMPLETO** (2026-04-28)
 - [x] SESSION-EVO-03 (Sonnet) · Callers + cleanup Twilio — **COMPLETO** (2026-04-28, combinado con EVO-02)
 - [x] SESSION-EVO-04 (Sonnet) · Schema pool + QR onboarding premium + helpers — **COMPLETO** (2026-04-29)
-- [ ] SESSION-EVO-05 (Sonnet) · Sender pool LRU + tests round-robin — pendiente
+- [x] SESSION-EVO-05 (Sonnet) · Sender pool LRU + tests round-robin — **COMPLETO** (2026-04-29)
 - [ ] SESSION-EVO-06 (Sonnet) · Refactor cron 1-msg-per-tick — pendiente
 - [ ] SESSION-EVO-07 (Sonnet) · Dashboard de capacidad UI premium — pendiente
 - [ ] SESSION-EVO-08 (Sonnet) · Cleanup, sin tarjetita, tests E2E — pendiente
@@ -93,6 +93,26 @@
 - **Smoke físico (escaneo QR con celular) queda para Manuel** — código y endpoints listos, falta confirmar el round-trip completo abriendo `/senders` localmente o en producción.
 
 **Decisión no en el plan:** se agregó `'evolution'` al CHECK de `provider` en la migración. El plan asumía que ya existía pero la DB seguía con `['twilio','wassenger']`.
+
+### SESSION-EVO-05 (2026-04-29)
+
+**Lo que se hizo:**
+- `apex-leads/src/lib/sender-pool.ts` creado — funciones puras sobre Supabase, sin estado interno:
+  - `selectNextSender(supabase)` — query LRU `ORDER BY msgs_today ASC, last_sent_at ASC NULLS FIRST LIMIT 1`. Filtra `msgs_today < daily_limit` en JS porque PostgREST no soporta comparaciones columna-columna; el orden se aplica en SQL y se confirma en JS para tener resultados estables aunque el mock ignore `.order()`.
+  - `incrementMsgsToday(supabase, senderId)` — UPDATE atómico con optimistic concurrency: lee `msgs_today` actual, hace UPDATE filtrado por `eq('msgs_today', current)` para que solo gane uno entre crons concurrentes. Devuelve `false` si la fila no fue actualizada (race, sender al límite, desconectado o inactivo).
+  - `resetDailyCountersIfNeeded(supabase)` — UPDATE bulk con `.or('last_reset_date.is.null,last_reset_date.lt.{today_AR}')`. Idempotente.
+  - `getCapacityStats(supabase)` — una query a `senders WHERE provider='evolution' AND activo=true ORDER BY created_at`, agregaciones en JS. Devuelve `{ total_today, used_today, remaining, active_connected, active_total, per_sender[] }`.
+  - `markDisconnected(supabase, senderId)` — UPDATE `connected=false`. Llamado por EVO-06 tras 10 fallos.
+  - `todayInArgentina(date?)` exportado — helper público para sincronizar reset/UI con la zona AR vía `Intl.DateTimeFormat('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' })`.
+- `apex-leads/src/lib/evolution.ts` re-exporta `PoolSender` para que el cron en EVO-06 importe del módulo de transporte sin tirar de `sender-pool.ts` directamente (evita imports cíclicos).
+- Tests unitarios (`apex-leads/__tests__/sender-pool.test.ts`, 23 casos): cubren `selectNextSender` (vacío/al-límite/menor-msgs-today/empate-LRU/NULLS-FIRST/error), `incrementMsgsToday` (disponible/al-límite/no-existe/disconnected/inactivo/race), `resetDailyCountersIfNeeded` (call shape, idempotencia, error), `getCapacityStats` (suma, exclusión de disconnected, lista vacía, no-negativo), `markDisconnected` (call shape, error), `todayInArgentina` (shape, frontera UTC→AR).
+- Smoke round-robin (`apex-leads/__tests__/sender-pool-roundrobin.test.ts`, 3 casos): mock Supabase in-memory backed por array mutable. 30 ticks con 3 SIMs (15/15/20) reparten 10/10/10. Cuando una SIM se desconecta a los 9 ticks, las otras dos absorben sin saltar turnos. Pool agotado retorna null.
+- Total: 26/26 tests del pool verdes, 147/147 tests del repo verdes, `tsc --noEmit` exit 0.
+
+**Decisiones técnicas no en el plan original:**
+- En lugar de `WHERE msgs_today < daily_limit` en SQL puro (no soportado por PostgREST), se hace optimistic concurrency en `incrementMsgsToday` con `eq('msgs_today', currentValue)`. Race-safe equivalente al UPDATE atómico del plan.
+- `last_sent_at` en el round-robin test se sustituye al apply-time del UPDATE en el mock para tener orden monotónico determinista sin mockear el global `Date` (que provocaba recursión infinita).
+- Re-orden defensivo en JS dentro de `selectNextSender` después del SQL `ORDER BY` — barato (n<10) y blindea contra mocks que ignoran `.order()`.
 
 ---
 
