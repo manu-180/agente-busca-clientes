@@ -894,11 +894,20 @@ async function procesarConLock(
 //   en `waitUntil` con catch global.
 export async function POST(req: NextRequest) {
   // Auth: si falla, log + 200 silencioso (NO 401 — evita retry storm).
+  //
+  // Usamos EVOLUTION_WEBHOOK_SECRET (separado del API key de salida) porque
+  // algunas deployments de Evolution en Railway no envían auth header en webhooks,
+  // o envían un valor distinto al EVOLUTION_API_KEY.
+  //
+  // Si EVOLUTION_WEBHOOK_SECRET no está seteado → aceptamos todo (URL como token).
+  // Si está seteado → validamos estrictamente contra él.
   const apiKey = req.headers.get('apikey') ?? ''
   if (process.env.NODE_ENV === 'production') {
-    const expectedKey = process.env.EVOLUTION_API_KEY ?? ''
-    if (!expectedKey || apiKey !== expectedKey) {
-      console.warn('[Evolution Webhook] API key inválida — descartando payload')
+    const webhookSecret = process.env.EVOLUTION_WEBHOOK_SECRET ?? ''
+    if (webhookSecret && apiKey !== webhookSecret) {
+      console.warn(
+        `[Evolution Webhook] API key inválida (recv="${apiKey.slice(0, 8) || '(vacío)'}") — descartando payload`
+      )
       return NextResponse.json({ ok: true })
     }
   }
