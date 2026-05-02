@@ -37,7 +37,11 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     } else if (state === 'close' && sender.connected) {
       await supabase
         .from('senders')
-        .update({ connected: false })
+        .update({
+          connected: false,
+          disconnected_at: new Date().toISOString(),
+          disconnection_reason: 'state_poll_close',
+        })
         .eq('id', sender.id)
     }
 

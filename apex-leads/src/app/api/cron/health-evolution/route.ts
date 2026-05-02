@@ -71,13 +71,38 @@ async function syncOne(
   evoState: string | null,
   evoPhone: string | null
 ): Promise<SyncResult> {
+  // 'connecting' es transitorio: puede ser un escaneo QR en curso o un auto-reconnect
+  // de Baileys. Llamar restartInstance aquí mataría la reconexión activa. Llamar
+  // updateHealthCheck(connected: false) resetearía disconnected_at, rompiendo el
+  // threshold de auto-restart. Solo actualizamos health_checked_at y salimos.
+  if (evoState === 'connecting') {
+    await supabase
+      .from('senders')
+      .update({ health_checked_at: new Date().toISOString() })
+      .eq('id', sender.id)
+    return {
+      instance_name: sender.instance_name,
+      alias: sender.alias,
+      prev_connected: sender.connected,
+      evo_state: 'connecting',
+      next_connected: sender.connected,
+      changed: false,
+      reason: null,
+      auto_restart_triggered: false,
+    }
+  }
+
   const next_connected = evoState === 'open'
   const changed = next_connected !== sender.connected
 
+  // Solo actualizamos reason/disconnected_at en la primera detección (transición
+  // de estado o primera vez que vemos disconnected_at=null). En re-confirmaciones
+  // preservamos el timestamp original para que el threshold de auto-restart funcione.
+  const isFirstDetect = !next_connected && (changed || sender.disconnected_at === null)
+
   let reason: string | null = null
-  if (!next_connected) {
+  if (!next_connected && isFirstDetect) {
     if (evoState === 'close') reason = 'health_check_close'
-    else if (evoState === 'connecting') reason = 'health_check_connecting'
     else if (evoState == null) reason = 'health_check_instance_missing'
     else reason = `health_check_${evoState}`
   }
@@ -86,6 +111,7 @@ async function syncOne(
     connected: next_connected,
     reason,
     phoneNumber: evoPhone,
+    preserveDisconnectedAt: !next_connected && !isFirstDetect,
   })
 
   // ── Auto-restart ──

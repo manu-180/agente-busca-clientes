@@ -374,7 +374,17 @@ export async function resetSendFailures(
 export async function updateHealthCheck(
   supabase: SupabaseClient,
   senderId: string,
-  opts: { connected?: boolean; reason?: string | null; phoneNumber?: string | null }
+  opts: {
+    connected?: boolean
+    reason?: string | null
+    phoneNumber?: string | null
+    /**
+     * Si true, no sobreescribimos `disconnected_at` ni `disconnection_reason`.
+     * Útil en re-confirmaciones (sender ya estaba disconnected) para preservar
+     * el timestamp original y que el threshold de auto-restart funcione.
+     */
+    preserveDisconnectedAt?: boolean
+  }
 ): Promise<void> {
   const update: Record<string, unknown> = {
     health_checked_at: new Date().toISOString(),
@@ -387,8 +397,13 @@ export async function updateHealthCheck(
     update.consecutive_send_failures = 0
   } else if (opts.connected === false) {
     update.connected = false
-    if (opts.reason) update.disconnection_reason = opts.reason
-    update.disconnected_at = new Date().toISOString()
+    if (!opts.preserveDisconnectedAt) {
+      // Primera detección de desconexión: setear timestamp y reason.
+      // Re-confirmaciones usan preserveDisconnectedAt=true para mantener el
+      // timestamp original — sin eso, el threshold de auto-restart nunca llega.
+      if (opts.reason) update.disconnection_reason = opts.reason
+      update.disconnected_at = new Date().toISOString()
+    }
   }
   if (opts.phoneNumber) update.phone_number = opts.phoneNumber
 
