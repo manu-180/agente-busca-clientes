@@ -1142,17 +1142,25 @@ async function handleStatusUpdates(updates: EvolutionStatusUpdate[]) {
 // de estado. Es la fuente de verdad MÁS RÁPIDA para detectar caídas — antes
 // de que el cron health-check corra, antes de que un envío falle.
 //
-// Mapeo de statusReason (códigos Baileys):
-//   401 → device_removed: la cuenta fue eliminada en el celular principal.
-//          La sesión Multi-Device está muerta. Hay que rescaneer QR.
-//   409 → conflict: otra sesión Multi-Device tomó el lugar (ej: WhatsApp Web).
-//   408 → timeout: red caída entre Evolution y WhatsApp.
+// Mapeo de statusReason (códigos Baileys / DisconnectReason):
+//   401 → device_removed: cuenta eliminada en el celular. Requiere QR.
+//   408 → timeout: red caída entre Evolution y WhatsApp. Baileys reintenta.
+//   409 → conflict: otra sesión Multi-Device tomó el lugar (ej: WA Web en browser).
+//   428 → connection_closed: WA server cerró el WebSocket (no el celular).
+//          Baileys reintenta automáticamente — NO requiere QR ni restart manual.
+//          Puede indicar rate-limit o sesión temporalmente inválida.
+//   440 → connection_replaced: otro cliente WA tomó la sesión
+//          (la app del celular estaba abierta, o un restartInstance creó
+//          una nueva conexión Baileys matando la anterior). Requiere acción
+//          humana: desvincular dispositivos en el celular y re-scanear QR.
 //   500 → unavailable: problema interno de WhatsApp.
-//   restart_required → necesita reinicio manual.
+//   503 → service_unavailable: servicio temporalmente no disponible.
 const STATUS_REASON_MAP: Record<number, string> = {
   401: 'device_removed',
   408: 'timeout',
   409: 'conflict',
+  428: 'connection_closed',
+  440: 'connection_replaced',
   500: 'unavailable',
   503: 'service_unavailable',
 }

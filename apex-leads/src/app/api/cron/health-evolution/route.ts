@@ -39,13 +39,23 @@ interface SenderRow {
 // sigue vinculada en el celular). Manuel reportó que tras un envío la sesión
 // se cae, pero apretar "Reconectar QR" la levanta sin re-escanear: este cron
 // hace ese paso solo.
-const AUTO_RESTART_THRESHOLD_MS = 3 * 60_000
+//
+// 8 min (vs 3 min anterior): Baileys tiene su propio loop de reconexión para el
+// código 428 (connectionClosed). Hacer restart antes de que Baileys termine de
+// reconectar genera una nueva conexión que mata la anterior → código 440
+// (connectionReplaced), empeorando el loop. Con 8 min le damos tiempo a
+// Baileys de resolver solo antes de intervenir.
+const AUTO_RESTART_THRESHOLD_MS = 8 * 60_000
 
 // Razones de desconexión que NO se recuperan con restart (requieren QR humano).
 // Si el sender tiene una de éstas, no intentamos auto-restart.
 const REASONS_REQUIRING_QR = new Set<string>([
-  'device_removed',  // 401 Baileys: cuenta eliminada del celular
+  'device_removed',           // 401: cuenta eliminada del celular
   'health_check_instance_missing',  // la instance ni existe en Evolution
+  'connection_replaced',      // 440: otro cliente WA tomó la sesión.
+                              //  Restart crearía OTRA conexión que también sería
+                              //  reemplazada. Requiere desvincular dispositivos
+                              //  en el celular y re-scanear QR.
 ])
 
 function authCron(req: NextRequest): boolean {
