@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
-import { connectInstance, restartInstance } from '@/lib/evolution-instance'
+import { connectInstance, logoutInstance } from '@/lib/evolution-instance'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,11 +19,16 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
   }
 
   try {
+    // Logout primero para limpiar el estado Baileys viejo.
+    // Sin esto, Evolution puede tener múltiples conexiones Baileys activas
+    // que se pisan entre sí generando código 440 (connectionReplaced) en loop.
     try {
-      await restartInstance(sender.instance_name)
+      await logoutInstance(sender.instance_name)
     } catch (err) {
-      console.warn('[reconnect] restart fallo (ignorado):', err)
+      console.warn('[reconnect] logout fallo (ignorado):', err)
     }
+    // Pausa breve para que Evolution termine de limpiar antes de pedir QR.
+    await new Promise(r => setTimeout(r, 1500))
     const qr = await connectInstance(sender.instance_name)
 
     await supabase
