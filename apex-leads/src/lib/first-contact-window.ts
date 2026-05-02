@@ -2,8 +2,8 @@
  * Ventana de envío de primer contacto (WhatsApp / Twilio) en hora Argentina.
  * Misma regla en cron `leads-pendientes`, `queue-stats` y copy de UI.
  */
-export const PRIMER_CONTACTO_HORA_INICIO_AR = 9
-export const PRIMER_CONTACTO_HORA_FIN_AR = 18
+export const PRIMER_CONTACTO_HORA_INICIO_AR = 0   // TEST: sin límite horario
+export const PRIMER_CONTACTO_HORA_FIN_AR = 24      // TEST: sin límite horario
 
 // Argentina = UTC-3, sin DST. Usamos aritmética UTC pura para evitar
 // inconsistencias de Intl.DateTimeFormat en distintos runtimes de Node.js.
