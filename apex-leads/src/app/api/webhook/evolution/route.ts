@@ -1178,9 +1178,8 @@ async function handleConnectionUpdate(
     payload?.lastDisconnect?.error?.output?.statusCode ??
     null
 
-  console.log(
-    `[Evolution Webhook] connection.update instance=${instanceName} state=${state} statusCode=${statusCode}`
-  )
+  // Formato corto primero para que el preview truncado del MCP muestre lo útil.
+  console.log(`[EvoWH] ${state} code=${statusCode} inst=${instanceName}`)
 
   // Buscar el sender correspondiente.
   const { data: sender } = await supabase
