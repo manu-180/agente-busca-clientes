@@ -119,7 +119,7 @@ export async function searchBusinesses(
   zona: string,
   signal?: AbortSignal
 ): Promise<OsmBusiness[]> {
-  const bbox = await geocodeZona(zona);
+  const bbox = await geocodeZona(zona, signal);
   const filters = rubroToOsmTags(rubro);
   const query = buildQuery(filters, bbox);
 

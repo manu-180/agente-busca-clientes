@@ -21,6 +21,7 @@ import {
   PAISES_HISPANOHABLANTES,
 } from '@/lib/locations-ar'
 import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
+import { searchBusinesses } from '@/lib/overpass/query'
 
 const TODAS_LOCALIDADES = '__TODAS__'
 const TODAS_PROVINCIAS = '__TODAS_PROVINCIAS__'
@@ -199,13 +200,47 @@ export default function NuevoLeadClient() {
   }
 
   useEffect(() => {
-    cargarStats()
-    cargarCapacity()
-    const intervalo = setInterval(() => {
+    let intervalo: ReturnType<typeof setInterval> | null = null
+
+    const tick = () => {
       cargarStats()
       cargarCapacity()
-    }, 30_000)
-    return () => clearInterval(intervalo)
+    }
+
+    const arrancar = () => {
+      if (intervalo) return
+      // 2 min en vez de 30s (4× menos invocations a Vercel).
+      intervalo = setInterval(tick, 120_000)
+    }
+    const parar = () => {
+      if (!intervalo) return
+      clearInterval(intervalo)
+      intervalo = null
+    }
+
+    const onVisibility = () => {
+      if (typeof document === 'undefined') return
+      if (document.hidden) {
+        parar()
+      } else {
+        // Al volver a la pestaña, refresca enseguida y reanuda el ciclo.
+        tick()
+        arrancar()
+      }
+    }
+
+    tick()
+    arrancar()
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility)
+    }
+
+    return () => {
+      parar()
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility)
+      }
+    }
   }, [])
 
   async function parseApiError(res: Response, fallback: string) {
@@ -221,15 +256,47 @@ export default function NuevoLeadClient() {
     zonaLocal: string,
     signal?: AbortSignal
   ): Promise<ResultadoBusquedaLead[]> {
-    const response = await fetch('/api/leads/buscar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ rubro, zona: zonaLocal }),
-      signal,
-    })
-    if (!response.ok) return []
-    const data = await response.json()
-    return Array.isArray(data?.resultados) ? data.resultados : []
+    // Llamamos directamente a Nominatim+Overpass desde el navegador (CORS-friendly).
+    // Antes pegábamos a /api/leads/buscar por cada localidad → 49+ invocations
+    // a Vercel por sesión. Ahora son 0 hasta el final, donde un solo POST a
+    // /api/leads/check-duplicates filtra los teléfonos ya registrados.
+    try {
+      const lista = await searchBusinesses(rubro, zonaLocal, signal)
+      return lista.map((l) => ({
+        ...l,
+        ya_registrado: false,
+      }))
+    } catch (err) {
+      if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+        throw err
+      }
+      // Una localidad fallida no debe romper la sesión completa.
+      return []
+    }
+  }
+
+  async function marcarDuplicados(
+    leads: LeadCardState[]
+  ): Promise<LeadCardState[]> {
+    const tels = Array.from(new Set(leads.map((l) => l.telefono).filter(Boolean)))
+    if (tels.length === 0) return leads
+    try {
+      const res = await fetch('/api/leads/check-duplicates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telefonos: tels }),
+      })
+      if (!res.ok) return leads
+      const data = await res.json()
+      const existentes = new Set<string>(
+        Array.isArray(data?.existentes) ? data.existentes : []
+      )
+      return leads
+        .map((l) => ({ ...l, ya_registrado: existentes.has(l.telefono) }))
+        .filter((l) => !l.ya_registrado)
+    } catch {
+      return leads
+    }
   }
 
   function detenerBusqueda() {
@@ -391,22 +458,16 @@ export default function NuevoLeadClient() {
         await Promise.all(Array.from({ length: workers }, (_, slotIdx) => workerParalelo(slotIdx)))
         acumulados = acum.filas
       } else {
-        const response = await fetch('/api/leads/buscar', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ rubro, zona }),
-          signal,
-        })
+        // Búsqueda en una sola localidad — también desde el navegador.
+        const lista = await searchBusinesses(rubro, zona, signal)
+        acumulados = lista.map((lead) => ({ ...lead, ya_registrado: false, zona }))
+        setResultados(acumulados)
+      }
 
-        if (!response.ok) {
-          const msg = await parseApiError(response, 'No se pudieron obtener resultados.')
-          throw new Error(msg)
-        }
-
-        const data = await response.json()
-        const lista: ResultadoBusquedaLead[] = Array.isArray(data?.resultados) ? data.resultados : []
-
-        acumulados = lista.map((lead) => ({ ...lead, zona }))
+      // Filtro de duplicados único, al final, contra Supabase (1 sola invocation).
+      if (acumulados.length > 0 && !detenerBusquedaRef.current) {
+        const limpios = await marcarDuplicados(acumulados)
+        acumulados = limpios
         setResultados(acumulados)
       }
 
