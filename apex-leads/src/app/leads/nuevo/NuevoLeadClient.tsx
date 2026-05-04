@@ -26,10 +26,10 @@ const TODAS_LOCALIDADES = '__TODAS__'
 const TODAS_PROVINCIAS = '__TODAS_PROVINCIAS__'
 
 const OPCIONES_CONCURRENCIA = [
-  { valor: 1, etiqueta: '1 — secuencial' },
+  { valor: 1, etiqueta: '1 — secuencial (más estable)' },
+  { valor: 2, etiqueta: '2 — recomendado' },
   { valor: 3, etiqueta: '3 — suave' },
-  { valor: 5, etiqueta: '5 — normal' },
-  { valor: 8, etiqueta: '8 — agresivo' },
+  { valor: 5, etiqueta: '5 — agresivo (puede bloquear Overpass)' },
 ] as const
 
 /** Orden fijo de arrays en `locations-ar`: primero → último, o inverso. */
@@ -118,7 +118,7 @@ export default function NuevoLeadClient() {
   const [progresoLocalidad, setProgresoLocalidad] = useState('')
   const [slotsParalelo, setSlotsParalelo] = useState<WorkerSlotVisual[]>([])
   const [detenidoPorUsuario, setDetenidoPorUsuario] = useState(false)
-  const [concurrenciaBusqueda, setConcurrenciaBusqueda] = useState(5)
+  const [concurrenciaBusqueda, setConcurrenciaBusqueda] = useState(2)
   const [ordenRecorrido, setOrdenRecorrido] = useState<'listado' | 'inverso'>('listado')
 
   const detenerBusquedaRef = useRef(false)
@@ -742,8 +742,8 @@ export default function NuevoLeadClient() {
                 Concurrencia
               </label>
               <p className="text-[11px] text-apex-muted mb-1.5">
-                Toda la provincia o todo el país: varias búsquedas en paralelo (máx. 8). Más grupos, más
-                carga a la API.
+                Toda la provincia o todo el país: varias búsquedas en paralelo. Overpass (OSM) es público
+                y puede bloquear si hay demasiada carga; 2 es lo más estable.
               </p>
               <select
                 value={concurrenciaBusqueda}

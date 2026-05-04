@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { searchBusinesses } from '@/lib/overpass/query'
 
+export const maxDuration = 30
+export const runtime = 'nodejs'
+
 function normalizarTelefono(telefono: string | null | undefined): string {
   if (!telefono) return ''
   return telefono.replace(/\D/g, '')
@@ -49,6 +52,7 @@ export async function POST(req: NextRequest) {
       candidatos = await searchBusinesses(rubro, zona)
     } catch (err) {
       const mensaje = err instanceof Error ? err.message : 'Error desconocido'
+      console.error('[buscar] Overpass/Nominatim falló', { rubro, zona, mensaje })
       return NextResponse.json({ error: `No se pudo buscar en Overpass: ${mensaje}` }, { status: 502 })
     }
 
@@ -74,7 +78,9 @@ export async function POST(req: NextRequest) {
       .filter((item) => !item.ya_registrado)
 
     return NextResponse.json({ resultados })
-  } catch {
+  } catch (err) {
+    const mensaje = err instanceof Error ? err.message : 'Error desconocido'
+    console.error('[buscar] Error inesperado', mensaje)
     return NextResponse.json({ error: 'No se pudo buscar negocios.' }, { status: 500 })
   }
 }
