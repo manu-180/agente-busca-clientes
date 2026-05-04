@@ -16,3 +16,5 @@ railway-cron-pinger/.venv/
 railway-cron-pinger/env/
 
 .vercel
+
+.env*.local
