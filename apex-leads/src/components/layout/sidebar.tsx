@@ -27,6 +27,7 @@ export function Sidebar() {
   const pathname = usePathname()
   const [open, setOpen] = useState(false)
   const [unreadTotal, setUnreadTotal] = useState(0)
+  const [simInactiveCount, setSimInactiveCount] = useState<number | null>(null)
 
   useEffect(() => {
     const fetchUnread = async () => {
@@ -40,6 +41,24 @@ export function Sidebar() {
     const interval = setInterval(fetchUnread, 30000)
     return () => clearInterval(interval)
   }, [pathname])
+
+  useEffect(() => {
+    const fetchSimStatus = async () => {
+      try {
+        const res = await fetch('/api/senders')
+        const data = await res.json()
+        if (!Array.isArray(data)) return
+        const simSenders = data.filter((s: { alias: string }) =>
+          s.alias?.toLowerCase().includes('sim')
+        )
+        const inactive = simSenders.filter((s: { activo: boolean }) => !s.activo).length
+        setSimInactiveCount(inactive)
+      } catch {}
+    }
+    fetchSimStatus()
+    const interval = setInterval(fetchSimStatus, 30000)
+    return () => clearInterval(interval)
+  }, [])
 
   return (
     <>
@@ -86,6 +105,13 @@ export function Sidebar() {
           {navItems.map((item) => {
             const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
             const badgeCount = item.showBadge ? unreadTotal : 0
+            const isSenders = item.href === '/senders'
+            const simDotColor =
+              simInactiveCount === null
+                ? null
+                : simInactiveCount === 0
+                ? 'bg-emerald-400'
+                : 'bg-red-500'
             return (
               <Link
                 key={item.href}
@@ -100,6 +126,16 @@ export function Sidebar() {
               >
                 <item.icon size={18} />
                 <span className="flex-1">{item.label}</span>
+                {isSenders && simDotColor && (
+                  simInactiveCount! > 1 ? (
+                    <span className="flex items-center gap-1">
+                      <span className={`w-2 h-2 rounded-full ${simDotColor} shrink-0`} />
+                      <span className="text-[10px] font-bold text-red-400">{simInactiveCount}</span>
+                    </span>
+                  ) : (
+                    <span className={`w-2 h-2 rounded-full ${simDotColor} shrink-0`} />
+                  )
+                )}
                 {badgeCount > 0 && (
                   <span className="bg-red-500 text-white text-[10px] font-bold min-w-[20px] h-5 px-1 rounded-full flex items-center justify-center">
                     {badgeCount > 99 ? '99+' : badgeCount}
