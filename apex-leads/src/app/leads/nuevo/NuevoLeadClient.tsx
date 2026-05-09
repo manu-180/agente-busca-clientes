@@ -13,6 +13,9 @@ import {
   Clock,
   Square,
   Layers,
+  KeyRound,
+  AlertTriangle,
+  Zap,
 } from 'lucide-react'
 import { ResultadoBusquedaLead } from '@/types'
 import {
@@ -20,8 +23,13 @@ import {
   getInitialSeleccionArgentina,
   PAISES_HISPANOHABLANTES,
 } from '@/lib/locations-ar'
+import {
+  contarLocalidadesPais,
+  contarPrincipalesPais,
+  contarPrincipalesProvincia,
+  filtrarPrincipales,
+} from '@/lib/localidades-principales-ar'
 import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
-import { searchBusinesses } from '@/lib/overpass/query'
 
 const TODAS_LOCALIDADES = '__TODAS__'
 const TODAS_PROVINCIAS = '__TODAS_PROVINCIAS__'
@@ -30,7 +38,7 @@ const OPCIONES_CONCURRENCIA = [
   { valor: 1, etiqueta: '1 — secuencial (más estable)' },
   { valor: 2, etiqueta: '2 — recomendado' },
   { valor: 3, etiqueta: '3 — suave' },
-  { valor: 5, etiqueta: '5 — agresivo (puede bloquear Overpass)' },
+  { valor: 5, etiqueta: '5 — agresivo (puede saturar QPM)' },
 ] as const
 
 /** Orden fijo de arrays en `locations-ar`: primero → último, o inverso. */
@@ -45,6 +53,7 @@ interface LeadCardState extends ResultadoBusquedaLead {
 
 interface ApiErrorResponse {
   error?: string
+  quota_exhausted?: boolean
 }
 
 interface QueueStats {
@@ -82,6 +91,24 @@ interface CapacityStats {
   per_sender: CapacitySender[]
 }
 
+interface PlacesKeyStatus {
+  label: string
+  configured: boolean
+  suffix: string | null
+  used: number
+  quota: number
+  exhausted: boolean
+  active: boolean
+  last_used_at: string | null
+  last_error: string | null
+  last_error_at: string | null
+}
+
+interface PlacesKeysSnapshot {
+  month: string
+  keys: PlacesKeyStatus[]
+}
+
 type EstadoWorkerVisual = 'espera' | 'activo' | 'hecho' | 'pausa'
 
 interface WorkerSlotVisual {
@@ -90,11 +117,25 @@ interface WorkerSlotVisual {
   label: string
 }
 
+interface BuscarResponse {
+  resultados: ResultadoBusquedaLead[]
+  key_label?: string
+  key_used?: number
+  key_quota?: number
+}
+
 function buildDescripcion(lead: ResultadoBusquedaLead) {
   const rating = Number.isFinite(lead.rating) ? lead.rating.toFixed(1) : '0.0'
   const reviews = Number.isFinite(lead.cantidad_reviews) ? lead.cantidad_reviews : 0
 
   return `Rating: ${rating}/5 (${reviews} reviews). ${lead.tiene_web && lead.url_web ? `Tiene web: ${lead.url_web}` : 'No tiene sitio web'}. Dirección: ${lead.direccion}`
+}
+
+function pctColor(pct: number, exhausted: boolean): string {
+  if (exhausted) return 'bg-red-500'
+  if (pct >= 95) return 'bg-red-500'
+  if (pct >= 70) return 'bg-amber-400'
+  return 'bg-apex-lime'
 }
 
 export default function NuevoLeadClient() {
@@ -112,6 +153,7 @@ export default function NuevoLeadClient() {
   const [errorBusqueda, setErrorBusqueda] = useState<string | null>(null)
   const [queueStats, setQueueStats] = useState<QueueStats | null>(null)
   const [capacity, setCapacity] = useState<CapacityStats | null>(null)
+  const [placesKeys, setPlacesKeys] = useState<PlacesKeysSnapshot | null>(null)
   const [ultimoResultadoCola, setUltimoResultadoCola] = useState<QueueResult | null>(null)
 
   const [progresoActual, setProgresoActual] = useState(0)
@@ -121,6 +163,7 @@ export default function NuevoLeadClient() {
   const [detenidoPorUsuario, setDetenidoPorUsuario] = useState(false)
   const [concurrenciaBusqueda, setConcurrenciaBusqueda] = useState(2)
   const [ordenRecorrido, setOrdenRecorrido] = useState<'listado' | 'inverso'>('listado')
+  const [modoEficiencia, setModoEficiencia] = useState(true)
 
   const detenerBusquedaRef = useRef(false)
   const abortBusquedaRef = useRef<AbortController | null>(null)
@@ -143,19 +186,79 @@ export default function NuevoLeadClient() {
   const esModoProvincia = localidadNombre === TODAS_LOCALIDADES && !esModoTodasProvincias
 
   const totalLocalidadesPais = useMemo(
-    () => paisSeleccionado.provincias.reduce((n, p) => n + p.localidades.length, 0),
+    () => contarLocalidadesPais(paisSeleccionado),
     [paisSeleccionado]
   )
+
+  const totalPrincipalesPais = useMemo(
+    () => contarPrincipalesPais(paisSeleccionado),
+    [paisSeleccionado]
+  )
+
+  const totalPrincipalesProvincia = useMemo(
+    () => (provinciaSeleccionada ? contarPrincipalesProvincia(provinciaSeleccionada) : 0),
+    [provinciaSeleccionada]
+  )
+
+  // Si el filtro no reduce nada (provincia o país sin datos curados), el modo
+  // eficiencia es un no-op: lo informamos en la UI para no confundir al usuario.
+  const filtroAportaAhorro = useMemo(() => {
+    if (esModoTodasProvincias) return totalPrincipalesPais < totalLocalidadesPais
+    if (esModoProvincia && provinciaSeleccionada)
+      return totalPrincipalesProvincia < provinciaSeleccionada.localidades.length
+    return false
+  }, [
+    esModoTodasProvincias,
+    esModoProvincia,
+    provinciaSeleccionada,
+    totalPrincipalesPais,
+    totalLocalidadesPais,
+    totalPrincipalesProvincia,
+  ])
+
+  const placesKeysResumen = useMemo(() => {
+    if (!placesKeys) return null
+    const configuradas = placesKeys.keys.filter((k) => k.configured)
+    if (configuradas.length === 0) {
+      return { configuradas: 0, restantesGlobales: 0, agotadas: 0, sinKeys: true as const }
+    }
+    const totalUsado = configuradas.reduce((s, k) => s + k.used, 0)
+    const totalQuota = configuradas.reduce((s, k) => s + k.quota, 0)
+    const agotadas = configuradas.filter((k) => k.exhausted).length
+    return {
+      configuradas: configuradas.length,
+      totalUsado,
+      totalQuota,
+      restantesGlobales: Math.max(0, totalQuota - totalUsado),
+      agotadas,
+      sinKeys: false as const,
+    }
+  }, [placesKeys])
+
+  const sinKeysDisponibles = useMemo(() => {
+    if (!placesKeys) return false
+    const configuradas = placesKeys.keys.filter((k) => k.configured)
+    return configuradas.length > 0 && configuradas.every((k) => k.exhausted)
+  }, [placesKeys])
 
   const puedeBuscar = useMemo(
     () =>
       rubro.trim().length > 0 &&
       !buscando &&
       !encolando &&
+      !sinKeysDisponibles &&
       (esModoTodasProvincias ||
         esModoProvincia ||
         (localidadNombre.trim().length > 0 && localidadNombre !== TODAS_LOCALIDADES)),
-    [rubro, localidadNombre, buscando, encolando, esModoTodasProvincias, esModoProvincia]
+    [
+      rubro,
+      localidadNombre,
+      buscando,
+      encolando,
+      esModoTodasProvincias,
+      esModoProvincia,
+      sinKeysDisponibles,
+    ]
   )
 
   const zona = useMemo(
@@ -199,12 +302,25 @@ export default function NuevoLeadClient() {
     }
   }
 
+  async function cargarPlacesKeys() {
+    try {
+      const res = await fetch('/api/leads/places-keys', { cache: 'no-store' })
+      if (res.ok) {
+        const data = (await res.json()) as PlacesKeysSnapshot
+        setPlacesKeys(data)
+      }
+    } catch {
+      // silencioso, no es crítico
+    }
+  }
+
   useEffect(() => {
     let intervalo: ReturnType<typeof setInterval> | null = null
 
     const tick = () => {
       cargarStats()
       cargarCapacity()
+      cargarPlacesKeys()
     }
 
     const arrancar = () => {
@@ -243,35 +359,42 @@ export default function NuevoLeadClient() {
     }
   }, [])
 
-  async function parseApiError(res: Response, fallback: string) {
+  async function parseApiError(res: Response, fallback: string): Promise<{ msg: string; quota: boolean }> {
     try {
       const data = (await res.json()) as ApiErrorResponse
-      return data.error || fallback
+      return { msg: data.error || fallback, quota: Boolean(data.quota_exhausted) }
     } catch {
-      return fallback
+      return { msg: fallback, quota: false }
     }
   }
 
   async function buscarEnLocalidad(
     zonaLocal: string,
     signal?: AbortSignal
-  ): Promise<ResultadoBusquedaLead[]> {
-    // Llamamos directamente a Nominatim+Overpass desde el navegador (CORS-friendly).
-    // Antes pegábamos a /api/leads/buscar por cada localidad → 49+ invocations
-    // a Vercel por sesión. Ahora son 0 hasta el final, donde un solo POST a
-    // /api/leads/check-duplicates filtra los teléfonos ya registrados.
+  ): Promise<{ leads: ResultadoBusquedaLead[]; quotaExhausted: boolean }> {
     try {
-      const lista = await searchBusinesses(rubro, zonaLocal, signal)
-      return lista.map((l) => ({
-        ...l,
-        ya_registrado: false,
-      }))
+      const res = await fetch('/api/leads/buscar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rubro, zona: zonaLocal }),
+        signal,
+      })
+      if (!res.ok) {
+        const { quota } = await parseApiError(res, 'Error buscando negocios.')
+        // Si Google reporta cuota agotada GLOBAL → cortamos toda la sesión.
+        if (quota || res.status === 429) {
+          return { leads: [], quotaExhausted: true }
+        }
+        return { leads: [], quotaExhausted: false }
+      }
+      const data = (await res.json()) as BuscarResponse
+      return { leads: data.resultados ?? [], quotaExhausted: false }
     } catch (err) {
       if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
         throw err
       }
       // Una localidad fallida no debe romper la sesión completa.
-      return []
+      return { leads: [], quotaExhausted: false }
     }
   }
 
@@ -329,7 +452,7 @@ export default function NuevoLeadClient() {
     })
 
     if (!res.ok) {
-      const msg = await parseApiError(res, 'No se pudo encolar leads.')
+      const { msg } = await parseApiError(res, 'No se pudo encolar leads.')
       throw new Error(msg)
     }
 
@@ -357,6 +480,7 @@ export default function NuevoLeadClient() {
     setSlotsParalelo([])
 
     let detenidoManual = false
+    let cuotaAgotadaGlobal = false
 
     try {
       let acumulados: LeadCardState[] = []
@@ -369,8 +493,11 @@ export default function NuevoLeadClient() {
           const provs = [...paisSeleccionado.provincias]
           if (ordenRecorrido === 'inverso') provs.reverse()
           for (const prov of provs) {
+            const fuenteLocs = modoEficiencia
+              ? filtrarPrincipales(prov.nombre, prov.localidades)
+              : prov.localidades
             const locs =
-              ordenRecorrido === 'inverso' ? [...prov.localidades].reverse() : prov.localidades
+              ordenRecorrido === 'inverso' ? [...fuenteLocs].reverse() : fuenteLocs
             for (const loc of locs) {
               tareas.push({
                 zonaLocal: `${loc.nombre}, ${prov.nombre}, ${paisSeleccionado.nombre}`,
@@ -380,7 +507,9 @@ export default function NuevoLeadClient() {
           }
         } else {
           const provSel = provinciaSeleccionada ?? paisSeleccionado.provincias[0]
-          const baseLocs = provSel.localidades || []
+          const baseLocs = modoEficiencia
+            ? filtrarPrincipales(provSel.nombre, provSel.localidades || [])
+            : provSel.localidades || []
           const locs = ordenRecorrido === 'inverso' ? [...baseLocs].reverse() : baseLocs
           for (const loc of locs) {
             tareas.push({
@@ -429,9 +558,14 @@ export default function NuevoLeadClient() {
             actualizarSlot(slotIdx, { estado: 'activo', label: t.progresoLabel })
             setProgresoLocalidad(t.progresoLabel)
             try {
-              const lista = await buscarEnLocalidad(t.zonaLocal, signal)
+              const { leads, quotaExhausted } = await buscarEnLocalidad(t.zonaLocal, signal)
+              if (quotaExhausted) {
+                cuotaAgotadaGlobal = true
+                detenerBusquedaRef.current = true
+                break
+              }
               if (detenerBusquedaRef.current) break
-              for (const lead of lista) {
+              for (const lead of leads) {
                 if (lead.telefono && !acum.telefonos.has(lead.telefono)) {
                   acum.telefonos.add(lead.telefono)
                   acum.filas.push({ ...lead, zona: t.zonaLocal })
@@ -458,9 +592,12 @@ export default function NuevoLeadClient() {
         await Promise.all(Array.from({ length: workers }, (_, slotIdx) => workerParalelo(slotIdx)))
         acumulados = acum.filas
       } else {
-        // Búsqueda en una sola localidad — también desde el navegador.
-        const lista = await searchBusinesses(rubro, zona, signal)
-        acumulados = lista.map((lead) => ({ ...lead, ya_registrado: false, zona }))
+        // Búsqueda en una sola localidad — vía API server-side.
+        const { leads, quotaExhausted } = await buscarEnLocalidad(zona, signal)
+        if (quotaExhausted) {
+          cuotaAgotadaGlobal = true
+        }
+        acumulados = leads.map((lead) => ({ ...lead, ya_registrado: false, zona }))
         setResultados(acumulados)
       }
 
@@ -471,10 +608,16 @@ export default function NuevoLeadClient() {
         setResultados(acumulados)
       }
 
-      detenidoManual = detenerBusquedaRef.current
+      detenidoManual = detenerBusquedaRef.current && !cuotaAgotadaGlobal
       setDetenidoPorUsuario(detenidoManual)
       detenerBusquedaRef.current = false
       abortBusquedaRef.current = null
+
+      if (cuotaAgotadaGlobal) {
+        setErrorBusqueda(
+          'Cuota mensual gratuita agotada en todas las API keys de Google Places. Sumá otra clave en una env var GOOGLE_PLACES_API_KEY_N o esperá al primer día del próximo mes (hora del Pacífico).',
+        )
+      }
 
       // Encolar automáticamente (también si detuviste a mitad: todo lo hallado hasta ahora)
       if (acumulados.length > 0) {
@@ -506,6 +649,8 @@ export default function NuevoLeadClient() {
       setSlotsParalelo([])
       detenerBusquedaRef.current = false
       abortBusquedaRef.current = null
+      // Refresca el panel de keys: el contador del mes acaba de subir.
+      cargarPlacesKeys()
     }
   }
 
@@ -583,6 +728,162 @@ export default function NuevoLeadClient() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Panel de API keys de Google Places — cuota mensual gratuita por key */}
+      {placesKeys && (
+        <section className="bg-apex-card/80 border border-apex-border rounded-xl p-5 sm:p-6 space-y-4 backdrop-blur-sm">
+          <header className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <KeyRound size={16} className="text-apex-lime shrink-0" />
+                <h2 className="font-syne font-semibold text-base sm:text-lg">
+                  Google Places — cuota mensual
+                </h2>
+              </div>
+              <p className="text-xs text-apex-muted mt-1.5 leading-relaxed">
+                Mes <span className="text-white font-mono tabular-nums">{placesKeys.month}</span> · 1.000
+                búsquedas gratis por key (Text Search Enterprise). Sumá más keys con{' '}
+                <code className="text-apex-lime/90 font-mono">GOOGLE_PLACES_API_KEY_2</code>,{' '}
+                <code className="text-apex-lime/90 font-mono">_3</code>, etc. Cuando la activa se llena,
+                rota automáticamente. Reset el día 1 a las 00:00 hora del Pacífico.
+              </p>
+            </div>
+            {placesKeysResumen && !placesKeysResumen.sinKeys && (
+              <div className="text-right shrink-0">
+                <div className="text-[10px] font-mono uppercase tracking-wider text-apex-muted">
+                  Total restante
+                </div>
+                <div className="text-2xl font-syne font-bold text-apex-lime tabular-nums">
+                  {placesKeysResumen.restantesGlobales.toLocaleString('es-AR')}
+                </div>
+                <div className="text-[11px] font-mono text-apex-muted">
+                  de {placesKeysResumen.totalQuota?.toLocaleString('es-AR')} ·{' '}
+                  {placesKeysResumen.configuradas} key{placesKeysResumen.configuradas === 1 ? '' : 's'}
+                </div>
+              </div>
+            )}
+          </header>
+
+          {placesKeysResumen?.sinKeys && (
+            <div className="flex items-start gap-2 border border-amber-500/40 bg-amber-500/10 rounded-lg px-3 py-2.5">
+              <AlertTriangle size={16} className="text-amber-300 shrink-0 mt-0.5" />
+              <p className="text-sm text-amber-100">
+                No hay ninguna API key configurada. Definí{' '}
+                <code className="text-amber-300 font-mono">GOOGLE_PLACES_API_KEY</code> en las variables de
+                entorno antes de buscar.
+              </p>
+            </div>
+          )}
+
+          {sinKeysDisponibles && (
+            <div className="flex items-start gap-2 border border-red-500/40 bg-red-500/10 rounded-lg px-3 py-2.5">
+              <AlertTriangle size={16} className="text-red-400 shrink-0 mt-0.5" />
+              <div className="text-sm text-red-200">
+                <p className="font-semibold">Cuota agotada en todas las keys.</p>
+                <p className="text-xs text-red-200/85 mt-1">
+                  Sumá una nueva clave (env <code className="font-mono">GOOGLE_PLACES_API_KEY_N</code>) o
+                  esperá al primer día del próximo mes (hora del Pacífico). La búsqueda quedó
+                  deshabilitada hasta que haya cupo disponible.
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {placesKeys.keys.map((k, idx) => {
+              const pct = k.quota > 0 ? Math.min(100, (k.used / k.quota) * 100) : 0
+              const slotIdx = idx + 1
+              const titulo = idx === 0 ? 'Key principal' : `Key #${slotIdx}`
+              const envHint =
+                idx === 0 ? 'GOOGLE_PLACES_API_KEY' : `GOOGLE_PLACES_API_KEY_${slotIdx}`
+
+              if (!k.configured) {
+                return (
+                  <div
+                    key={k.label}
+                    className="rounded-xl border border-dashed border-apex-border/60 bg-apex-black/30 p-4 flex flex-col gap-2"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-apex-muted">
+                        Slot {slotIdx} · libre
+                      </span>
+                      <span className="text-[10px] font-mono text-apex-muted/80">SIN CONFIGURAR</span>
+                    </div>
+                    <p className="text-sm font-syne text-apex-muted">{titulo}</p>
+                    <p className="text-[11px] font-mono text-apex-muted/80 leading-snug">
+                      Para sumar otra cuenta gratis, definí la env var{' '}
+                      <code className="text-apex-lime/80">{envHint}</code> y redeploy.
+                    </p>
+                  </div>
+                )
+              }
+
+              const restante = Math.max(0, k.quota - k.used)
+              const tono = k.exhausted
+                ? 'border-red-500/40 bg-red-500/5'
+                : k.active
+                  ? 'border-apex-lime/40 bg-apex-lime/[0.05] shadow-[0_0_0_1px_rgba(190,242,100,0.1)]'
+                  : 'border-apex-border/70 bg-apex-black/40'
+
+              return (
+                <div key={k.label} className={`rounded-xl border p-4 flex flex-col gap-2.5 ${tono}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-mono uppercase tracking-wider text-apex-muted">
+                      Slot {slotIdx}
+                    </span>
+                    {k.exhausted ? (
+                      <span className="text-[10px] font-mono text-red-300 bg-red-500/15 border border-red-500/30 rounded-full px-2 py-0.5">
+                        AGOTADA
+                      </span>
+                    ) : k.active ? (
+                      <span className="text-[10px] font-mono text-apex-lime bg-apex-lime/15 border border-apex-lime/40 rounded-full px-2 py-0.5">
+                        ACTIVA
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-mono text-apex-muted bg-apex-border/40 rounded-full px-2 py-0.5">
+                        EN ESPERA
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2 min-w-0">
+                    <p className="text-sm font-syne font-semibold truncate">{titulo}</p>
+                    <span className="text-[11px] font-mono text-apex-muted/90 shrink-0">
+                      ••••{k.suffix ?? '----'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <div className="flex items-baseline justify-between gap-2 mb-1.5">
+                      <span className="text-xs font-mono text-apex-muted tabular-nums">
+                        <span className="text-white">{k.used.toLocaleString('es-AR')}</span> / {k.quota.toLocaleString('es-AR')} usadas
+                      </span>
+                      <span className="text-[11px] font-mono text-apex-muted tabular-nums">
+                        {restante.toLocaleString('es-AR')} libres
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 bg-apex-black/80 rounded-full overflow-hidden ring-1 ring-apex-border/40">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${pctColor(pct, k.exhausted)}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {k.last_error && (
+                    <p
+                      className="text-[10px] font-mono text-red-300/85 leading-snug line-clamp-2"
+                      title={k.last_error}
+                    >
+                      Último error: {k.last_error}
+                    </p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </section>
       )}
 
       {/* Capacidad del pool de SIMs */}
@@ -777,6 +1078,126 @@ export default function NuevoLeadClient() {
 
         {(esModoTodasProvincias || esModoProvincia) && (
           <div className="space-y-4">
+            {/* Switch modo eficiencia */}
+            {(() => {
+              const totalLocs = esModoTodasProvincias
+                ? totalLocalidadesPais
+                : provinciaSeleccionada?.localidades.length ?? 0
+              const totalPrinc = esModoTodasProvincias
+                ? totalPrincipalesPais
+                : totalPrincipalesProvincia
+              const localidadesAUsar = modoEficiencia ? totalPrinc : totalLocs
+              const ahorroPct =
+                totalLocs > 0 ? Math.round(((totalLocs - totalPrinc) / totalLocs) * 100) : 0
+
+              return (
+                <div
+                  className={`rounded-xl border p-4 transition-colors ${
+                    modoEficiencia && filtroAportaAhorro
+                      ? 'border-apex-lime/40 bg-apex-lime/[0.05] shadow-[0_0_0_1px_rgba(190,242,100,0.08)]'
+                      : 'border-apex-border/70 bg-apex-black/30'
+                  }`}
+                >
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <Zap
+                          size={16}
+                          className={`shrink-0 ${
+                            modoEficiencia && filtroAportaAhorro
+                              ? 'text-apex-lime'
+                              : 'text-apex-muted'
+                          }`}
+                        />
+                        <span className="font-syne font-semibold text-sm">
+                          Modo eficiencia
+                        </span>
+                        {modoEficiencia && filtroAportaAhorro && (
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-apex-lime bg-apex-lime/15 border border-apex-lime/40 rounded-full px-2 py-0.5">
+                            ACTIVO
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-apex-muted mt-1.5 leading-relaxed">
+                        Sólo busca en localidades céntricas (capitales, cabeceras de
+                        partido/depto. y ciudades ≥ 10k hab.). Cada Text Search a Google
+                        Places gasta 1 request del cupo gratis, da igual la zona — saltearse
+                        parajes rurales captura casi todos los negocios usando muchísimo
+                        menos quota.
+                      </p>
+                      {!filtroAportaAhorro && (
+                        <p className="text-[11px] text-amber-300/85 mt-2 leading-relaxed">
+                          {paisSeleccionado.codigo === 'AR'
+                            ? 'Esta provincia no tiene lista curada — el modo eficiencia no la afecta.'
+                            : 'El modo eficiencia sólo está implementado para Argentina por ahora.'}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Toggle switch — accesible y con teclado */}
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={modoEficiencia}
+                      aria-label="Activar modo eficiencia"
+                      onClick={() => setModoEficiencia((v) => !v)}
+                      className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-apex-lime/60 focus:ring-offset-2 focus:ring-offset-apex-card ${
+                        modoEficiencia
+                          ? 'bg-apex-lime'
+                          : 'bg-apex-border hover:bg-apex-border/80'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-5 w-5 transform rounded-full bg-apex-black shadow transition-transform ${
+                          modoEficiencia ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  {/* Contador antes/después */}
+                  <div className="mt-3 pt-3 border-t border-apex-border/50 grid grid-cols-3 gap-2 text-center">
+                    <div>
+                      <div className="text-[10px] font-mono uppercase tracking-wider text-apex-muted">
+                        Sin filtrar
+                      </div>
+                      <div className="text-lg font-syne font-bold text-apex-muted/80 tabular-nums mt-0.5 line-through">
+                        {totalLocs.toLocaleString('es-AR')}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-mono uppercase tracking-wider text-apex-muted">
+                        A buscar
+                      </div>
+                      <div
+                        className={`text-lg font-syne font-bold tabular-nums mt-0.5 ${
+                          modoEficiencia && filtroAportaAhorro
+                            ? 'text-apex-lime'
+                            : 'text-white'
+                        }`}
+                      >
+                        {localidadesAUsar.toLocaleString('es-AR')}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] font-mono uppercase tracking-wider text-apex-muted">
+                        Ahorro
+                      </div>
+                      <div
+                        className={`text-lg font-syne font-bold tabular-nums mt-0.5 ${
+                          modoEficiencia && filtroAportaAhorro
+                            ? 'text-apex-lime'
+                            : 'text-apex-muted/80'
+                        }`}
+                      >
+                        {modoEficiencia && filtroAportaAhorro ? `−${ahorroPct}%` : '0%'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
+
             <div>
               <label className="text-xs text-apex-muted font-mono uppercase tracking-wider block mb-1.5">
                 Orden del recorrido
@@ -803,8 +1224,8 @@ export default function NuevoLeadClient() {
                 Concurrencia
               </label>
               <p className="text-[11px] text-apex-muted mb-1.5">
-                Toda la provincia o todo el país: varias búsquedas en paralelo. Overpass (OSM) es público
-                y puede bloquear si hay demasiada carga; 2 es lo más estable.
+                Toda la provincia o todo el país: cuántas búsquedas de Google Places en paralelo. Cada
+                búsqueda gasta 1 request del cupo gratuito mensual.
               </p>
               <select
                 value={concurrenciaBusqueda}
@@ -844,11 +1265,21 @@ export default function NuevoLeadClient() {
             ) : (
               <>
                 <Sparkles size={16} />
-                {esModoTodasProvincias
-                  ? `Buscar y encolar (${paisSeleccionado.nombre} completo)`
-                  : esModoProvincia
-                    ? `Buscar y encolar (toda ${provinciaSeleccionada?.nombre})`
-                    : 'Buscar y encolar'}
+                {(() => {
+                  if (!esModoTodasProvincias && !esModoProvincia)
+                    return 'Buscar y encolar'
+                  const cuantas = esModoTodasProvincias
+                    ? modoEficiencia
+                      ? totalPrincipalesPais
+                      : totalLocalidadesPais
+                    : modoEficiencia
+                      ? totalPrincipalesProvincia
+                      : provinciaSeleccionada?.localidades.length ?? 0
+                  const ambito = esModoTodasProvincias
+                    ? `${paisSeleccionado.nombre} completo`
+                    : `toda ${provinciaSeleccionada?.nombre}`
+                  return `Buscar y encolar (${ambito} · ${cuantas.toLocaleString('es-AR')} localidades)`
+                })()}
               </>
             )}
           </button>
