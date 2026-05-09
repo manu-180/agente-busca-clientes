@@ -13,6 +13,7 @@
  */
 
 const ENTERPRISE_TEXT_SEARCH_FREE_QUOTA = 1000
+const PRIMARY_KEY_QUOTA = 900
 
 export interface PlacesKey {
   /** Etiqueta de la env var (ej: "GOOGLE_PLACES_API_KEY_2") */
@@ -47,7 +48,7 @@ export function getConfiguredPlacesKeys(): PlacesKey[] {
       label: 'GOOGLE_PLACES_API_KEY',
       value: primary,
       suffix: tail(primary),
-      quota: ENTERPRISE_TEXT_SEARCH_FREE_QUOTA,
+      quota: PRIMARY_KEY_QUOTA,
     })
   }
 

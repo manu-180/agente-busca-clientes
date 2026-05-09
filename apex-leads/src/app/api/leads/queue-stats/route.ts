@@ -27,21 +27,18 @@ export async function GET() {
   const [pendientesRes, enviadosHoyRes, fallidosHoyRes, configRes] = await Promise.all([
     supabase
       .from(LEADS_TABLE)
-      .select('id', { count: 'exact' })
+      .select('id', { count: 'exact', head: true })
       .eq('origen', 'outbound')
       .eq('mensaje_enviado', false)
-      .eq('estado', 'pendiente')
-      .limit(0),
+      .eq('estado', 'pendiente'),
     supabase
       .from(LEADS_TABLE)
-      .select('id', { count: 'exact' })
-      .gte('primer_envio_completado_at', inicioDiaUtc)
-      .limit(0),
+      .select('id', { count: 'exact', head: true })
+      .gte('primer_envio_completado_at', inicioDiaUtc),
     supabase
       .from(LEADS_TABLE)
-      .select('id', { count: 'exact' })
-      .gte('primer_envio_fallido_at', inicioDiaUtc)
-      .limit(0),
+      .select('id', { count: 'exact', head: true })
+      .gte('primer_envio_fallido_at', inicioDiaUtc),
     supabase.from('configuracion').select('valor').eq('clave', 'first_contact_activo').maybeSingle(),
   ])
 
