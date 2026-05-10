@@ -69,15 +69,52 @@ export default function ConfiguracionPage() {
       </div>
 
       {/* Primer contacto (outbound) — fijo en código del cron */}
-      <div className="bg-apex-card border border-apex-border rounded-xl p-6 space-y-2">
+      <div className="bg-apex-card border border-apex-border rounded-xl p-6 space-y-4">
         <h2 className="font-syne font-semibold text-lg">Primer contacto (WhatsApp)</h2>
+
+        {/* Franja horaria visual */}
+        <div className="space-y-2">
+          <p className="text-xs text-apex-muted font-mono uppercase tracking-wider">Ventana de envío — horario laboral</p>
+          <div className="flex items-center gap-2">
+            {/* Barra de 24 horas */}
+            <div className="relative flex-1 h-6 bg-apex-black rounded-full overflow-hidden border border-apex-border">
+              {/* Franja activa 9–18 → 9/24 * 100% = 37.5%, ancho = 9/24 * 100% = 37.5% */}
+              <div
+                className="absolute top-0 h-full bg-apex-lime/25 border-x border-apex-lime/50"
+                style={{ left: `${(9 / 24) * 100}%`, width: `${(9 / 24) * 100}%` }}
+              />
+              {/* Tick 9h */}
+              <div
+                className="absolute top-0 h-full border-l border-apex-lime"
+                style={{ left: `${(9 / 24) * 100}%` }}
+              />
+              {/* Tick 18h */}
+              <div
+                className="absolute top-0 h-full border-l border-apex-lime"
+                style={{ left: `${(18 / 24) * 100}%` }}
+              />
+            </div>
+          </div>
+          <div className="flex justify-between text-xs text-apex-muted font-mono px-0.5">
+            <span>0:00</span>
+            <span className="text-apex-lime font-semibold">9:00 → 18:00</span>
+            <span>24:00</span>
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="inline-flex items-center gap-1.5 bg-apex-lime/10 border border-apex-lime/30 text-apex-lime text-xs font-mono px-3 py-1 rounded-full">
+              <span className="w-1.5 h-1.5 rounded-full bg-apex-lime inline-block" />
+              09:00 – 18:00 (Argentina)
+            </span>
+            <span className="text-xs text-apex-muted">Lun–Dom · 9 hs activas</span>
+          </div>
+        </div>
+
         <p className="text-sm text-apex-muted">
-          El cron <span className="font-mono text-apex-lime/90">/api/cron/leads-pendientes</span> envía
-          plantillas solo entre <span className="text-white/90">7:00 y 21:00</span> (America/Argentina/Buenos_Aires),
-          sin tope diario de cantidad. Los senders activos rotan la cola; el otro freno es tener{' '}
-          <span className="font-mono">first_contact_activo</span> en pausa. Usá el query{' '}
-          <span className="font-mono">?force=true</span> (con el secreto de cron) solo para pruebas fuera de
-          ventana.
+          El cron <span className="font-mono text-apex-lime/90">/api/cron/leads-pendientes</span> envía mensajes
+          solo en horario laboral. Los senders rotan en round-robin intercalado: cada sender envía uno
+          por turno hasta completar su cuota diaria. El otro freno es tener{' '}
+          <span className="font-mono">first_contact_activo</span> en pausa. Usá{' '}
+          <span className="font-mono">?force=true</span> solo para pruebas fuera de ventana.
         </p>
       </div>
 
