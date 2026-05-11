@@ -215,6 +215,7 @@ export default function ConversacionesPage() {
               if (g.lead.id !== sel) return g
               return {
                 ...g,
+                no_leidos: 0, // el usuario lo está viendo → siempre 0
                 mensajes: elegirMensajesMasRecientes(prevSel?.mensajes ?? [], mensajes),
               }
             })
@@ -225,7 +226,7 @@ export default function ConversacionesPage() {
             const prevSel = prev.find(g => g.lead.id === sel)
             return list.map(g =>
               g.lead.id === sel && prevSel
-                ? { ...g, mensajes: prevSel.mensajes }
+                ? { ...g, no_leidos: 0, mensajes: prevSel.mensajes }
                 : g
             )
           })
@@ -335,6 +336,7 @@ export default function ConversacionesPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ all: true }),
     })
+    window.dispatchEvent(new CustomEvent('inbox:mark-read'))
   }
 
   const totalNoLeidos = grupos.reduce((acc, g) => acc + g.no_leidos, 0)
@@ -350,6 +352,7 @@ export default function ConversacionesPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ lead_id: leadId }),
     })
+    window.dispatchEvent(new CustomEvent('inbox:mark-read'))
   }
 
   const enviarMensaje = async () => {

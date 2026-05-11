@@ -38,8 +38,12 @@ export function Sidebar() {
       } catch {}
     }
     fetchUnread()
-    const interval = setInterval(fetchUnread, 30000)
-    return () => clearInterval(interval)
+    const interval = setInterval(fetchUnread, 15000)
+    window.addEventListener('inbox:mark-read', fetchUnread)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('inbox:mark-read', fetchUnread)
+    }
   }, [pathname])
 
   useEffect(() => {
