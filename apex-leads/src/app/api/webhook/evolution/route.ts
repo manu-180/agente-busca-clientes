@@ -468,10 +468,17 @@ async function procesarConLock(
     rol: h.rol as 'agente' | 'cliente',
     mensaje: h.mensaje,
   }))
+  // Leemos el estado actual del lead — puede haber cambiado entre el lock y ahora.
+  const { data: leadEstadoActual } = await supabase
+    .from('leads')
+    .select('conversacion_cerrada')
+    .eq('id', p.leadId)
+    .maybeSingle()
   const decision = decidirRespuestaConversacional({
     message: mensajeCombinado,
     history: historialParaDecision,
     config: configConversacional,
+    conversationClosed: Boolean(leadEstadoActual?.conversacion_cerrada),
   })
 
   console.log(

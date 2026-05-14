@@ -126,6 +126,7 @@ export async function generarRespuestaAgente({
         mensaje: h.mensaje,
       })),
       config: configConversacional,
+      conversationClosed: Boolean(lead.conversacion_cerrada),
     })
 
     await registrarEventoConversacional({
@@ -159,7 +160,16 @@ export async function generarRespuestaAgente({
           conversacion_cerrada_at: new Date().toISOString(),
         })
         .eq('id', lead.id)
-    } else if (lead.conversacion_cerrada) {
+    } else if (
+      lead.conversacion_cerrada &&
+      (decision.reason === 'commit_signal' ||
+        decision.reason === 'explicit_question_or_request')
+    ) {
+      // Solo reabrimos la conversación cerrada cuando hay señal explícita de
+      // re-apertura: el cliente pide algo concreto o confirma avanzar.
+      // Cualquier mensaje neutral (saludo, "ok", "gracias") NO reabre — eso
+      // permitía que el LLM respondiera con el pitch del boceto después de
+      // que ya habíamos cerrado con disculpa.
       await supabase
         .from('leads')
         .update({ conversacion_cerrada: false, conversacion_cerrada_at: null })

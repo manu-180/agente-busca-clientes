@@ -197,8 +197,31 @@ const ANTI_PITCH_USER_MARKERS = [
   'cerre el local',
   'cerré el local',
   'cerramos el local',
+  'ya cerre',
+  'ya cerré',
+  'cerre hace',
+  'cerré hace',
   'ya no tengo el negocio',
   'ya no tengo el local',
+  'ya no hay local',
+  'ya no hay mas local',
+  'ya no hay más local',
+  'no hay mas local',
+  'no hay más local',
+  'esa marca ya no existe',
+  'la marca ya no existe',
+  'el negocio ya no existe',
+  'el local ya no existe',
+  'la tienda ya no existe',
+  'proyecto que ya finalizo',
+  'proyecto que ya finalizó',
+  'proyecto ya finalizo',
+  'proyecto ya finalizó',
+  'fue un proyecto que ya',
+  'proyecto finalizo',
+  'proyecto finalizó',
+  'proyecto terminado',
+  'proyecto finalizado',
   'me jubile',
   'me jubilé',
   'lo vendi',
@@ -230,6 +253,22 @@ const ANTI_PITCH_USER_MARKERS = [
   'es de mi mama',
   'es de mi mamá',
   'es de un familiar',
+  'para otra persona',
+  'para un amigo',
+  'para una amiga',
+  'para alguien',
+  'no es para mi',
+  'no es para mí',
+  'para mi no',
+  'para mí no',
+  'quizas para mi no',
+  'quizás para mí no',
+  'quizas para otra',
+  'quizás para otra',
+  'capaz para otra',
+  'capaz para otro',
+  'tal vez para otra',
+  'tal vez para otro',
 ]
 
 function normalizar(input: string): string {
@@ -297,7 +336,12 @@ export function fallbackPostBocetoBombing(marcadorUsuario: string): string {
     m.includes('cerramos') ||
     m.includes('jubil') ||
     m.includes('vendi') ||
-    m.includes('vendí')
+    m.includes('vendí') ||
+    m.includes('no hay local') ||
+    m.includes('no hay mas local') ||
+    m.includes('no hay más local') ||
+    m.includes('ya no existe') ||
+    m.includes('proyecto') && (m.includes('finaliz') || m.includes('termin'))
   ) {
     return 'No tenía idea, disculpá. Te borro de la base entonces. Éxitos en lo que sigas.'
   }
@@ -312,11 +356,44 @@ export function fallbackPostBocetoBombing(marcadorUsuario: string): string {
   ) {
     return 'Tranqui, te escribí porque tu negocio aparecía en Google Maps con la zona y rubro que trabajo. Si no te interesa lo borro y listo.'
   }
-  if (m.includes('sos la') || m.includes('persona') || m.includes('dejame') || m.includes('déjame') || m.includes('dejenme') || m.includes('déjenme') || m.includes('no escriban') || m.includes('no me escriban')) {
-    return 'Te entiendo, perdón por la insistencia. Te saco de la base.'
-  }
+  // Family relay primero (incluye casos como "para otra persona") porque la
+  // rama de hostility usa "persona" y se llevaría la coincidencia por accidente.
   if (m.includes('es de mi') || m.includes('es de un familiar') || m.includes('es de una amiga') || m.includes('es de un amigo')) {
     return 'Dale, gracias. Si querés mostrale la propuesta de arriba, sin compromiso. Cuando puedan lo charlamos.'
+  }
+  if (
+    m.includes('para otra persona') ||
+    m.includes('para un amigo') ||
+    m.includes('para una amiga') ||
+    m.includes('para alguien') ||
+    m.includes('no es para mi') ||
+    m.includes('no es para mí') ||
+    m.includes('para mi no') ||
+    m.includes('para mí no') ||
+    m.includes('quizas para') ||
+    m.includes('quizás para') ||
+    m.includes('capaz para') ||
+    m.includes('tal vez para')
+  ) {
+    return 'Dale, buenísimo. Si querés pasale el mensaje de arriba sin compromiso. Cuando le interese, por acá estamos.'
+  }
+  // Hostility: usar marcadores específicos en vez de "persona" suelto, que
+  // matcheaba con "para otra persona" por accidente.
+  if (
+    m.includes('sos la tercera') ||
+    m.includes('sos la cuarta') ||
+    m.includes('sos la quinta') ||
+    m.includes('la tercera persona') ||
+    m.includes('la cuarta persona') ||
+    m.includes('la quinta persona') ||
+    m.includes('dejame') ||
+    m.includes('déjame') ||
+    m.includes('dejenme') ||
+    m.includes('déjenme') ||
+    m.includes('no escriban') ||
+    m.includes('no me escriban')
+  ) {
+    return 'Te entiendo, perdón por la insistencia. Te saco de la base.'
   }
   // fallback genérico — preguntar antes de pitchear
   return 'Dale, contame un poco más así te respondo bien. ¿De qué tipo de negocio se trata?'

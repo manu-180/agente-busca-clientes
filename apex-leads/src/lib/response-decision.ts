@@ -29,6 +29,7 @@ export type DecisionReason =
   | 'business_closed'
   | 'family_relay'
   | 'source_question'
+  | 'post_close_silence'
 
 export interface ConversationDecision {
   action: DecisionAction
@@ -49,6 +50,13 @@ export interface DecisionInput {
   message: string
   history?: Array<{ rol: ConversationRole; mensaje: string }>
   config: DecisionConfig
+  /**
+   * True si la conversación ya está marcada como cerrada en la DB (por una decisión
+   * previa). Si está cerrada y el cliente no manda una señal clara de re-apertura
+   * (commit signal, pregunta concreta), se devuelve no_reply para evitar que el
+   * LLM responda algo incoherente con el cierre anterior.
+   */
+  conversationClosed?: boolean
 }
 
 const OPT_OUT_PHRASES = [
@@ -120,6 +128,12 @@ const BUSINESS_CLOSED_PHRASES = [
   'cerre la tienda',
   'cerré la tienda',
   'cerramos la tienda',
+  'ya cerre',
+  'ya cerré',
+  'ya cerramos',
+  'cerre hace',
+  'cerré hace',
+  'cerramos hace',
   'ya no tengo el negocio',
   'ya no tengo el local',
   'ya no tengo la tienda',
@@ -140,6 +154,40 @@ const BUSINESS_CLOSED_PHRASES = [
   'lo vendí',
   'vendi el negocio',
   'vendí el negocio',
+  // Variantes "ya no hay local / marca / negocio"
+  'ya no hay local',
+  'ya no hay mas local',
+  'ya no hay más local',
+  'no hay mas local',
+  'no hay más local',
+  'ya no esta el local',
+  'ya no está el local',
+  'ya no esta abierto',
+  'ya no está abierto',
+  // "esa marca / negocio ya no existe"
+  'esa marca ya no existe',
+  'la marca ya no existe',
+  'esa marca no existe',
+  'el negocio ya no existe',
+  'el local ya no existe',
+  'la tienda ya no existe',
+  'el comercio ya no existe',
+  // "Fue un proyecto que ya finalizó" / "ya terminó"
+  'proyecto que ya finalizo',
+  'proyecto que ya finalizó',
+  'proyecto que finalizo',
+  'proyecto que finalizó',
+  'proyecto ya finalizo',
+  'proyecto ya finalizó',
+  'fue un proyecto que ya',
+  'ya finalizo el proyecto',
+  'ya finalizó el proyecto',
+  'ya termino el proyecto',
+  'ya terminó el proyecto',
+  'proyecto finalizo',
+  'proyecto finalizó',
+  'proyecto terminado',
+  'proyecto finalizado',
 ]
 
 // Familiar / conocido que dice "se lo paso", "le aviso" — pero NO es empleado/portero del negocio.
@@ -169,6 +217,36 @@ const FAMILY_RELAY_PHRASES = [
   'le aviso a mi',
   'le paso a mi',
   'se lo paso a mi',
+  // "Para otra persona / un amigo / no es para mí" — el cliente quiere derivar a un tercero.
+  // Si la decisión cae acá, NO se le pitchea a la persona que respondió: ella no es el decisor.
+  'para otra persona',
+  'para otra',
+  'para otro',
+  'para un amigo',
+  'para una amiga',
+  'para alguien que conozco',
+  'para alguien que conozca',
+  'para alguien mas',
+  'para alguien más',
+  'no es para mi',
+  'no es para mí',
+  'para mi no',
+  'para mí no',
+  'quizas para mi no',
+  'quizás para mí no',
+  'quizas para otra',
+  'quizás para otra',
+  'quizas para otro',
+  'quizás para otro',
+  'capaz para otra',
+  'capaz para otro',
+  'tal vez para otra',
+  'tal vez para otro',
+  'a mi no me sirve pero',
+  'a mí no me sirve pero',
+  'a mi no me interesa pero',
+  'a mí no me interesa pero',
+  'no lo necesito yo pero',
 ]
 
 // Cliente pregunta cómo conseguimos su número / por qué lo contactamos. Suele indicar
@@ -338,6 +416,50 @@ const PROPOSAL_KEYWORDS = [
   'arrancamos',
   'empezamos',
 ]
+
+// Marcadores que aparecen en mensajes del agente cuando éste cerró la charla
+// con disculpa o despedida. Si el último mensaje del agente contiene alguno
+// de estos, cualquier respuesta neutra del cliente NO debería reabrir el LLM
+// (se mantiene el silencio respetuoso).
+const AGENT_CLOSING_MARKERS = [
+  'te borro de la base',
+  'te saco de la base',
+  'te saco de mi lista',
+  'lo borro ahora',
+  'lo borro y listo',
+  'perdon por la insistencia',
+  'perdón por la insistencia',
+  'disculpa la molestia',
+  'disculpá la molestia',
+  'disculpame la molestia',
+  'disculpá la molestia',
+  'exitos en lo que sigas',
+  'éxitos en lo que sigas',
+  'que tengas buen dia',
+  'que tengas buen día',
+  'que tengas buena',
+  'te entiendo, perdon',
+  'te entiendo, perdón',
+]
+
+export function lastAgentMessageWasClosing(
+  history?: Array<{ rol: ConversationRole; mensaje: string }>
+): boolean {
+  if (!history || history.length === 0) return false
+  const lastAgent = [...history].reverse().find(h => h.rol === 'agente')
+  if (!lastAgent || !lastAgent.mensaje) return false
+  const normalized = lastAgent.mensaje
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+  return AGENT_CLOSING_MARKERS.some(marker => {
+    const m = marker
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+    return normalized.includes(m)
+  })
+}
 
 // Detecta si un low_signal_ack ("dale", "ok") es una respuesta a una propuesta del agente
 function isCommitToProposal(
@@ -550,6 +672,21 @@ export function decidirRespuestaConversacional(input: DecisionInput): Conversati
       reason: 'low_signal_ack',
       confidence: 0.9,
       eventName: 'no_reply_low_signal',
+    }
+  }
+
+  // Lock post-cierre: si la conversación ya fue cerrada o el último mensaje del
+  // agente fue una despedida/disculpa, no abrimos el LLM con cosas neutras como
+  // "saludos", "hola", "gracias". Las señales fuertes (commit, pregunta) ya
+  // pasaron arriba — si llegamos acá con la conversación cerrada, es ruido.
+  const closingActive =
+    input.conversationClosed === true || lastAgentMessageWasClosing(input.history)
+  if (closingActive) {
+    return {
+      action: 'no_reply',
+      reason: 'post_close_silence',
+      confidence: 0.92,
+      eventName: 'no_reply_post_close',
     }
   }
 
