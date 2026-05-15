@@ -155,6 +155,10 @@ export default function ConversacionesPage() {
   const cargaInboxIdRef = useRef(0)
   /** Misma idea para el historial del hilo activo. */
   const cargaMensajesIdRef = useRef(0)
+  /** Para detectar la transición cargandoMensajes true→false y forzar scroll al fondo. */
+  const prevCargandoRef = useRef(false)
+  /** Marca que el usuario acaba de abrir/cambiar de conversación → forzar scroll al fondo tras la carga inicial. */
+  const isFirstLoadRef = useRef(false)
   seleccionadoRef.current = seleccionado
 
   const cargarMensajesHilo = useCallback(async (leadId: string) => {
@@ -277,7 +281,20 @@ export default function ConversacionesPage() {
     if (chatRef.current) {
       chatRef.current.scrollTop = chatRef.current.scrollHeight
     }
+    // Marcar que la próxima carga completada es la inicial de esta conversación
+    isFirstLoadRef.current = true
   }, [seleccionado])
+
+  // Cuando la carga inicial de mensajes termina, forzar scroll al fondo
+  // (sin esto el chat queda parado arriba mostrando mensajes viejos)
+  useEffect(() => {
+    const wasCargando = prevCargandoRef.current
+    prevCargandoRef.current = cargandoMensajes
+    if (wasCargando && !cargandoMensajes && chatRef.current && isFirstLoadRef.current) {
+      chatRef.current.scrollTop = chatRef.current.scrollHeight
+      isFirstLoadRef.current = false
+    }
+  }, [cargandoMensajes])
 
   useEffect(() => {
     if (!chatRef.current) return
