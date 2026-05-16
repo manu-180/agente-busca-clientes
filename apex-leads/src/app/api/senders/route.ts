@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
         provider: 'evolution',
         instance_name,
         alias,
-        phone_number: phone_number || '',
+        phone_number: phone_number || `_pending_${instance_name}`,
         descripcion: descripcion ?? null,
         color,
         daily_limit,

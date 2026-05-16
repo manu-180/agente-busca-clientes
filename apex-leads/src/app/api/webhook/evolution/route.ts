@@ -1214,7 +1214,7 @@ async function handleConnectionUpdate(
     // La sesión se vinculó (escaneo de QR exitoso o reconexión automática).
     // Intentamos resolver el número si todavía no lo tenemos.
     let phone: string | null = sender.phone_number ?? null
-    if (!phone) {
+    if (!phone || phone.startsWith('_pending_')) {
       try {
         phone = await fetchPhoneNumber(instanceName)
       } catch (err) {
