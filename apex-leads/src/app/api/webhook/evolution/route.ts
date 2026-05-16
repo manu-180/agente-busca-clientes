@@ -84,7 +84,11 @@ interface EvolutionMessageContent {
   imageMessage?: { caption?: string; mimetype?: string }
   audioMessage?: { mimetype?: string; ptt?: boolean }
   videoMessage?: { caption?: string }
-  documentMessage?: { title?: string }
+  documentMessage?: { title?: string; fileName?: string }
+  contactMessage?: { displayName?: string; vcard?: string }
+  stickerMessage?: { mimetype?: string }
+  reactionMessage?: { text?: string }
+  locationMessage?: { name?: string; address?: string }
 }
 
 interface EvolutionMessageData {
@@ -147,6 +151,12 @@ function extractMessageText(msg: EvolutionMessageContent | undefined): string {
   if (msg.extendedTextMessage?.text) return msg.extendedTextMessage.text
   if (msg.imageMessage?.caption) return msg.imageMessage.caption
   if (msg.videoMessage?.caption) return msg.videoMessage.caption
+  if (msg.documentMessage?.title) return msg.documentMessage.title
+  if (msg.documentMessage?.fileName) return msg.documentMessage.fileName
+  if (msg.contactMessage?.displayName) return msg.contactMessage.displayName
+  if (msg.locationMessage?.name) return msg.locationMessage.name
+  if (msg.locationMessage?.address) return msg.locationMessage.address
+  if (msg.reactionMessage?.text) return msg.reactionMessage.text
   return ''
 }
 

@@ -42,9 +42,19 @@ function ts(msj: MensajeConSender | undefined): number {
   return Number.isFinite(n) ? n : 0
 }
 
-/** Quitar prefijo `[IMAGEN]` / `[AUDIO]` que guarda el webhook de Twilio. */
+/** Quitar prefijo `[IMAGEN]` / `[AUDIO]` / `[OTRO]` que guarda el webhook. */
 function captionLimpio(mensaje: string): string {
   return mensaje.replace(/^\[(IMAGEN|AUDIO|OTRO)\]\s*/i, '').trim()
+}
+
+/** Preview para la lista del inbox: texto limpio o etiqueta descriptiva. */
+function previewMensaje(mensaje: string): string {
+  const clean = captionLimpio(mensaje)
+  if (clean) return clean
+  if (/^\[OTRO\]/i.test(mensaje)) return 'Contenido adjunto'
+  if (/^\[IMAGEN\]/i.test(mensaje)) return 'Imagen'
+  if (/^\[AUDIO\]/i.test(mensaje)) return 'Audio'
+  return mensaje
 }
 
 function ContenidoMensajeChat({ msg, isAgente }: { msg: MensajeConSender; isAgente: boolean }) {
@@ -77,6 +87,14 @@ function ContenidoMensajeChat({ msg, isAgente }: { msg: MensajeConSender; isAgen
         />
         {caption ? <p className="whitespace-pre-wrap leading-relaxed text-xs opacity-90">{caption}</p> : null}
       </div>
+    )
+  }
+
+  if (msg.tipo_mensaje === 'otro') {
+    return (
+      <p className="whitespace-pre-wrap leading-relaxed italic opacity-75">
+        {caption || 'Contenido adjunto'}
+      </p>
     )
   }
 
@@ -836,7 +854,7 @@ export default function ConversacionesPage() {
                           </span>
                         </div>
                         <p className={`text-xs truncate mb-1.5 ${grupo.no_leidos > 0 ? 'text-neutral-300' : 'text-apex-muted'}`}>
-                          {grupo.ultimo_mensaje}
+                          {previewMensaje(grupo.ultimo_mensaje)}
                         </p>
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-1">
