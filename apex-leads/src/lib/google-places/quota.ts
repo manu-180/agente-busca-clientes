@@ -153,6 +153,30 @@ export async function consumeQuota(key: PlacesKey): Promise<number | null> {
   return Number(data)
 }
 
+/**
+ * Fuerza el agotamiento de una key en el DB para el mes actual. Se llama
+ * cuando Google devuelve 429 para que `pickAvailableKey` no vuelva a
+ * elegirla en búsquedas posteriores dentro del mismo mes.
+ */
+export async function exhaustKeyForMonth(key: PlacesKey): Promise<void> {
+  const supabase = createSupabaseServer()
+  const month = currentMonthLabelPT()
+  const { error } = await supabase
+    .from('places_api_key_usage')
+    .upsert(
+      {
+        key_label: key.label,
+        month_yyyymm: month,
+        requests_used: key.quota,
+        monthly_quota: key.quota,
+      },
+      { onConflict: 'key_label,month_yyyymm' },
+    )
+  if (error) {
+    console.error('[places.quota] exhaustKeyForMonth falló:', error.message)
+  }
+}
+
 /** Anota un error contra la key (no consume cuota). Best-effort. */
 export async function annotateKeyError(key: PlacesKey, message: string): Promise<void> {
   const supabase = createSupabaseServer()

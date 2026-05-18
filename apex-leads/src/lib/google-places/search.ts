@@ -1,6 +1,6 @@
 import { ResultadoBusquedaLead } from '@/types'
 import { PlacesKey, getConfiguredPlacesKeys } from './keys'
-import { annotateKeyError, consumeQuota, pickAvailableKey } from './quota'
+import { annotateKeyError, consumeQuota, exhaustKeyForMonth, pickAvailableKey } from './quota'
 
 interface GooglePlace {
   displayName?: { text?: string }
@@ -177,22 +177,17 @@ export async function searchPlaces(
     }
 
     // 429 = rate limit (cuota mensual o QPM saturados). Marcamos como agotada
-    // localmente y rotamos a la siguiente key.
+    // en el DB y rotamos a la siguiente key.
     if (response.status === 429) {
       const sample = response.bodyText.slice(0, 200)
       await annotateKeyError(
         picked.key,
         `HTTP 429 — RESOURCE_EXHAUSTED (${sample}). Forzamos rotación.`,
       )
-      // Empujamos su contador hasta el cupo para excluirla del round actual.
-      // (Esto no es perfecto, pero asegura que `pickAvailableKey` no la
-      // vuelva a elegir hasta el próximo mes.)
+      // Quemamos la cuota en el DB para que pickAvailableKey() la salte en
+      // búsquedas posteriores (no solo en este loop local).
+      await exhaustKeyForMonth(picked.key)
       seenAsExhausted.add(picked.key.label)
-      // Truco: subir contador hasta quota. Hacemos `consumeQuota` en bucle
-      // sería caro; en su lugar, marcamos el set local y dejamos que la
-      // siguiente iteración pida otra. Si Google sigue devolviendo 429,
-      // probablemente todas las keys están saturadas o la cuota mensual de
-      // todas se quemó.
       continue
     }
 

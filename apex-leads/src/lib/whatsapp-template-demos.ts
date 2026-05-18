@@ -5,8 +5,8 @@
 
 export const SITIO_PRINCIPAL_APEX = 'www.theapexweb.com'
 
-/** Variable {{3}} (demo) cuando no aplica otra regla; rubro actual mayoritariamente moda mujer. */
-export const DEMO_HOST_DEFAULT = 'moda.theapexweb.com'
+/** Variable {{3}} (demo) cuando no aplica otra regla; rubro actual gimnasios. */
+export const DEMO_HOST_DEFAULT = 'gym.theapexweb.com'
 
 function fold(s: string): string {
   return s
