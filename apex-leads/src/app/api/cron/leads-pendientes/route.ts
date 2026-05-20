@@ -221,9 +221,41 @@ async function claimYEnviarLead(
       const code = isEvoErr ? e.code : null
 
       // Caso 1: la sesión Multi-Device del sender está caída (preflight detectó close).
-      // No es culpa del lead → no incrementar intentos del lead. Marcar sender disconnected
-      // de inmediato y devolver señal de failover para que se elija otro sender.
+      // No es culpa del lead → no incrementar intentos del lead.
+      //
+      // OUTAGE DETECTION (2026-05-20): antes marcábamos disconnected al toque, pero eso
+      // crea un cascade-kill cuando Evolution está flakeando y devuelve `close` transitorio
+      // a TODAS las instancias (que segundos antes estaban open). Cada tick mata un sender
+      // distinto hasta dejar el pool seco. Ahora chequeamos si OTROS senders también cayeron
+      // por preflight_close/connection_closed en los últimos OUTAGE_WINDOW_MS: si sí, no
+      // marcamos disconnected y dejamos que health-evolution los recupere cuando Evolution
+      // se estabilice.
       if (code === EVO_ERR.INSTANCE_NOT_CONNECTED) {
+        const desdeOutage = new Date(Date.now() - OUTAGE_WINDOW_MS).toISOString()
+        const { data: otrosFallando } = await sup
+          .from('senders')
+          .select('id')
+          .eq('provider', 'evolution')
+          .eq('activo', true)
+          .eq('connected', false)
+          .neq('id', sender.id)
+          .gte('disconnected_at', desdeOutage)
+          .in('disconnection_reason', ['preflight_close', 'connection_closed', 'send_failure_threshold'])
+
+        if ((otrosFallando?.length ?? 0) >= OUTAGE_MIN_OTHER_SENDERS) {
+          console.error(
+            `[cron] sender ${sender.instance_name}: preflight close PERO ` +
+            `${otrosFallando?.length} otros senders también disconnected en ${OUTAGE_WINDOW_MS / 60000}min → ` +
+            `asumimos Evolution server outage, NO marcamos disconnected (health-evolution lo recuperará).`
+          )
+          return {
+            status: 'evolution_server_outage_suspect_preflight',
+            sender_id: sender.id,
+            otros_disconnected: otrosFallando?.length,
+            ultimo_error: msg,
+          }
+        }
+
         await markDisconnected(sup, sender.id, 'preflight_close')
         console.error(
           `[cron] sender ${sender.instance_name}: preflight detectó close → markDisconnected (failover)`
