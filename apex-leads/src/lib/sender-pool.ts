@@ -301,7 +301,7 @@ export async function markConnected(
   senderId: string,
   opts?: { phoneNumber?: string | null }
 ): Promise<void> {
-  const update: Record<string, unknown> = {
+  const baseUpdate: Record<string, unknown> = {
     connected: true,
     connected_at: new Date().toISOString(),
     disconnection_reason: null,
@@ -309,14 +309,39 @@ export async function markConnected(
     consecutive_send_failures: 0,
     health_checked_at: new Date().toISOString(),
   }
-  if (opts?.phoneNumber) update.phone_number = opts.phoneNumber
+  const update = opts?.phoneNumber
+    ? { ...baseUpdate, phone_number: opts.phoneNumber }
+    : baseUpdate
 
   const { error } = await supabase
     .from('senders')
     .update(update)
     .eq('id', senderId)
 
-  if (error) throw new Error(`markConnected failed: ${error.message}`)
+  if (!error) return
+
+  // Si el conflicto es por el constraint senders_phone_provider_idx (otro sender
+  // ya tiene ese phone_number), reintentamos SIN tocar phone_number. Esto
+  // sucede cuando Evolution devuelve un phone que es el correcto pero ya está
+  // asociado a otro sender por data drift — preferimos recuperar el sender
+  // (connected=true) que dejarlo zombi por un valor de phone.
+  if (
+    opts?.phoneNumber &&
+    error.message?.includes('senders_phone_provider_idx')
+  ) {
+    console.warn(
+      `[sender-pool] markConnected: phone "${opts.phoneNumber}" choca con otro sender ` +
+      `(constraint senders_phone_provider_idx), reintentando sin phone_number.`
+    )
+    const { error: retryErr } = await supabase
+      .from('senders')
+      .update(baseUpdate)
+      .eq('id', senderId)
+    if (retryErr) throw new Error(`markConnected retry failed: ${retryErr.message}`)
+    return
+  }
+
+  throw new Error(`markConnected failed: ${error.message}`)
 }
 
 /**
@@ -386,31 +411,54 @@ export async function updateHealthCheck(
     preserveDisconnectedAt?: boolean
   }
 ): Promise<void> {
-  const update: Record<string, unknown> = {
+  const baseUpdate: Record<string, unknown> = {
     health_checked_at: new Date().toISOString(),
   }
   if (opts.connected === true) {
-    update.connected = true
-    update.connected_at = new Date().toISOString()
-    update.disconnection_reason = null
-    update.disconnected_at = null
-    update.consecutive_send_failures = 0
+    baseUpdate.connected = true
+    baseUpdate.connected_at = new Date().toISOString()
+    baseUpdate.disconnection_reason = null
+    baseUpdate.disconnected_at = null
+    baseUpdate.consecutive_send_failures = 0
   } else if (opts.connected === false) {
-    update.connected = false
+    baseUpdate.connected = false
     if (!opts.preserveDisconnectedAt) {
       // Primera detección de desconexión: setear timestamp y reason.
       // Re-confirmaciones usan preserveDisconnectedAt=true para mantener el
       // timestamp original — sin eso, el threshold de auto-restart nunca llega.
-      if (opts.reason) update.disconnection_reason = opts.reason
-      update.disconnected_at = new Date().toISOString()
+      if (opts.reason) baseUpdate.disconnection_reason = opts.reason
+      baseUpdate.disconnected_at = new Date().toISOString()
     }
   }
-  if (opts.phoneNumber) update.phone_number = opts.phoneNumber
+  const update = opts.phoneNumber
+    ? { ...baseUpdate, phone_number: opts.phoneNumber }
+    : baseUpdate
 
   const { error } = await supabase
     .from('senders')
     .update(update)
     .eq('id', senderId)
 
-  if (error) throw new Error(`updateHealthCheck failed: ${error.message}`)
+  if (!error) return
+
+  // Si chocó por `senders_phone_provider_idx`, reintentar sin phone_number.
+  // Mejor recuperar el sender que dejarlo zombi por un valor de phone que
+  // Evolution está reportando con drift respecto a la DB local.
+  if (
+    opts.phoneNumber &&
+    error.message?.includes('senders_phone_provider_idx')
+  ) {
+    console.warn(
+      `[sender-pool] updateHealthCheck: phone "${opts.phoneNumber}" choca con otro sender ` +
+      `(senders_phone_provider_idx), reintentando sin phone_number.`
+    )
+    const { error: retryErr } = await supabase
+      .from('senders')
+      .update(baseUpdate)
+      .eq('id', senderId)
+    if (retryErr) throw new Error(`updateHealthCheck retry failed: ${retryErr.message}`)
+    return
+  }
+
+  throw new Error(`updateHealthCheck failed: ${error.message}`)
 }

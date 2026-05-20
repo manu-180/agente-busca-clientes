@@ -196,6 +196,26 @@ async function sendOnce(
 
   if (!res.ok) {
     const body = await res.text().catch(() => '')
+
+    // "Connection Closed" en el body indica que el WebSocket Baileys ↔ WhatsApp
+    // del sender se cerró durante el envío (sea por restart de Evolution, blip
+    // de red, o WA cerró el socket). Aunque Evolution lo reporta como 500 o
+    // 400, semánticamente es exactamente lo mismo que INSTANCE_NOT_CONNECTED
+    // que detectaría el preflight si llegara a tiempo (race: preflight pasó,
+    // luego el WS se cayó antes del send).
+    //
+    // Clasificarlo como INSTANCE_NOT_CONNECTED (en vez de SERVER_ERROR) hace
+    // que el caller marque al sender disconnected con failover INMEDIATO sin
+    // sumar a `consecutive_send_failures` — el contador es para fallas de
+    // "este sender específico está flakeando", no para "el WS murió".
+    if (body.includes('Connection Closed')) {
+      throw new EvolutionError(
+        EVO_ERR.INSTANCE_NOT_CONNECTED,
+        `Evolution ${res.status}: Connection Closed (WebSocket cerrado)`,
+        { status: res.status, retryable: false }
+      )
+    }
+
     if (res.status >= 500) {
       throw new EvolutionError(
         EVO_ERR.SERVER_ERROR,

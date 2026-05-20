@@ -15,6 +15,7 @@ import {
   SITIO_PRINCIPAL_APEX,
 } from '@/lib/whatsapp-template-demos'
 import { enviarMensajeEvolution, EVO_ERR, isEvolutionError } from '@/lib/evolution'
+import { fetchAllInstances } from '@/lib/evolution-instance'
 import {
   selectNextSender,
   incrementMsgsToday,
@@ -22,8 +23,15 @@ import {
   markDisconnected,
   incrementSendFailures,
   resetSendFailures,
+  updateHealthCheck,
   type PoolSender,
 } from '@/lib/sender-pool'
+
+// Inline health-check piggybacking: cada N min ejecutamos un health-check
+// dentro de este cron para no depender exclusivamente del cron Vercel de
+// `/api/cron/health-evolution`. En plan Hobby Vercel no permite */N min,
+// y este cron de leads-pendientes ya corre con alta frecuencia.
+const INLINE_HEALTH_THROTTLE_MS = 3 * 60_000
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -33,8 +41,19 @@ const MAX_REINTENTOS_LEAD = 3
 const MAX_REINTENTOS_POOL = 3
 // Umbral de fallos consecutivos antes de marcar sender disconnected.
 // Pre-blindaje era 10 (mensajes al vacío). Ahora con preflight + connection.update,
-// 3 fallos seguidos ya es señal fuerte de que la sesión está rota.
-const MAX_FALLOS_CONSECUTIVOS = 3
+// la señal de "sesión rota" llega por otros canales (preflight close, webhook
+// connection.update) antes de que el contador sume.
+// Subido a 8 (era 3) porque 3 fallos consecutivos suceden trivialmente con un
+// blip de 30-60s del servidor Evolution (Railway) y mata senders sanos. El
+// 2026-05-20 un episodio de "Evolution 500 Connection Closed" de 15 min cayó
+// los 4 senders activos al mismo tiempo.
+const MAX_FALLOS_CONSECUTIVOS = 8
+// Ventana para detectar "server-wide outage" (no solo un sender específico):
+// si varios senders distintos fallaron con error temporal en los últimos N min,
+// asumimos que el problema es de Evolution server y NO marcamos disconnected
+// — esperamos a que Evolution se recupere en vez de tirar abajo todo el pool.
+const OUTAGE_WINDOW_MS = 5 * 60_000
+const OUTAGE_MIN_OTHER_SENDERS = 1
 
 type SupabaseClient = ReturnType<typeof createSupabaseServer>
 
@@ -243,6 +262,37 @@ async function claimYEnviarLead(
       const fallosAhora = await incrementSendFailures(sup, sender.id)
 
       if (fallosAhora >= MAX_FALLOS_CONSECUTIVOS) {
+        // Antes de marcar este sender como muerto, chequear si OTROS senders
+        // del pool también vienen fallando en los últimos OUTAGE_WINDOW_MS.
+        // Si sí, es un outage de Evolution server (no este sender específico)
+        // y NO debemos cascade-kill todo el pool — el cron health-evolution lo
+        // recupera cuando Evolution responda bien de nuevo.
+        const desdeOutage = new Date(Date.now() - OUTAGE_WINDOW_MS).toISOString()
+        const { data: otrosFallando } = await sup
+          .from('senders')
+          .select('id')
+          .eq('provider', 'evolution')
+          .eq('activo', true)
+          .eq('connected', false)
+          .neq('id', sender.id)
+          .gte('disconnected_at', desdeOutage)
+          .in('disconnection_reason', ['send_failure_threshold', 'connection_closed', 'preflight_close'])
+
+        if ((otrosFallando?.length ?? 0) >= OUTAGE_MIN_OTHER_SENDERS) {
+          console.error(
+            `[cron] sender ${sender.instance_name}: ${fallosAhora} fallos consecutivos PERO ` +
+            `${otrosFallando?.length} otros senders también disconnected en ${OUTAGE_WINDOW_MS / 60000}min → ` +
+            `asumimos Evolution server outage, NO marcamos disconnected (health-evolution lo recuperará).`
+          )
+          return {
+            status: 'evolution_server_outage_suspect',
+            sender_id: sender.id,
+            fallos: fallosAhora,
+            otros_disconnected: otrosFallando?.length,
+            ultimo_error: msg,
+          }
+        }
+
         await markDisconnected(sup, sender.id, 'send_failure_threshold')
         console.error(
           `[cron] sender ${sender.instance_name}: ${fallosAhora} fallos consecutivos → markDisconnected (failover)`
@@ -262,11 +312,86 @@ async function claimYEnviarLead(
   return { status: 'sin_pendientes' }
 }
 
+/**
+ * Health-check inline (piggyback): si pasaron más de INLINE_HEALTH_THROTTLE_MS
+ * desde el último health-check de cualquier sender, ejecutamos un sync con
+ * Evolution. No-op si el cron Vercel /api/cron/health-evolution ya está
+ * cumpliendo. Defensivo: una sola query DB para chequear staleness.
+ */
+async function ejecutarHealthCheckInlineSiCorresponde(sup: SupabaseClient): Promise<void> {
+  const { data: ultimoCheck } = await sup
+    .from('senders')
+    .select('health_checked_at')
+    .eq('provider', 'evolution')
+    .eq('activo', true)
+    .order('health_checked_at', { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle()
+
+  const lastCheckAt = ultimoCheck?.health_checked_at
+    ? new Date(ultimoCheck.health_checked_at).getTime()
+    : 0
+  const stale = Date.now() - lastCheckAt > INLINE_HEALTH_THROTTLE_MS
+  if (!stale) return
+
+  try {
+    const { data: senders } = await sup
+      .from('senders')
+      .select('id, alias, instance_name, connected, disconnected_at, disconnection_reason')
+      .eq('provider', 'evolution')
+      .eq('activo', true)
+
+    const senderRows = senders ?? []
+    if (senderRows.length === 0) return
+
+    const instances = await fetchAllInstances()
+    const byName = new Map(instances.map(i => [i.name, i]))
+
+    for (const s of senderRows) {
+      const evo = byName.get(s.instance_name as string)
+      const evoState = evo?.state ?? null
+      const evoPhone = evo?.phone ?? null
+      if (evoState === 'connecting') {
+        await sup.from('senders').update({ health_checked_at: new Date().toISOString() }).eq('id', s.id as string)
+        continue
+      }
+      const nextConnected = evoState === 'open'
+      const changed = nextConnected !== s.connected
+      const isFirstDetect = !nextConnected && (changed || s.disconnected_at === null)
+      let reason: string | null = null
+      if (!nextConnected && isFirstDetect) {
+        if (evoState === 'close') reason = 'health_check_close'
+        else if (evoState == null) reason = 'health_check_instance_missing'
+        else reason = `health_check_${evoState}`
+      }
+      try {
+        await updateHealthCheck(sup, s.id as string, {
+          connected: nextConnected,
+          reason,
+          phoneNumber: evoPhone,
+          preserveDisconnectedAt: !nextConnected && !isFirstDetect,
+        })
+        if (changed) {
+          console.log(
+            `[cron inline-health] ${s.alias ?? s.instance_name}: ` +
+            `${s.connected}→${nextConnected} (${reason ?? 'open'})`
+          )
+        }
+      } catch (e) {
+        console.warn(`[cron inline-health] sync ${s.instance_name} falló:`, e instanceof Error ? e.message : e)
+      }
+    }
+  } catch (err) {
+    console.warn(`[cron inline-health] fetchAllInstances falló (no bloquea cron):`, err instanceof Error ? err.message : err)
+  }
+}
+
 async function procesarUnTick(
   sup: SupabaseClient,
   forced: boolean
 ): Promise<Record<string, unknown>> {
   await resetDailyCountersIfNeeded(sup)
+  await ejecutarHealthCheckInlineSiCorresponde(sup)
 
   const { data: cfgActivo } = await sup
     .from('configuracion').select('valor').eq('clave', 'first_contact_activo').maybeSingle()

@@ -106,6 +106,8 @@ interface PlacesKeyStatus {
 
 interface PlacesKeysSnapshot {
   month: string
+  next_reset_at: string
+  days_until_reset: number
   keys: PlacesKeyStatus[]
 }
 
@@ -311,6 +313,35 @@ export default function NuevoLeadClient() {
       }
     } catch {
       // silencioso, no es crítico
+    }
+  }
+
+  const [reseteandoKey, setReseteandoKey] = useState<string | null>(null)
+
+  async function rehabilitarKey(label: string) {
+    if (reseteandoKey) return
+    const ok = window.confirm(
+      `Re-habilitar ${label}?\n\nEsto pone su contador en 0 para el mes actual. Usalo solo si la marcaste como agotada por un 403 (billing / restricción) y ya arreglaste la config en Google Cloud.`,
+    )
+    if (!ok) return
+    setReseteandoKey(label)
+    try {
+      const res = await fetch('/api/leads/places-keys/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label }),
+      })
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null
+        window.alert(data?.error ?? 'No se pudo re-habilitar la key.')
+        return
+      }
+      await cargarPlacesKeys()
+    } catch (err) {
+      const mensaje = err instanceof Error ? err.message : 'Error desconocido'
+      window.alert(`No se pudo re-habilitar la key: ${mensaje}`)
+    } finally {
+      setReseteandoKey(null)
     }
   }
 
@@ -746,7 +777,21 @@ export default function NuevoLeadClient() {
                 búsquedas gratis por key (Text Search Enterprise). Sumá más keys con{' '}
                 <code className="text-apex-lime/90 font-mono">GOOGLE_PLACES_API_KEY_2</code>,{' '}
                 <code className="text-apex-lime/90 font-mono">_3</code>, etc. Cuando la activa se llena,
-                rota automáticamente. Reset el día 1 a las 00:00 hora del Pacífico.
+                rota automáticamente.
+              </p>
+              <p className="text-[11px] text-apex-muted/85 mt-1 font-mono">
+                Próximo reset:{' '}
+                <span className="text-apex-lime/90">
+                  {new Date(placesKeys.next_reset_at).toLocaleDateString('es-AR', {
+                    day: '2-digit',
+                    month: 'short',
+                    timeZone: 'America/Argentina/Buenos_Aires',
+                  })}
+                </span>{' '}
+                ·{' '}
+                <span className="text-white tabular-nums">{placesKeys.days_until_reset}</span>{' '}
+                día{placesKeys.days_until_reset === 1 ? '' : 's'} restante
+                {placesKeys.days_until_reset === 1 ? '' : 's'} (00:00 hora Pacífico).
               </p>
             </div>
             {placesKeysResumen && !placesKeysResumen.sinKeys && (
@@ -878,6 +923,18 @@ export default function NuevoLeadClient() {
                     >
                       Último error: {k.last_error}
                     </p>
+                  )}
+
+                  {k.exhausted && (
+                    <button
+                      type="button"
+                      onClick={() => rehabilitarKey(k.label)}
+                      disabled={reseteandoKey === k.label}
+                      className="text-[10px] font-mono uppercase tracking-wider text-apex-lime/90 hover:text-apex-lime border border-apex-lime/30 hover:border-apex-lime/60 rounded px-2 py-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed self-start"
+                      title="Pone el contador en 0 para este mes. Útil si el agotamiento vino de un 403 (billing/restricción) y ya arreglaste la config."
+                    >
+                      {reseteandoKey === k.label ? 'Re-habilitando…' : 'Re-habilitar'}
+                    </button>
                   )}
                 </div>
               )

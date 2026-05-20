@@ -1,6 +1,11 @@
 import { ResultadoBusquedaLead } from '@/types'
 import { PlacesKey, getConfiguredPlacesKeys } from './keys'
-import { annotateKeyError, consumeQuota, exhaustKeyForMonth, pickAvailableKey } from './quota'
+import {
+  annotateKeyError,
+  exhaustKeyForMonth,
+  pickAvailableKey,
+  recordPlacesCall,
+} from './quota'
 
 interface GooglePlace {
   displayName?: { text?: string }
@@ -29,6 +34,14 @@ const FIELD_MASK = [
   'places.googleMapsUri',
   'places.types',
 ].join(',')
+
+// Reintentos por key cuando el error es transitorio (5xx, rate-limit por
+// minuto). Después de N intentos en la misma key, rotamos a la siguiente.
+const MAX_TRANSIENT_RETRIES_PER_KEY = 2
+// Backoff base (ms) — crece exponencialmente: 600, 1200, 2400...
+const BACKOFF_BASE_MS = 600
+// Tope de seguridad para no quedarnos eternamente loopeando entre keys.
+const MAX_TOTAL_ATTEMPTS = 8
 
 function normalizarTelefono(telefono: string | null | undefined): string {
   if (!telefono) return ''
@@ -123,9 +136,75 @@ function parseResultados(rubro: string, bodyText: string): ResultadoBusquedaLead
 }
 
 /**
- * Búsqueda en Google Places (New) con rotación automática de keys cuando una
- * agota su cuota mensual. Si todas las keys están agotadas o todas devuelven
- * 429 (rate limit), lanza PlacesAllKeysExhaustedError.
+ * Tipos de error reconocidos en respuestas 4xx/5xx de Google Places.
+ *
+ *  - `quota_exhausted`: la cuota mensual se quemó (429 + status RESOURCE_EXHAUSTED
+ *    sin mención de "per minute"). Marcamos la key como agotada y rotamos.
+ *  - `rate_limited`: rate limit por minuto/segundo (429 + "per minute" en el
+ *    detalle). Es transitorio: reintentamos en la misma key con backoff.
+ *  - `transient`: 5xx u otros errores transitorios. Reintento con backoff en
+ *    la misma key.
+ *  - `key_invalid`: 401/403 — key inválida, restringida, billing apagado, API
+ *    no habilitada. NO consumimos cuota, rotamos.
+ *  - `fatal`: el resto (400 con request mal formado, etc.). Anotamos y rotamos.
+ */
+type ErrorKind = 'quota_exhausted' | 'rate_limited' | 'transient' | 'key_invalid' | 'fatal'
+
+function classifyError(status: number, bodyText: string): ErrorKind {
+  if (status === 401 || status === 403) return 'key_invalid'
+
+  if (status === 429) {
+    const lower = bodyText.toLowerCase()
+    // Rate limit por minuto/segundo viene típicamente con menciones a
+    // "per minute" o "per second" o quota IDs como "PerMinute"/"QPS".
+    if (
+      lower.includes('per minute') ||
+      lower.includes('per second') ||
+      lower.includes('perminute') ||
+      lower.includes('queriespersecond') ||
+      lower.includes('queriespermin')
+    ) {
+      return 'rate_limited'
+    }
+    return 'quota_exhausted'
+  }
+
+  if (status >= 500 && status < 600) return 'transient'
+  if (status === 408) return 'transient' // request timeout
+
+  return 'fatal'
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'))
+      return
+    }
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = () => {
+      clearTimeout(t)
+      reject(new DOMException('Aborted', 'AbortError'))
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+/**
+ * Búsqueda en Google Places (New) con rotación automática de keys + reintentos
+ * con backoff para errores transitorios. Política por código de estado:
+ *
+ *  - 2xx: contamos la llamada (recordPlacesCall) y devolvemos resultados.
+ *  - 401/403: NO contamos cuota, anotamos el error, rotamos a la siguiente key.
+ *  - 429 RESOURCE_EXHAUSTED (cuota mensual): marcamos la key como agotada y rotamos.
+ *  - 429 rate-limit por minuto/segundo: reintento con backoff en la misma key.
+ *  - 5xx / 408: reintento con backoff en la misma key.
+ *  - Otros 4xx: anotamos error, rotamos a la siguiente key.
+ *
+ * Si todas las keys se quemaron o salieron por error, tira PlacesAllKeysExhaustedError.
  */
 export async function searchPlaces(
   rubro: string,
@@ -135,68 +214,121 @@ export async function searchPlaces(
   const allKeys = getConfiguredPlacesKeys()
   if (allKeys.length === 0) throw new PlacesNoKeysError()
 
-  // Itera por orden — `pickAvailableKey` ya respeta ese orden — pero hace
-  // un máximo de N intentos para tolerar carreras y rotaciones in-vuelo.
-  const seenAsExhausted = new Set<string>()
-  for (let attempt = 0; attempt < allKeys.length; attempt++) {
+  const blacklisted = new Set<string>() // keys agotadas o caídas DURANTE esta búsqueda
+  let totalAttempts = 0
+  let lastFatal: string | null = null
+
+  while (totalAttempts < MAX_TOTAL_ATTEMPTS) {
+    totalAttempts++
+
     const picked = await pickAvailableKey()
     if (!picked) break
-    if (seenAsExhausted.has(picked.key.label)) {
-      // ya intentamos esta y la marcamos como no-disponible, evita bucle.
+    if (blacklisted.has(picked.key.label)) break // pickAvailableKey volvió a darnos una que ya descartamos → no hay más
+
+    // Reintentos contra errores transitorios en ESTA misma key.
+    let transientAttempts = 0
+    let rotateToNextKey = false
+    let result: PlacesSearchOk | null = null
+
+    while (transientAttempts <= MAX_TRANSIENT_RETRIES_PER_KEY) {
+      let response: { status: number; bodyText: string }
+      try {
+        response = await callPlacesApi(rubro, zona, picked.key, signal)
+      } catch (err) {
+        if (signal?.aborted) throw err
+        const msg = err instanceof Error ? err.message : 'Error de red llamando a Google Places'
+        // Error de red: reintento con backoff en la misma key (hasta el tope).
+        if (transientAttempts < MAX_TRANSIENT_RETRIES_PER_KEY) {
+          transientAttempts++
+          await delay(BACKOFF_BASE_MS * 2 ** (transientAttempts - 1), signal)
+          continue
+        }
+        await annotateKeyError(picked.key, `Red: ${msg}`)
+        lastFatal = msg
+        rotateToNextKey = true
+        blacklisted.add(picked.key.label)
+        break
+      }
+
+      // 2xx → contamos y devolvemos.
+      if (response.status >= 200 && response.status < 300) {
+        const resultados = parseResultados(rubro, response.bodyText)
+        const newUsed = await recordPlacesCall(picked.key)
+        result = {
+          ok: true,
+          resultados,
+          key_label: picked.key.label,
+          used: newUsed ?? picked.used + 1,
+          quota: picked.key.quota,
+        }
+        break
+      }
+
+      const kind = classifyError(response.status, response.bodyText)
+      const sample = response.bodyText.slice(0, 220)
+
+      if (kind === 'rate_limited' || kind === 'transient') {
+        if (transientAttempts < MAX_TRANSIENT_RETRIES_PER_KEY) {
+          transientAttempts++
+          await delay(BACKOFF_BASE_MS * 2 ** (transientAttempts - 1), signal)
+          continue
+        }
+        // Agotamos reintentos en esta key — anotamos y rotamos sin marcar
+        // agotada (rate limit es temporal, no permanente).
+        await annotateKeyError(
+          picked.key,
+          `HTTP ${response.status} ${kind} (${sample}). Reintentos agotados, rotando.`,
+        )
+        rotateToNextKey = true
+        blacklisted.add(picked.key.label)
+        break
+      }
+
+      if (kind === 'quota_exhausted') {
+        await annotateKeyError(
+          picked.key,
+          `HTTP 429 RESOURCE_EXHAUSTED (${sample}). Cuota mensual quemada.`,
+        )
+        await exhaustKeyForMonth(picked.key)
+        rotateToNextKey = true
+        blacklisted.add(picked.key.label)
+        break
+      }
+
+      if (kind === 'key_invalid') {
+        // 401/403: la key NO está sirviendo. Anotamos pero NO consumimos cuota
+        // ni la marcamos agotada (el usuario debe arreglar la config).
+        await annotateKeyError(
+          picked.key,
+          `HTTP ${response.status} key inválida/restringida (${sample}). No consume cuota; rotando.`,
+        )
+        rotateToNextKey = true
+        blacklisted.add(picked.key.label)
+        break
+      }
+
+      // fatal: 400 con request malformado u otro 4xx. Probablemente sea bug
+      // nuestro, no de la key. Pero si rotamos puede que la siguiente devuelva
+      // lo mismo. Anotamos contra esta key y rotamos igual: si todas fallan
+      // con fatal, terminamos en PlacesAllKeysExhaustedError con info en logs.
+      await annotateKeyError(picked.key, `HTTP ${response.status} fatal: ${sample}`)
+      lastFatal = `HTTP ${response.status}: ${sample}`
+      rotateToNextKey = true
+      blacklisted.add(picked.key.label)
       break
     }
 
-    // Reservamos cupo ANTES de hacer la llamada (decisión atómica vía RPC).
-    const newUsed = await consumeQuota(picked.key)
-    if (newUsed == null) {
-      // Carrera: justo se agotó entre que la elegimos y reservamos.
-      seenAsExhausted.add(picked.key.label)
-      continue
-    }
+    if (result) return result
+    if (rotateToNextKey) continue
 
-    let response: { status: number; bodyText: string }
-    try {
-      response = await callPlacesApi(rubro, zona, picked.key, signal)
-    } catch (err) {
-      if (signal?.aborted) throw err
-      const msg = err instanceof Error ? err.message : 'Error de red llamando a Google Places'
-      await annotateKeyError(picked.key, msg)
-      throw new Error(msg)
-    }
-
-    // 200 OK
-    if (response.status >= 200 && response.status < 300) {
-      const resultados = parseResultados(rubro, response.bodyText)
-      return {
-        ok: true,
-        resultados,
-        key_label: picked.key.label,
-        used: newUsed,
-        quota: picked.key.quota,
-      }
-    }
-
-    // 429 = rate limit (cuota mensual o QPM saturados). Marcamos como agotada
-    // en el DB y rotamos a la siguiente key.
-    if (response.status === 429) {
-      const sample = response.bodyText.slice(0, 200)
-      await annotateKeyError(
-        picked.key,
-        `HTTP 429 — RESOURCE_EXHAUSTED (${sample}). Forzamos rotación.`,
-      )
-      // Quemamos la cuota en el DB para que pickAvailableKey() la salte en
-      // búsquedas posteriores (no solo en este loop local).
-      await exhaustKeyForMonth(picked.key)
-      seenAsExhausted.add(picked.key.label)
-      continue
-    }
-
-    // 4xx / 5xx no recuperable: anota el error y aborta.
-    const sample = response.bodyText.slice(0, 300)
-    const errMsg = `Google Places HTTP ${response.status}: ${sample}`
-    await annotateKeyError(picked.key, errMsg)
-    throw new Error(errMsg)
+    // Si llegamos acá es que salimos del loop interno sin resultado ni rotación
+    // (no debería pasar) — rompemos para evitar loop infinito.
+    break
   }
 
+  // Si en el camino hubo un error de red/fatal contra alguna key, propagamos
+  // ese mensaje (más útil que "cuota agotada" si el problema real era otro).
+  // Si TODAS fallaron exclusivamente por cuota/rate, tiramos all-exhausted.
+  if (lastFatal) throw new Error(`Google Places: ${lastFatal}`)
   throw new PlacesAllKeysExhaustedError(allKeys.length)
 }

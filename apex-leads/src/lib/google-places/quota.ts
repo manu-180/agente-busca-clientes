@@ -3,7 +3,9 @@ import {
   PLACES_FREE_MONTHLY_QUOTA,
   PlacesKey,
   currentMonthLabelPT,
+  daysUntilNextResetPT,
   getConfiguredPlacesKeys,
+  nextResetAtPT,
 } from './keys'
 
 export interface KeyMonthUsage {
@@ -27,6 +29,15 @@ export interface KeyStatus {
   last_used_at: string | null
   last_error: string | null
   last_error_at: string | null
+}
+
+export interface KeysStatusSnapshot {
+  month: string
+  /** ISO UTC del próximo reset (día 1 a 00:00 PT). */
+  next_reset_at: string
+  /** Días enteros restantes hasta el reset. */
+  days_until_reset: number
+  keys: KeyStatus[]
 }
 
 export interface SelectedKey {
@@ -71,7 +82,7 @@ export async function getUsageForMonth(month: string): Promise<Map<string, KeyMo
  *
  * Expone únicamente el sufijo de cada key (4 chars), nunca el valor entero.
  */
-export async function getKeysStatusForUi(): Promise<{ month: string; keys: KeyStatus[] }> {
+export async function getKeysStatusForUi(): Promise<KeysStatusSnapshot> {
   const month = currentMonthLabelPT()
   const configured = getConfiguredPlacesKeys()
   const usage = await getUsageForMonth(month)
@@ -113,12 +124,18 @@ export async function getKeysStatusForUi(): Promise<{ month: string; keys: KeySt
     })
   }
 
-  return { month, keys: out }
+  const now = new Date()
+  return {
+    month,
+    next_reset_at: nextResetAtPT(now).toISOString(),
+    days_until_reset: daysUntilNextResetPT(now),
+    keys: out,
+  }
 }
 
 /**
  * Selecciona la primera key con cupo disponible este mes. La elección es
- * "best-effort" — la decisión final atómica la hace `consumeQuota()` vía RPC.
+ * "best-effort" — el conteo real se hace recién después de la llamada exitosa.
  * Devuelve null si no hay ninguna key configurada o todas están agotadas.
  */
 export async function pickAvailableKey(): Promise<SelectedKey | null> {
@@ -134,19 +151,20 @@ export async function pickAvailableKey(): Promise<SelectedKey | null> {
 }
 
 /**
- * Incrementa de forma atómica el contador de la key. Devuelve el nuevo valor
- * (>=1) o null si la key ya estaba agotada en este mes.
+ * Incrementa el contador de la key DESPUÉS de una respuesta 2xx real.
+ * No valida cupo: Google ya consumió 1 unidad en su lado, lo querramos o no.
+ * Devuelve el nuevo total o null si la operación falló.
  */
-export async function consumeQuota(key: PlacesKey): Promise<number | null> {
+export async function recordPlacesCall(key: PlacesKey): Promise<number | null> {
   const supabase = createSupabaseServer()
   const month = currentMonthLabelPT()
-  const { data, error } = await supabase.rpc('consume_places_quota', {
+  const { data, error } = await supabase.rpc('record_places_call', {
     p_label: key.label,
     p_month: month,
     p_quota: key.quota,
   })
   if (error) {
-    console.error('[places.quota] consume_places_quota falló:', error.message)
+    console.error('[places.quota] record_places_call falló:', error.message)
     return null
   }
   if (data == null) return null
@@ -155,8 +173,8 @@ export async function consumeQuota(key: PlacesKey): Promise<number | null> {
 
 /**
  * Fuerza el agotamiento de una key en el DB para el mes actual. Se llama
- * cuando Google devuelve 429 para que `pickAvailableKey` no vuelva a
- * elegirla en búsquedas posteriores dentro del mismo mes.
+ * cuando Google devuelve 429 con RESOURCE_EXHAUSTED para que `pickAvailableKey`
+ * no vuelva a elegirla en búsquedas posteriores dentro del mismo mes.
  */
 export async function exhaustKeyForMonth(key: PlacesKey): Promise<void> {
   const supabase = createSupabaseServer()
@@ -191,4 +209,28 @@ export async function annotateKeyError(key: PlacesKey, message: string): Promise
   if (error) {
     console.error('[places.quota] mark_places_quota_error falló:', error.message)
   }
+}
+
+/**
+ * Re-habilita una key marcada como agotada para el mes actual. Pone
+ * requests_used = 0 y limpia el último error. Usado por el botón
+ * "Re-habilitar" en la UI cuando el usuario sabe que la key volvió a
+ * funcionar (ej. billing reactivado, restricciones corregidas).
+ */
+export async function resetKeyForMonth(label: string): Promise<boolean> {
+  const configured = getConfiguredPlacesKeys()
+  const exists = configured.some((k) => k.label === label)
+  if (!exists) return false
+
+  const supabase = createSupabaseServer()
+  const month = currentMonthLabelPT()
+  const { error } = await supabase.rpc('reset_places_key_month', {
+    p_label: label,
+    p_month: month,
+  })
+  if (error) {
+    console.error('[places.quota] reset_places_key_month falló:', error.message)
+    return false
+  }
+  return true
 }
