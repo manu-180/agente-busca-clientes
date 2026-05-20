@@ -441,10 +441,13 @@ async function procesarUnTick(
 
   // Reintentar hasta MAX_REINTENTOS_POOL veces si el sender elegido se cae.
   // Cada iteración: selectNextSender excluirá automáticamente al que recién marcamos
-  // disconnected porque markDisconnected pone connected=false.
+  // disconnected porque markDisconnected pone connected=false. Para los casos
+  // outage_suspect (donde el sender NO se marca disconnected pero falló este tick),
+  // pasamos excludeIds para que no lo vuelva a elegir en este mismo tick.
   const sendersIntentados: string[] = []
+  const sendersIntentadosIds: string[] = []
   for (let intentoPool = 0; intentoPool < MAX_REINTENTOS_POOL; intentoPool++) {
-    const sender = await selectNextSender(sup)
+    const sender = await selectNextSender(sup, { excludeIds: sendersIntentadosIds })
     if (!sender) {
       return {
         status: 'pool_agotado',
@@ -453,6 +456,7 @@ async function procesarUnTick(
       }
     }
     sendersIntentados.push(sender.alias ?? sender.instance_name)
+    sendersIntentadosIds.push(sender.id)
 
     const leadResult = await claimYEnviarLead(sup, sender)
 
@@ -464,6 +468,21 @@ async function procesarUnTick(
     if (leadResult.status === 'sender_caido_failover') {
       console.warn(
         `[cron] failover #${intentoPool + 1}: sender ${sender.alias ?? sender.instance_name} marcado disconnected, reintentando con siguiente`
+      )
+      continue
+    }
+
+    // Outage suspect: este sender específico falló con sintomas de "Evolution flakeando",
+    // pero no lo marcamos disconnected porque ya hay otros con el mismo síntoma reciente.
+    // Sin embargo, otros senders podrían NO estar flakeando — vale la pena reintentar con
+    // el siguiente del pool antes de rendirnos. Si TODOS dan outage_suspect, el loop sale
+    // por agotamiento de MAX_REINTENTOS_POOL con status pool_agotado_failover.
+    if (
+      leadResult.status === 'evolution_server_outage_suspect_preflight' ||
+      leadResult.status === 'evolution_server_outage_suspect'
+    ) {
+      console.warn(
+        `[cron] outage suspect #${intentoPool + 1}: sender ${sender.alias ?? sender.instance_name} falló pero NO marcado disconnected (outage protection); probando siguiente sender del pool.`
       )
       continue
     }

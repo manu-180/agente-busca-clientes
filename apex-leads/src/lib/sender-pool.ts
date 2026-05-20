@@ -114,7 +114,8 @@ function compareLastSentAtNullsFirst(a: string | null, b: string | null): number
  * @returns el sender elegido o `null` si no hay ninguno disponible.
  */
 export async function selectNextSender(
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  opts?: { excludeIds?: string[] }
 ): Promise<PoolSender | null> {
   const { data, error } = await supabase
     .from('senders')
@@ -128,7 +129,10 @@ export async function selectNextSender(
   if (error) throw new Error(`selectNextSender failed: ${error.message}`)
   if (!data || data.length === 0) return null
 
-  const candidates = (data as PoolSender[]).filter(s => s.msgs_today < s.daily_limit)
+  const excludeSet = new Set(opts?.excludeIds ?? [])
+  const candidates = (data as PoolSender[]).filter(
+    s => s.msgs_today < s.daily_limit && !excludeSet.has(s.id)
+  )
   if (candidates.length === 0) return null
 
   // El ORDER BY de Postgres ya ordena, pero algunos mocks de tests podrían
