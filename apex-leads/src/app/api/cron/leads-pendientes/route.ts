@@ -323,8 +323,43 @@ async function claimYEnviarLead(
       }
 
       // Caso 3: timeout / 5xx / error desconocido. Tratamos como problema temporal/del sender.
-      // Incrementar intentos del lead (porque sí gastó un slot del pool) y fallos del sender.
-      // Si supera el umbral, marcar disconnected y failover.
+      //
+      // Detección outage PRIMERO: si ya hay otros senders disconnected con razones
+      // transitorias en los últimos OUTAGE_WINDOW_MS, es muy probable que sea
+      // outage de Evolution server. En ese caso NO castigamos al lead
+      // (no incrementamos primer_envio_intentos) ni al sender
+      // (no incrementamos consecutive_send_failures) — sino los leads pierden
+      // intentos por errores de infra ajenos a ellos, y los senders acumulan
+      // fallos espurios que los marcarían disconnected en cuanto el outage termine.
+      const desdeOutage = new Date(Date.now() - OUTAGE_WINDOW_MS).toISOString()
+      const { data: otrosFallandoTemprano } = await sup
+        .from('senders')
+        .select('id')
+        .eq('provider', 'evolution')
+        .eq('activo', true)
+        .eq('connected', false)
+        .neq('id', sender.id)
+        .gte('disconnected_at', desdeOutage)
+        .in('disconnection_reason', OUTAGE_TRANSIENT_REASONS)
+
+      const esOutageSospechoso = (otrosFallandoTemprano?.length ?? 0) >= OUTAGE_MIN_OTHER_SENDERS
+
+      if (esOutageSospechoso) {
+        console.error(
+          `[cron] sender ${sender.instance_name}: error temporal PERO ` +
+          `${otrosFallandoTemprano?.length} otros senders también disconnected en ${OUTAGE_WINDOW_MS / 60000}min → ` +
+          `asumimos Evolution server outage, NO incrementamos intentos del lead ni fallos del sender.`
+        )
+        return {
+          status: 'evolution_server_outage_suspect',
+          sender_id: sender.id,
+          fallos: 0,
+          otros_disconnected: otrosFallandoTemprano?.length,
+          ultimo_error: msg,
+        }
+      }
+
+      // No es outage detectable — sí incrementamos lead y sender.
       const nuevoIntentos = (lead.primer_envio_intentos ?? 0) + 1
       const esUltimoIntento = nuevoIntentos >= MAX_REINTENTOS_LEAD
       await sup.from(LEADS_TABLE).update({
@@ -336,37 +371,6 @@ async function claimYEnviarLead(
       const fallosAhora = await incrementSendFailures(sup, sender.id)
 
       if (fallosAhora >= MAX_FALLOS_CONSECUTIVOS) {
-        // Antes de marcar este sender como muerto, chequear si OTROS senders
-        // del pool también vienen fallando en los últimos OUTAGE_WINDOW_MS.
-        // Si sí, es un outage de Evolution server (no este sender específico)
-        // y NO debemos cascade-kill todo el pool — el cron health-evolution lo
-        // recupera cuando Evolution responda bien de nuevo.
-        const desdeOutage = new Date(Date.now() - OUTAGE_WINDOW_MS).toISOString()
-        const { data: otrosFallando } = await sup
-          .from('senders')
-          .select('id')
-          .eq('provider', 'evolution')
-          .eq('activo', true)
-          .eq('connected', false)
-          .neq('id', sender.id)
-          .gte('disconnected_at', desdeOutage)
-          .in('disconnection_reason', OUTAGE_TRANSIENT_REASONS)
-
-        if ((otrosFallando?.length ?? 0) >= OUTAGE_MIN_OTHER_SENDERS) {
-          console.error(
-            `[cron] sender ${sender.instance_name}: ${fallosAhora} fallos consecutivos PERO ` +
-            `${otrosFallando?.length} otros senders también disconnected en ${OUTAGE_WINDOW_MS / 60000}min → ` +
-            `asumimos Evolution server outage, NO marcamos disconnected (health-evolution lo recuperará).`
-          )
-          return {
-            status: 'evolution_server_outage_suspect',
-            sender_id: sender.id,
-            fallos: fallosAhora,
-            otros_disconnected: otrosFallando?.length,
-            ultimo_error: msg,
-          }
-        }
-
         await markDisconnected(sup, sender.id, 'send_failure_threshold')
         console.error(
           `[cron] sender ${sender.instance_name}: ${fallosAhora} fallos consecutivos → markDisconnected (failover)`
