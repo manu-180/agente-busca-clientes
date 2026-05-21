@@ -60,7 +60,12 @@ export const maxDuration = 30
 
 const LEADS_TABLE = 'leads'
 const MAX_REINTENTOS_LEAD = 3
-const MAX_REINTENTOS_POOL = 3
+// Reintentos del pool por tick: debe ser >= número de senders conectados
+// para que el cron pruebe TODOS antes de rendirse. Con 4 senders conectados
+// y MAX=3, el 4to nunca se probaba — el cron retornaba pool_agotado_failover
+// dejando un sender disponible sin usar. 6 cubre cómodamente el pool actual
+// (Manu/Cami/Juli/Manu new/Manu wpp business/Manu Backup) con margen.
+const MAX_REINTENTOS_POOL = 6
 // Umbral de fallos consecutivos antes de marcar sender disconnected.
 // Pre-blindaje era 10 (mensajes al vacío). Ahora con preflight + connection.update,
 // la señal de "sesión rota" llega por otros canales (preflight close, webhook
