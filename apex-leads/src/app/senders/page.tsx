@@ -1000,12 +1000,21 @@ function QRConnectModal({
   const [connectedFlash, setConnectedFlash] = useState(false)
   const stoppedRef = useRef(false)
 
-  const fetchQr = async (initial: boolean) => {
+  // forceReset=true → endpoint /reconnect (logout + delete + create + connect):
+  //   nukea las creds de Baileys en disco. Único modo que garantiza QR fresh
+  //   para una SIM que ya estuvo vinculada (sin esto, Evolution reusa la sesión
+  //   cacheada y se reconecta solo sin pedir QR).
+  // forceReset=false → endpoint /qr (solo connectInstance): la instance ya
+  //   existe sin sesión previa (SIM recién creada, o regenerando QR después
+  //   de un /reconnect previo). No hace falta nukear nada.
+  const fetchQr = async (forceReset: boolean) => {
     setLoadingQr(true)
     setQrError(null)
     try {
-      const url = initial ? `/api/senders/${senderId}/qr` : `/api/senders/${senderId}/reconnect`
-      const res = await fetch(url, { method: initial ? 'GET' : 'POST' })
+      const url = forceReset
+        ? `/api/senders/${senderId}/reconnect`
+        : `/api/senders/${senderId}/qr`
+      const res = await fetch(url, { method: forceReset ? 'POST' : 'GET' })
       const data = await res.json()
       if (!res.ok) {
         setQrError(data?.error ?? 'No se pudo obtener el QR')
@@ -1020,7 +1029,11 @@ function QRConnectModal({
     }
   }
 
-  // Initial QR fetch
+  // Initial QR fetch.
+  // mode='initial' (SIM recién creada en POST /api/senders): instance fresca,
+  //   solo necesitamos el QR → forceReset=false (/qr).
+  // mode='reconnect' (SIM existente que el usuario quiere re-vincular): hay
+  //   creds cacheadas que hay que nukear → forceReset=true (/reconnect).
   useEffect(() => {
     fetchQr(mode === 'reconnect')
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1033,8 +1046,14 @@ function QRConnectModal({
     return () => clearTimeout(t)
   }, [loadingQr, secondsLeft])
 
-  // Polling state cada 2s
+  // Polling state cada 2s — GATED en !loadingQr.
+  //
+  // Si arrancamos a pollear antes de que /reconnect termine (logout + delete
+  // + create tarda 3-5s), capturamos state='open' de la instance VIEJA y el
+  // modal se cierra solo mostrando ✓ sin que el usuario haya escaneado. Por
+  // eso esperamos a que fetchQr complete antes de empezar el polling.
   useEffect(() => {
+    if (loadingQr) return
     stoppedRef.current = false
     let interval: NodeJS.Timeout | null = null
     const poll = async () => {
@@ -1062,9 +1081,11 @@ function QRConnectModal({
       stoppedRef.current = true
       if (interval) clearInterval(interval)
     }
-  }, [senderId, onConnected])
+  }, [senderId, onConnected, loadingQr])
 
-  const regenerar = () => fetchQr(true)
+  // Regenerar QR siempre va a /qr (no nukear de nuevo). Si fue /reconnect el
+  // primer fetch, la instance ya quedó limpia y solo necesitamos un QR nuevo.
+  const regenerar = () => fetchQr(false)
 
   const titulo = mode === 'reconnect'
     ? `Reconectar ${senderAlias ?? 'SIM'}`
