@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   Plus, ToggleLeft, ToggleRight,
   Send, Edit2, X, Loader2, CheckCircle, AlertCircle, Wifi,
-  QrCode, RefreshCw,
+  QrCode, RefreshCw, Trash2,
 } from 'lucide-react'
 
 interface Sender {
@@ -96,6 +96,9 @@ export default function SendersPage() {
   const [testPhone, setTestPhone] = useState('')
   const [testando, setTestando] = useState(false)
   const [testResult, setTestResult] = useState<{ ok: boolean; error?: string } | null>(null)
+
+  // Delete
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   // Toast
   const [toast, setToast] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
@@ -220,6 +223,35 @@ export default function SendersPage() {
       body: JSON.stringify({ id: s.id, activo: !s.activo }),
     })
     await cargar()
+  }
+
+  const borrarSender = async (s: Sender) => {
+    if (!confirm(
+      `¿Eliminar definitivamente "${s.alias}"?\n\n` +
+      `Esto borra la instancia de Evolution y la fila de la base de datos.\n` +
+      `No se puede deshacer.`
+    )) return
+    setDeletingId(s.id)
+    try {
+      const res = await fetch(`/api/senders?id=${encodeURIComponent(s.id)}&hard=true`, {
+        method: 'DELETE',
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        if (res.status === 409) {
+          showToast('error', `${data?.error ?? 'No se puede borrar'} Usá el toggle "Inactivo" para soft delete.`)
+        } else {
+          showToast('error', data?.error ?? 'No se pudo eliminar')
+        }
+        return
+      }
+      showToast('ok', `SIM "${s.alias}" eliminada`)
+      await cargar()
+    } catch (e) {
+      showToast('error', String(e))
+    } finally {
+      setDeletingId(null)
+    }
   }
 
   // ─── RECONNECT ────────────────────────────────────────────────────────
@@ -541,8 +573,18 @@ export default function SendersPage() {
                     Editar
                   </button>
                   <button
+                    onClick={() => borrarSender(s)}
+                    disabled={deletingId === s.id}
+                    title="Eliminar SIM definitivamente"
+                    className="ml-auto flex items-center justify-center w-8 h-8 rounded-lg text-xs font-medium bg-apex-border text-apex-muted hover:bg-red-500/15 hover:text-red-400 hover:border-red-500/30 border border-transparent transition-colors disabled:opacity-40"
+                  >
+                    {deletingId === s.id
+                      ? <Loader2 size={13} className="animate-spin" />
+                      : <Trash2 size={13} />}
+                  </button>
+                  <button
                     onClick={() => toggleActivo(s)}
-                    className={`ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
                       s.activo
                         ? 'bg-apex-lime/10 text-apex-lime border border-apex-lime/20 hover:bg-apex-lime/20'
                         : 'bg-apex-border text-apex-muted hover:text-white'
