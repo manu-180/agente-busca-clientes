@@ -269,8 +269,15 @@ export async function getCapacityStats(
  * consecutivos, desde el webhook al recibir `connection.update state=close`,
  * o desde el cron de health-check.
  *
- * Idempotente: si ya estaba `connected=false`, solo refresca `disconnected_at`
- * si la razón cambió.
+ * Idempotente: si ya estaba `connected=false`, NO refresca `disconnected_at`
+ * para preservar el timestamp original. Esto es crítico para que el threshold
+ * de auto-restart (8 min en health-evolution) funcione cuando Evolution emite
+ * múltiples `state=close` en transitorios — sin esto, cada close reinicia el
+ * contador y el auto-restart nunca se dispara.
+ *
+ * Solo actualiza `disconnection_reason` si la razón cambió (preserva la causa
+ * raíz original; un health_check_close posterior no debe pisar al
+ * preflight_close que lo originó).
  *
  * @param reason — código corto: `device_removed`, `conflict`, `timeout`,
  *   `send_failure_threshold`, `health_check_close`, `preflight_close`, etc.
@@ -280,13 +287,29 @@ export async function markDisconnected(
   senderId: string,
   reason: string = 'unknown'
 ): Promise<void> {
+  // Leer estado actual para decidir si es transición o re-confirmación.
+  const { data: current, error: readErr } = await supabase
+    .from('senders')
+    .select('connected, disconnected_at, disconnection_reason')
+    .eq('id', senderId)
+    .maybeSingle()
+
+  if (readErr) throw new Error(`markDisconnected read failed: ${readErr.message}`)
+
+  // Si ya estaba disconnected con disconnected_at seteado, NO pisamos el
+  // timestamp ni la razón original. Solo registramos que seguimos disconnected.
+  const yaEstabaDisconnected =
+    current && current.connected === false && current.disconnected_at !== null
+
+  const update: Record<string, unknown> = { connected: false }
+  if (!yaEstabaDisconnected) {
+    update.disconnection_reason = reason
+    update.disconnected_at = new Date().toISOString()
+  }
+
   const { error } = await supabase
     .from('senders')
-    .update({
-      connected: false,
-      disconnection_reason: reason,
-      disconnected_at: new Date().toISOString(),
-    })
+    .update(update)
     .eq('id', senderId)
 
   if (error) throw new Error(`markDisconnected failed: ${error.message}`)
@@ -352,30 +375,58 @@ export async function markConnected(
  * Incrementa atómicamente `consecutive_send_failures` para un sender.
  * Devuelve el nuevo valor para que el caller decida si superó el umbral.
  *
- * Race-safe: si dos crons fallan simultáneamente, ambos suman correctamente
- * porque usamos un `select` post-update.
+ * Race-safe via optimistic concurrency: si dos crons leen el mismo valor y
+ * ambos intentan UPDATE, solo uno gana (el UPDATE incluye `consecutive_send_failures.eq(current)`).
+ * El perdedor reintenta con el valor actualizado. Sin esto, ambos crons
+ * escribirían el mismo `next` (ej: 5→6, 5→6) en vez de incrementar dos veces
+ * (5→6, 6→7), perdiendo un fallo.
+ *
+ * Reintenta hasta 5 veces antes de rendirse — suficiente margen para
+ * concurrencia realista del pool (5 crons defasados).
  */
 export async function incrementSendFailures(
   supabase: SupabaseClient,
   senderId: string
 ): Promise<number> {
-  const { data: current, error: readErr } = await supabase
+  const MAX_RETRIES = 5
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const { data: current, error: readErr } = await supabase
+      .from('senders')
+      .select('consecutive_send_failures')
+      .eq('id', senderId)
+      .maybeSingle()
+
+    if (readErr) throw new Error(`incrementSendFailures read failed: ${readErr.message}`)
+    if (!current) return 0
+
+    const prev = (current.consecutive_send_failures ?? 0)
+    const next = prev + 1
+
+    // Optimistic UPDATE: solo afecta si consecutive_send_failures no cambió.
+    const { data: updated, error: updateErr } = await supabase
+      .from('senders')
+      .update({ consecutive_send_failures: next })
+      .eq('id', senderId)
+      .eq('consecutive_send_failures', prev)
+      .select('id')
+
+    if (updateErr) throw new Error(`incrementSendFailures update failed: ${updateErr.message}`)
+
+    // UPDATE afectó la fila → race ganada, devolver el nuevo valor.
+    if (Array.isArray(updated) && updated.length > 0) return next
+
+    // Race perdida: otro cron incrementó entre nuestro read y nuestro update.
+    // Reintentamos con el valor más reciente.
+  }
+  // Si después de MAX_RETRIES sigue habiendo contención extrema, devolvemos
+  // el valor más reciente conocido (no incrementado) para no bloquear el
+  // caller. En la práctica esto debería ser inalcanzable.
+  const { data: final } = await supabase
     .from('senders')
     .select('consecutive_send_failures')
     .eq('id', senderId)
     .maybeSingle()
-
-  if (readErr) throw new Error(`incrementSendFailures read failed: ${readErr.message}`)
-  if (!current) return 0
-
-  const next = (current.consecutive_send_failures ?? 0) + 1
-  const { error: updateErr } = await supabase
-    .from('senders')
-    .update({ consecutive_send_failures: next })
-    .eq('id', senderId)
-
-  if (updateErr) throw new Error(`incrementSendFailures update failed: ${updateErr.message}`)
-  return next
+  return final?.consecutive_send_failures ?? 0
 }
 
 /**

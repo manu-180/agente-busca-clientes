@@ -15,7 +15,7 @@ import {
   SITIO_PRINCIPAL_APEX,
 } from '@/lib/whatsapp-template-demos'
 import { enviarMensajeEvolution, EVO_ERR, isEvolutionError } from '@/lib/evolution'
-import { fetchAllInstances } from '@/lib/evolution-instance'
+import { fetchAllInstances, restartInstance } from '@/lib/evolution-instance'
 import {
   selectNextSender,
   incrementMsgsToday,
@@ -28,10 +28,32 @@ import {
 } from '@/lib/sender-pool'
 
 // Inline health-check piggybacking: cada N min ejecutamos un health-check
-// dentro de este cron para no depender exclusivamente del cron Vercel de
-// `/api/cron/health-evolution`. En plan Hobby Vercel no permite */N min,
-// y este cron de leads-pendientes ya corre con alta frecuencia.
+// dentro de este cron porque el cron Vercel `/api/cron/health-evolution`
+// fue removido (incompatible con */5 min en plan Hobby) y NO está en Railway.
+// Sin este piggyback, senders disconnected no se auto-recuperarían — solo
+// reconectarían vía webhook state=open (improbable si Evolution los perdió)
+// o vía click manual en "Reconectar QR".
 const INLINE_HEALTH_THROTTLE_MS = 3 * 60_000
+
+// Tras N minutos disconnected sin recuperarse, intentamos restartInstance
+// para que Evolution reinicie el WebSocket Baileys ↔ WhatsApp. La cuenta
+// sigue vinculada en el celular (a menos que sea device_removed/conflict),
+// así que con reabrir el socket alcanza — sin QR.
+//
+// 8 min (igual que el cron Vercel viejo): Baileys tiene su propio loop de
+// reconexión para connection_closed (428). Hacer restart antes de que
+// Baileys termine de reconectar genera connectionReplaced (440) en cadena.
+const INLINE_AUTO_RESTART_THRESHOLD_MS = 8 * 60_000
+
+// Razones de disconnection que requieren acción humana (no se recuperan
+// con restartInstance). Si el sender tiene una de éstas, NO intentamos
+// auto-restart porque solo empeoraría el estado.
+const INLINE_REASONS_REQUIRING_QR = new Set<string>([
+  'device_removed',                 // 401: cuenta eliminada en el celular
+  'health_check_instance_missing',  // la instance no existe en Evolution
+  'connection_replaced',            // 440: otro cliente WA tomó la sesión
+  'conflict',                       // 409: otra sesión Multi-Device la tomó
+])
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 30
@@ -54,6 +76,21 @@ const MAX_FALLOS_CONSECUTIVOS = 8
 // — esperamos a que Evolution se recupere en vez de tirar abajo todo el pool.
 const OUTAGE_WINDOW_MS = 5 * 60_000
 const OUTAGE_MIN_OTHER_SENDERS = 1
+
+// Razones transitorias de disconnection que indican "Evolution flakeando".
+// Si vemos N+ senders con estas razones en OUTAGE_WINDOW_MS, asumimos outage
+// del server (no problema específico del sender). Lista idéntica a la del
+// webhook para consistencia: si ambos paths protegen contra el mismo set de
+// razones, una falla en cualquier lado no puede tirar el pool entero.
+const OUTAGE_TRANSIENT_REASONS = [
+  'preflight_close',
+  'connection_closed',
+  'send_failure_threshold',
+  'health_check_close',
+  'timeout',
+  'unavailable',
+  'service_unavailable',
+]
 
 type SupabaseClient = ReturnType<typeof createSupabaseServer>
 
@@ -240,7 +277,7 @@ async function claimYEnviarLead(
           .eq('connected', false)
           .neq('id', sender.id)
           .gte('disconnected_at', desdeOutage)
-          .in('disconnection_reason', ['preflight_close', 'connection_closed', 'send_failure_threshold'])
+          .in('disconnection_reason', OUTAGE_TRANSIENT_REASONS)
 
         if ((otrosFallando?.length ?? 0) >= OUTAGE_MIN_OTHER_SENDERS) {
           console.error(
@@ -308,7 +345,7 @@ async function claimYEnviarLead(
           .eq('connected', false)
           .neq('id', sender.id)
           .gte('disconnected_at', desdeOutage)
-          .in('disconnection_reason', ['send_failure_threshold', 'connection_closed', 'preflight_close'])
+          .in('disconnection_reason', OUTAGE_TRANSIENT_REASONS)
 
         if ((otrosFallando?.length ?? 0) >= OUTAGE_MIN_OTHER_SENDERS) {
           console.error(
@@ -408,6 +445,35 @@ async function ejecutarHealthCheckInlineSiCorresponde(sup: SupabaseClient): Prom
             `[cron inline-health] ${s.alias ?? s.instance_name}: ` +
             `${s.connected}→${nextConnected} (${reason ?? 'open'})`
           )
+        }
+
+        // ── Auto-restart ──
+        // Si el sender lleva > INLINE_AUTO_RESTART_THRESHOLD_MS disconnected
+        // y la razón es recuperable (no requiere QR humano), disparamos
+        // restartInstance para que Evolution reinicie el WebSocket Baileys.
+        // Sin esto, los senders disconnected dependen únicamente del webhook
+        // state=open o click manual del usuario en "Reconectar QR".
+        if (!nextConnected && evoState != null) {
+          const downSinceMs = s.disconnected_at
+            ? Date.now() - new Date(s.disconnected_at as string).getTime()
+            : 0
+          const reasonExistente = (s.disconnection_reason as string | null) ?? reason ?? ''
+          const recoverable = !INLINE_REASONS_REQUIRING_QR.has(reasonExistente)
+
+          if (recoverable && downSinceMs >= INLINE_AUTO_RESTART_THRESHOLD_MS) {
+            try {
+              await restartInstance(s.instance_name as string)
+              console.log(
+                `[cron inline-health] auto-restart disparado: ${s.alias ?? s.instance_name} ` +
+                `(down ${Math.floor(downSinceMs / 1000)}s, reason=${reasonExistente || 'unknown'})`
+              )
+            } catch (restartErr) {
+              console.warn(
+                `[cron inline-health] auto-restart falló para ${s.instance_name}:`,
+                restartErr instanceof Error ? restartErr.message : restartErr
+              )
+            }
+          }
         }
       } catch (e) {
         console.warn(`[cron inline-health] sync ${s.instance_name} falló:`, e instanceof Error ? e.message : e)

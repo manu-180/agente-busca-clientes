@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { fetchPhoneNumber, getInstanceState } from '@/lib/evolution-instance'
+import { markConnected, markDisconnected } from '@/lib/sender-pool'
 
 export const dynamic = 'force-dynamic'
 
@@ -24,25 +25,17 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     let phoneNumber: string | null = sender.phone_number ?? null
 
     if (state === 'open' && !sender.connected) {
+      // Usamos markConnected (no un update raw) para resetear disconnected_at,
+      // disconnection_reason y consecutive_send_failures. Sin esto, el sender
+      // quedaba con consecutive_send_failures viejo y al primer error volvía a
+      // marcarse disconnected aunque acabábamos de reconectar.
       const fetched = await fetchPhoneNumber(sender.instance_name).catch(() => null)
       if (fetched) phoneNumber = fetched
-      await supabase
-        .from('senders')
-        .update({
-          connected: true,
-          connected_at: new Date().toISOString(),
-          ...(phoneNumber ? { phone_number: phoneNumber } : {}),
-        })
-        .eq('id', sender.id)
+      await markConnected(supabase, sender.id, { phoneNumber })
     } else if (state === 'close' && sender.connected) {
-      await supabase
-        .from('senders')
-        .update({
-          connected: false,
-          disconnected_at: new Date().toISOString(),
-          disconnection_reason: 'state_poll_close',
-        })
-        .eq('id', sender.id)
+      // markDisconnected es idempotente: preserva disconnected_at original si
+      // ya estaba disconnected.
+      await markDisconnected(supabase, sender.id, 'state_poll_close')
     }
 
     return NextResponse.json({ state, phone_number: phoneNumber })

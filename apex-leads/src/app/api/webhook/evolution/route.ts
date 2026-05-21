@@ -1187,6 +1187,27 @@ function reasonFromStatusCode(code: number | null | undefined): string {
   return STATUS_REASON_MAP[code] ?? `code_${code}`
 }
 
+// Ventana para detectar "Evolution server-wide outage" desde webhook.
+// Si llegan close events para >= 1 OTROS senders en los últimos N minutos,
+// asumimos outage del server (no específico al sender) y NO marcamos
+// disconnected — el cron health-evolution los recuperará cuando Evolution
+// vuelva a responder open. Esta protección es crítica porque el webhook
+// puede tirar abajo todo el pool en segundos durante un blip de Evolution.
+//
+// El cron leads-pendientes tiene la misma protección en su path de envío;
+// agregamos acá la del webhook que llega ANTES del cron.
+const WEBHOOK_OUTAGE_WINDOW_MS = 5 * 60_000
+const WEBHOOK_OUTAGE_MIN_OTHER_SENDERS = 1
+
+// Razones de close que no son "transitorias" — éstas SIEMPRE marcamos
+// disconnected sin pasar por outage detection, porque son específicas a
+// este sender y requieren acción humana (QR o desvincular).
+const REASONS_NO_OUTAGE_PROTECTION = new Set<string>([
+  'device_removed',       // 401: el celular sacó la sesión. No es outage de Evo.
+  'connection_replaced',  // 440: otro cliente WA tomó la sesión.
+  'conflict',             // 409: otra sesión Multi-Device tomó el lugar.
+])
+
 async function handleConnectionUpdate(
   instanceName: string,
   payload: EvolutionConnectionUpdate
@@ -1238,6 +1259,41 @@ async function handleConnectionUpdate(
 
   if (state === 'close') {
     const reason = reasonFromStatusCode(statusCode)
+
+    // Outage detection: si la razón NO es específica al sender y ya hay otros
+    // senders disconnected por causa transitoria reciente, asumimos outage de
+    // Evolution server y NO marcamos este sender. health-evolution los recupera
+    // cuando Evolution vuelva a responder open.
+    if (!REASONS_NO_OUTAGE_PROTECTION.has(reason)) {
+      const desdeOutage = new Date(Date.now() - WEBHOOK_OUTAGE_WINDOW_MS).toISOString()
+      const { data: otrosFallando } = await supabase
+        .from('senders')
+        .select('id')
+        .eq('provider', 'evolution')
+        .eq('activo', true)
+        .eq('connected', false)
+        .neq('id', sender.id)
+        .gte('disconnected_at', desdeOutage)
+        .in('disconnection_reason', [
+          'preflight_close',
+          'connection_closed',
+          'send_failure_threshold',
+          'health_check_close',
+          'timeout',
+          'unavailable',
+          'service_unavailable',
+        ])
+
+      if ((otrosFallando?.length ?? 0) >= WEBHOOK_OUTAGE_MIN_OTHER_SENDERS) {
+        console.error(
+          `[Evolution Webhook] sender ${sender.alias ?? instanceName}: state=close (reason=${reason}, code=${statusCode}) ` +
+          `PERO ${otrosFallando?.length} otros senders también disconnected en ${WEBHOOK_OUTAGE_WINDOW_MS / 60000}min → ` +
+          `asumimos Evolution server outage, NO marcamos disconnected (health-evolution lo recuperará).`
+        )
+        return
+      }
+    }
+
     await markDisconnected(supabase, sender.id, reason)
     console.error(
       `[Evolution Webhook] sender ${sender.alias ?? instanceName} → disconnected (reason=${reason}, code=${statusCode})`

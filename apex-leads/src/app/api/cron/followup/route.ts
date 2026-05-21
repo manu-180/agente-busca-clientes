@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
 import { ejecutarConTablaLeads } from '@/lib/leads-table'
-import { enviarMensajeEvolution } from '@/lib/evolution'
+import { enviarMensajeEvolution, EVO_ERR, isEvolutionError } from '@/lib/evolution'
+import { selectNextSender } from '@/lib/sender-pool'
 import { evaluarFollowup } from '@/lib/followup-eligibility'
 import { generarMensajeFollowupClaude } from '@/lib/generar-followup'
 import { claveUnicaPaisLinea } from '@/lib/phone'
@@ -166,6 +167,7 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
     }
 
     // Buscar sender original del lead para mantener la misma instancia
+    // (continuidad de la conversación: que el cliente vea siempre el mismo número).
     const { data: ultimaConv } = await supabase
       .from('conversaciones')
       .select('sender_id')
@@ -177,17 +179,36 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
 
     let instanceName: string | undefined
     let senderId: string | null = ultimaConv?.sender_id ?? null
+    let senderEstabaConectado = false
     if (senderId) {
       const { data: senderRow } = await supabase
         .from('senders')
-        .select('instance_name')
+        .select('instance_name, connected, activo')
         .eq('id', senderId)
         .maybeSingle()
-      instanceName = senderRow?.instance_name ?? undefined
+      if (senderRow?.activo && senderRow?.connected) {
+        instanceName = senderRow.instance_name ?? undefined
+        senderEstabaConectado = true
+      }
+    }
+
+    // Fallback: si el sender original está disconnected o inactivo, usamos
+    // selectNextSender del pool para no bloquear followups eternamente.
+    // Perdemos continuidad de número pero ganamos disponibilidad — preferible
+    // a no enviar nada (que es lo que pasaba antes y dejaba leads colgados).
+    if (!senderEstabaConectado) {
+      const fallback = await selectNextSender(supabase)
+      if (fallback) {
+        instanceName = fallback.instance_name
+        senderId = fallback.id
+        console.log(
+          `[followup] sender original disconnected/inactive, fallback a ${fallback.alias ?? fallback.instance_name} para lead ${lead.id}`
+        )
+      }
     }
 
     if (!instanceName) {
-      resultados.push({ lead_id: lead.id, ok: false, detalle: 'sin_instance_name' })
+      resultados.push({ lead_id: lead.id, ok: false, detalle: 'sin_sender_disponible' })
       continue
     }
 
@@ -215,7 +236,42 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
       await enviarMensajeEvolution(lead.telefono, texto, instanceName)
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e)
+      const code = isEvolutionError(e) ? e.code : null
       await supabase.from('conversaciones').delete().eq('id', convInsertada.id)
+
+      // Si el sender que usamos no estaba conectado (no debería pasar después
+      // del check arriba pero por preflight race), intentamos UNA VEZ con
+      // fallback del pool — selectNextSender excluye disconnected y nos da
+      // otro sano si existe.
+      if (code === EVO_ERR.INSTANCE_NOT_CONNECTED) {
+        const fallback = await selectNextSender(supabase, { excludeIds: senderId ? [senderId] : [] })
+        if (fallback) {
+          try {
+            const { data: convRetry } = await supabase
+              .from('conversaciones')
+              .insert({
+                lead_id: lead.id,
+                telefono: lead.telefono,
+                mensaje: texto,
+                rol: 'agente',
+                tipo_mensaje: 'texto',
+                manual: false,
+                es_followup: true,
+                sender_id: fallback.id,
+              })
+              .select('id')
+              .maybeSingle()
+            await enviarMensajeEvolution(lead.telefono, texto, fallback.instance_name)
+            resultados.push({ lead_id: lead.id, ok: true, detalle: `enviado_fallback:${fallback.alias ?? fallback.instance_name}` })
+            continue
+          } catch (e2: unknown) {
+            const msg2 = e2 instanceof Error ? e2.message : String(e2)
+            resultados.push({ lead_id: lead.id, ok: false, detalle: `evolution_fallback:${msg2}` })
+            continue
+          }
+        }
+      }
+
       resultados.push({ lead_id: lead.id, ok: false, detalle: `evolution:${msg}` })
       continue
     }

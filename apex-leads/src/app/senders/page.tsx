@@ -413,7 +413,7 @@ export default function SendersPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {senders.map(s => {
+          {senders.filter(s => s.activo).map(s => {
             const isEvolution = s.provider === 'evolution'
             const used = s.msgs_today ?? 0
             const limit = s.daily_limit ?? 15

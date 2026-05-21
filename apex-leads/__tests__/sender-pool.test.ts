@@ -370,47 +370,113 @@ describe('getCapacityStats', () => {
 // ───────────────────────────────────────────────────────────────────────────
 
 describe('markDisconnected', () => {
-  it('llama UPDATE { connected:false, disconnection_reason, disconnected_at } WHERE id', async () => {
-    const chain: Record<string, unknown> = {
-      update: jest.fn(() => chain),
-      eq: jest.fn(() => chain),
-    }
-    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then =
-      (cb) => cb({ data: null, error: null })
-    const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
+  // Helper para crear un mock que distingue SELECT (read previo) vs UPDATE.
+  // markDisconnected ahora hace:
+  //   1. SELECT connected, disconnected_at, disconnection_reason WHERE id  → returns current state
+  //   2. UPDATE { connected, [disconnected_at, reason si transición] } WHERE id
+  function makeSupabaseMock(currentState: {
+    connected: boolean
+    disconnected_at: string | null
+    disconnection_reason: string | null
+  } | null, updateError: { message: string } | null = null) {
+    const selectChain: Record<string, unknown> = {}
+    selectChain.select = jest.fn(() => selectChain)
+    selectChain.eq = jest.fn(() => selectChain)
+    selectChain.maybeSingle = jest.fn(() =>
+      Promise.resolve({ data: currentState, error: null })
+    )
+
+    const updateChain: Record<string, unknown> = {}
+    updateChain.update = jest.fn(() => updateChain)
+    updateChain.eq = jest.fn(() => updateChain)
+    ;(updateChain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then =
+      (cb) => cb({ data: null, error: updateError })
+
+    let callIndex = 0
+    const supa = {
+      from: jest.fn(() => {
+        callIndex++
+        // Primera llamada = SELECT, segunda = UPDATE
+        return callIndex === 1 ? selectChain : updateChain
+      }),
+    } as unknown as SupabaseClient
+
+    return { supa, selectChain, updateChain }
+  }
+
+  it('marca disconnected con timestamp y reason cuando el sender estaba connected (transición)', async () => {
+    const { supa, updateChain } = makeSupabaseMock({
+      connected: true,
+      disconnected_at: null,
+      disconnection_reason: null,
+    })
 
     await markDisconnected(supa, 'sender-1', 'device_removed')
-    const call = (chain.update as jest.Mock).mock.calls[0][0] as Record<string, unknown>
+    const call = (updateChain.update as jest.Mock).mock.calls[0][0] as Record<string, unknown>
     expect(call.connected).toBe(false)
     expect(call.disconnection_reason).toBe('device_removed')
     expect(typeof call.disconnected_at).toBe('string')
-    expect(chain.eq).toHaveBeenCalledWith('id', 'sender-1')
+    expect(updateChain.eq).toHaveBeenCalledWith('id', 'sender-1')
   })
 
-  it('default reason="unknown" cuando no se pasa', async () => {
-    const chain: Record<string, unknown> = {
-      update: jest.fn(() => chain),
-      eq: jest.fn(() => chain),
-    }
-    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then =
-      (cb) => cb({ data: null, error: null })
-    const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
+  it('preserva disconnected_at y reason cuando el sender ya estaba disconnected (idempotente)', async () => {
+    const { supa, updateChain } = makeSupabaseMock({
+      connected: false,
+      disconnected_at: '2026-05-20T10:00:00.000Z',
+      disconnection_reason: 'preflight_close',
+    })
+
+    await markDisconnected(supa, 'sender-1', 'send_failure_threshold')
+    const call = (updateChain.update as jest.Mock).mock.calls[0][0] as Record<string, unknown>
+    expect(call.connected).toBe(false)
+    // CRÍTICO: no debe sobrescribir el timestamp ni la razón originales.
+    expect(call.disconnected_at).toBeUndefined()
+    expect(call.disconnection_reason).toBeUndefined()
+  })
+
+  it('si el sender estaba connected=false pero disconnected_at=null, lo trata como transición', async () => {
+    const { supa, updateChain } = makeSupabaseMock({
+      connected: false,
+      disconnected_at: null,
+      disconnection_reason: null,
+    })
+
+    await markDisconnected(supa, 'sender-1', 'health_check_close')
+    const call = (updateChain.update as jest.Mock).mock.calls[0][0] as Record<string, unknown>
+    expect(call.connected).toBe(false)
+    expect(call.disconnection_reason).toBe('health_check_close')
+    expect(typeof call.disconnected_at).toBe('string')
+  })
+
+  it('default reason="unknown" cuando no se pasa (en transición)', async () => {
+    const { supa, updateChain } = makeSupabaseMock({
+      connected: true,
+      disconnected_at: null,
+      disconnection_reason: null,
+    })
 
     await markDisconnected(supa, 'sender-1')
-    const call = (chain.update as jest.Mock).mock.calls[0][0] as Record<string, unknown>
+    const call = (updateChain.update as jest.Mock).mock.calls[0][0] as Record<string, unknown>
     expect(call.disconnection_reason).toBe('unknown')
   })
 
-  it('throwea si Supabase devuelve error', async () => {
-    const chain: Record<string, unknown> = {
-      update: jest.fn(() => chain),
-      eq: jest.fn(() => chain),
-    }
-    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then =
-      (cb) => cb({ data: null, error: { message: 'boom' } })
-    const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
+  it('throwea si UPDATE devuelve error', async () => {
+    const { supa } = makeSupabaseMock(
+      { connected: true, disconnected_at: null, disconnection_reason: null },
+      { message: 'boom' }
+    )
 
     await expect(markDisconnected(supa, 'sender-1', 'foo')).rejects.toThrow(/boom/)
+  })
+
+  it('si el sender no existe (current=null), trata como transición y emite UPDATE', async () => {
+    const { supa, updateChain } = makeSupabaseMock(null)
+
+    await markDisconnected(supa, 'sender-1', 'orphan')
+    const call = (updateChain.update as jest.Mock).mock.calls[0][0] as Record<string, unknown>
+    expect(call.connected).toBe(false)
+    expect(call.disconnection_reason).toBe('orphan')
+    expect(typeof call.disconnected_at).toBe('string')
   })
 })
 
@@ -472,21 +538,24 @@ describe('markConnected', () => {
 // ───────────────────────────────────────────────────────────────────────────
 
 describe('incrementSendFailures', () => {
-  it('lee actual y suma 1, devolviendo el nuevo valor', async () => {
-    let phase: 'read' | 'update' = 'read'
-    const chain: Record<string, unknown> = {
-      select: jest.fn(() => chain),
-      update: jest.fn((_arg) => {
-        phase = 'update'
-        return chain
-      }),
-      eq: jest.fn(() => chain),
-      maybeSingle: jest.fn(() =>
-        Promise.resolve({ data: { consecutive_send_failures: 2 }, error: null })
-      ),
-    }
-    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then = (cb) =>
-      cb(phase === 'update' ? { data: null, error: null } : { data: null, error: null })
+  // Helper: chain que simula SELECT + UPDATE con optimistic concurrency.
+  // SELECT devuelve { consecutive_send_failures: initial }.
+  // UPDATE devuelve { data: [{id}], error: null } si "ganó" la race, [] si la perdió.
+  function makeChainConRace(initial: number | null, updateGana: boolean) {
+    const chain: Record<string, unknown> = {}
+    chain.select = jest.fn(() => chain)
+    chain.update = jest.fn(() => chain)
+    chain.eq = jest.fn(() => chain)
+    chain.maybeSingle = jest.fn(() =>
+      Promise.resolve({ data: { consecutive_send_failures: initial }, error: null })
+    )
+    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then =
+      (cb) => cb({ data: updateGana ? [{ id: 'sender-1' }] : [], error: null })
+    return chain
+  }
+
+  it('lee actual y suma 1, devolviendo el nuevo valor cuando UPDATE gana race', async () => {
+    const chain = makeChainConRace(2, true)
     const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
 
     const next = await incrementSendFailures(supa, 'sender-1')
@@ -506,23 +575,36 @@ describe('incrementSendFailures', () => {
   })
 
   it('arranca desde 0 si consecutive_send_failures es null', async () => {
-    let phase: 'read' | 'update' = 'read'
-    const chain: Record<string, unknown> = {
-      select: jest.fn(() => chain),
-      update: jest.fn(() => {
-        phase = 'update'
-        return chain
-      }),
-      eq: jest.fn(() => chain),
-      maybeSingle: jest.fn(() =>
-        Promise.resolve({ data: { consecutive_send_failures: null }, error: null })
-      ),
-    }
-    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then = (cb) =>
-      cb(phase === 'update' ? { data: null, error: null } : { data: null, error: null })
+    const chain = makeChainConRace(null, true)
     const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
     const next = await incrementSendFailures(supa, 'sender-1')
     expect(next).toBe(1)
+  })
+
+  it('reintenta si pierde la race optimistic (UPDATE devuelve []), y suma desde el nuevo valor', async () => {
+    // Primera vuelta: SELECT=3, UPDATE pierde race
+    // Segunda vuelta: SELECT=4 (otro cron lo incrementó), UPDATE gana
+    // Resultado esperado: next = 5
+    let intento = 0
+    const chain: Record<string, unknown> = {}
+    chain.select = jest.fn(() => chain)
+    chain.update = jest.fn(() => chain)
+    chain.eq = jest.fn(() => chain)
+    chain.maybeSingle = jest.fn(() => {
+      const v = intento === 0 ? 3 : 4
+      return Promise.resolve({ data: { consecutive_send_failures: v }, error: null })
+    })
+    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then =
+      (cb) => {
+        // Primera vez perdemos, segunda ganamos
+        const ganaEsta = intento >= 1
+        intento++
+        cb({ data: ganaEsta ? [{ id: 'sender-1' }] : [], error: null })
+      }
+    const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
+
+    const next = await incrementSendFailures(supa, 'sender-1')
+    expect(next).toBe(5)
   })
 })
 
