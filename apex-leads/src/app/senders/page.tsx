@@ -226,26 +226,44 @@ export default function SendersPage() {
   }
 
   const borrarSender = async (s: Sender) => {
-    if (!confirm(
-      `¿Eliminar definitivamente "${s.alias}"?\n\n` +
-      `Esto borra la instancia de Evolution y la fila de la base de datos.\n` +
-      `No se puede deshacer.`
-    )) return
+    // Decidimos hard vs soft según conversaciones asociadas. Si hay conversaciones,
+    // forzamos soft delete (oculta el sender) — el hard delete fallaría por FK y
+    // confundiría al usuario. Sin conversaciones, hard delete real.
+    const convCount = s.conversaciones?.[0]?.count ?? 0
+    const useSoft = convCount > 0
+
+    if (useSoft) {
+      if (!confirm(
+        `"${s.alias}" tiene ${convCount} conversación${convCount !== 1 ? 'es' : ''} asociada${convCount !== 1 ? 's' : ''}.\n\n` +
+        `Se va a OCULTAR de la lista (soft delete) preservando el historial.\n` +
+        `Podés re-mostrarla más tarde si la reactivás como "Activo" desde la base.\n\n` +
+        `¿Ocultar?`
+      )) return
+    } else {
+      if (!confirm(
+        `¿Eliminar definitivamente "${s.alias}"?\n\n` +
+        `Esto borra la instancia de Evolution y la fila de la base de datos.\n` +
+        `No se puede deshacer.`
+      )) return
+    }
+
     setDeletingId(s.id)
     try {
-      const res = await fetch(`/api/senders?id=${encodeURIComponent(s.id)}&hard=true`, {
-        method: 'DELETE',
-      })
+      const url = useSoft
+        ? `/api/senders?id=${encodeURIComponent(s.id)}&hard=false`
+        : `/api/senders?id=${encodeURIComponent(s.id)}&hard=true`
+      const res = await fetch(url, { method: 'DELETE' })
       const data = await res.json()
       if (!res.ok) {
         if (res.status === 409) {
-          showToast('error', `${data?.error ?? 'No se puede borrar'} Usá el toggle "Inactivo" para soft delete.`)
+          // Defensa por si convCount estuviera desactualizado: caemos a soft delete.
+          showToast('error', `${data?.error ?? 'No se puede borrar'} Usá el toggle "Inactivo".`)
         } else {
           showToast('error', data?.error ?? 'No se pudo eliminar')
         }
         return
       }
-      showToast('ok', `SIM "${s.alias}" eliminada`)
+      showToast('ok', useSoft ? `SIM "${s.alias}" ocultada` : `SIM "${s.alias}" eliminada`)
       await cargar()
     } catch (e) {
       showToast('error', String(e))
@@ -255,7 +273,20 @@ export default function SendersPage() {
   }
 
   // ─── RECONNECT ────────────────────────────────────────────────────────
-  const abrirReconnect = (s: Sender) => setReconnectSender(s)
+  const abrirReconnect = (s: Sender) => {
+    // Si está conectada, avisamos: re-vincular nukea las creds e implica
+    // escanear QR de nuevo. Si está disconnected, abrimos directo.
+    if (s.connected) {
+      if (!confirm(
+        `Re-vincular "${s.alias}" va a:\n\n` +
+        `• Cerrar la sesión actual de WhatsApp\n` +
+        `• Borrar las credenciales en disco\n` +
+        `• Pedir un QR nuevo para que escanees con el celular\n\n` +
+        `Mientras tanto, esta SIM no envía mensajes. ¿Continuar?`
+      )) return
+    }
+    setReconnectSender(s)
+  }
   const cerrarReconnect = () => setReconnectSender(null)
 
   // ─── ADOPT ────────────────────────────────────────────────────────────
@@ -549,13 +580,20 @@ export default function SendersPage() {
 
                 {/* Acciones */}
                 <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-apex-border">
-                  {isEvolution && !s.connected && (
+                  {isEvolution && (
                     <button
                       onClick={() => abrirReconnect(s)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-apex-lime/10 text-apex-lime border border-apex-lime/20 hover:bg-apex-lime/20 transition-colors"
+                      title={s.connected
+                        ? 'Forzar re-vinculación con QR (borra creds y pide QR nuevo)'
+                        : 'Reconectar la SIM escaneando QR'}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                        s.connected
+                          ? 'bg-apex-border text-apex-muted border-transparent hover:bg-apex-lime/10 hover:text-apex-lime hover:border-apex-lime/20'
+                          : 'bg-apex-lime/10 text-apex-lime border-apex-lime/20 hover:bg-apex-lime/20'
+                      }`}
                     >
                       <QrCode size={13} />
-                      Reconectar QR
+                      {s.connected ? 'Re-vincular QR' : 'Reconectar QR'}
                     </button>
                   )}
                   <button
@@ -575,7 +613,9 @@ export default function SendersPage() {
                   <button
                     onClick={() => borrarSender(s)}
                     disabled={deletingId === s.id}
-                    title="Eliminar SIM definitivamente"
+                    title={(s.conversaciones?.[0]?.count ?? 0) > 0
+                      ? 'Ocultar SIM (tiene conversaciones — soft delete)'
+                      : 'Eliminar SIM definitivamente'}
                     className="ml-auto flex items-center justify-center w-8 h-8 rounded-lg text-xs font-medium bg-apex-border text-apex-muted hover:bg-red-500/15 hover:text-red-400 hover:border-red-500/30 border border-transparent transition-colors disabled:opacity-40"
                   >
                     {deletingId === s.id

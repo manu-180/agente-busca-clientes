@@ -56,6 +56,10 @@ const REASONS_REQUIRING_QR = new Set<string>([
                               //  Restart crearía OTRA conexión que también sería
                               //  reemplazada. Requiere desvincular dispositivos
                               //  en el celular y re-scanear QR.
+  'manual_reconnect_qr_requested',  // Manuel apretó "Reconectar QR" desde la UI.
+                              //  El reconnect endpoint nukea creds e instance
+                              //  para forzar QR fresh. Si el cron hace
+                              //  auto-restart durante el scan, lo aborta.
 ])
 
 function authCron(req: NextRequest): boolean {
