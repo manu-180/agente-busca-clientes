@@ -147,6 +147,12 @@ function elegirMensajesMasRecientes(
 export default function ConversacionesPage() {
   const [grupos, setGrupos] = useState<ConversacionGrupo[]>([])
   const [seleccionado, setSeleccionado] = useState<string | null>(null)
+  /**
+   * Lead que entró seleccionado siendo no-leído: lo congelamos arriba con los unread
+   * para que abrir el chat no lo mande al fondo al instante. Se libera recién cuando
+   * el usuario abre OTRO chat o vuelve a la lista.
+   */
+  const [pinnedLeadId, setPinnedLeadId] = useState<string | null>(null)
   const [nuevoMensaje, setNuevoMensaje] = useState('')
   const [loading, setLoading] = useState(true)
   const [enviando, setEnviando] = useState(false)
@@ -366,6 +372,7 @@ export default function ConversacionesPage() {
 
   const leerTodos = async () => {
     setGrupos(prev => prev.map(g => ({ ...g, no_leidos: 0 })))
+    setPinnedLeadId(null)
     fetch('/api/conversaciones', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -377,6 +384,12 @@ export default function ConversacionesPage() {
   const totalNoLeidos = grupos.reduce((acc, g) => acc + g.no_leidos, 0)
 
   const seleccionarLead = async (leadId: string) => {
+    // Si el chat tenía no_leidos, lo pineamos arriba para que no salte al fondo
+    // recién al hacer click. El pin anterior (otro chat) queda liberado.
+    const grupoActual = grupos.find(g => g.lead.id === leadId)
+    const teniaNoLeidos = (grupoActual?.no_leidos ?? 0) > 0
+    setPinnedLeadId(teniaNoLeidos ? leadId : null)
+
     setGrupos(prev => prev.map(g =>
       g.lead.id === leadId ? { ...g, no_leidos: 0 } : g
     ))
@@ -575,8 +588,9 @@ export default function ConversacionesPage() {
 
   const gruposOrdenados = useMemo(() => {
     return [...gruposFiltrados].sort((a, b) => {
-      const aUn = a.no_leidos > 0
-      const bUn = b.no_leidos > 0
+      // Un chat pineado se ordena como si siguiera no-leído (mantiene posición arriba).
+      const aUn = a.no_leidos > 0 || a.lead.id === pinnedLeadId
+      const bUn = b.no_leidos > 0 || b.lead.id === pinnedLeadId
       if (aUn !== bUn) return aUn ? -1 : 1
       if (aUn && bUn && a.no_leidos !== b.no_leidos) {
         return b.no_leidos - a.no_leidos
@@ -585,7 +599,7 @@ export default function ConversacionesPage() {
         new Date(b.ultimo_timestamp).getTime() - new Date(a.ultimo_timestamp).getTime()
       )
     })
-  }, [gruposFiltrados])
+  }, [gruposFiltrados, pinnedLeadId])
 
   const getInitial = (nombre: string) => (nombre?.[0] ?? '?').toUpperCase()
 
@@ -905,7 +919,10 @@ export default function ConversacionesPage() {
               <div className="px-4 py-3 border-b border-apex-border bg-apex-dark flex items-center justify-between shadow-sm flex-shrink-0">
                 <div className="flex items-center gap-3">
                   <button
-                    onClick={() => setSeleccionado(null)}
+                    onClick={() => {
+                      setSeleccionado(null)
+                      setPinnedLeadId(null)
+                    }}
                     className="lg:hidden p-1.5 rounded-lg hover:bg-apex-border text-apex-muted"
                   >
                     <ArrowLeft size={17} />
