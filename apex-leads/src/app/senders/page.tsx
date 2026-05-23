@@ -117,7 +117,17 @@ export default function SendersPage() {
         fetch('/api/senders/capacity', { cache: 'no-store' }),
       ])
       const sendersData = await sendersRes.json()
-      setSenders(Array.isArray(sendersData) ? sendersData : [])
+      const sendersList: Sender[] = Array.isArray(sendersData) ? sendersData : []
+      setSenders(sendersList)
+
+      // backfill phone numbers for connected senders that still have _pending_ placeholder
+      if (sendersList.some(s => s.provider === 'evolution' && s.connected && s.phone_number?.startsWith('_pending_'))) {
+        fetch('/api/senders/sync-phones', { method: 'POST' })
+          .then(r => r.ok ? r.json() : null)
+          .then(res => { if (res?.updated > 0) cargar() })
+          .catch(() => {})
+      }
+
       const orphansData = orphansRes.ok ? await orphansRes.json() : { orphans: [] }
       setOrphans(Array.isArray(orphansData?.orphans) ? orphansData.orphans : [])
       if (capacityRes.ok) {
@@ -494,7 +504,7 @@ export default function SendersPage() {
                     <div>
                       <h3 className="font-syne font-bold text-base">{s.alias}</h3>
                       <p className="text-[11px] font-mono text-apex-muted">
-                        {s.phone_number || (isEvolution ? 'sin número aún' : '—')}
+                        {(s.phone_number && !s.phone_number.startsWith('_pending_')) ? s.phone_number : (isEvolution ? 'sin número aún' : '—')}
                       </p>
                     </div>
                   </div>
