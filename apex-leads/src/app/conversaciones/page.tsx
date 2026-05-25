@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom'
 import { MessageSquare, Send, Bot, BotOff, UserCheck, CheckCircle, ArrowLeft, Sparkles, Loader2, CheckCheck, Search, X, Star } from 'lucide-react'
 import type { Lead, Conversacion } from '@/types'
 import { supabase } from '@/lib/supabase-client'
+import { usePolling } from '@/hooks/usePolling'
 
 interface SenderInfo {
   id: string
@@ -271,11 +272,9 @@ export default function ConversacionesPage() {
     }
   }, [])
 
-  useEffect(() => {
-    cargarConversaciones()
-    const interval = setInterval(cargarConversaciones, 10_000)
-    return () => clearInterval(interval)
-  }, [cargarConversaciones])
+  // Polling cada 30s (antes 10s). El listado de hilos también se actualiza
+  // por Supabase Realtime cuando llega un mensaje al hilo abierto.
+  usePolling(cargarConversaciones, 30_000)
 
   useEffect(() => {
     if (!seleccionado) return

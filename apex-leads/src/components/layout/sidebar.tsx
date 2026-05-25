@@ -6,8 +6,9 @@ import {
   LayoutDashboard, Users, UserPlus, MessageSquare,
   Bot, Settings, Menu, X, Zap, Sparkles, Instagram, FileText, Smartphone, Briefcase
 } from 'lucide-react'
-import { useState, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
+import { usePolling } from '@/hooks/usePolling'
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -29,40 +30,45 @@ export function Sidebar() {
   const [unreadTotal, setUnreadTotal] = useState(0)
   const [simInactiveCount, setSimInactiveCount] = useState<number | null>(null)
 
-  useEffect(() => {
-    const fetchUnread = async () => {
-      try {
-        const res = await fetch('/api/conversaciones/unread')
-        const data = await res.json()
-        setUnreadTotal(data.total ?? 0)
-      } catch {}
-    }
-    fetchUnread()
-    const interval = setInterval(fetchUnread, 15000)
-    window.addEventListener('inbox:mark-read', fetchUnread)
-    return () => {
-      clearInterval(interval)
-      window.removeEventListener('inbox:mark-read', fetchUnread)
-    }
-  }, [pathname])
-
-  useEffect(() => {
-    const fetchSimStatus = async () => {
-      try {
-        const res = await fetch('/api/senders')
-        const data = await res.json()
-        if (!Array.isArray(data)) return
-        const simSenders = data.filter((s: { alias: string }) =>
-          s.alias?.toLowerCase().includes('sim')
-        )
-        const inactive = simSenders.filter((s: { activo: boolean }) => !s.activo).length
-        setSimInactiveCount(inactive)
-      } catch {}
-    }
-    fetchSimStatus()
-    const interval = setInterval(fetchSimStatus, 30000)
-    return () => clearInterval(interval)
+  const fetchUnread = useCallback(async () => {
+    try {
+      const res = await fetch('/api/conversaciones/unread')
+      const data = await res.json()
+      setUnreadTotal(data.total ?? 0)
+    } catch {}
   }, [])
+
+  // Polling cada 60s (antes 15s). En pestañas ocultas no consume invocations.
+  usePolling(fetchUnread, 60_000)
+
+  // Al cambiar de ruta, refrescamos el contador (preserva el comportamiento
+  // previo en que [pathname] era dependency del useEffect del setInterval).
+  useEffect(() => {
+    fetchUnread()
+  }, [pathname, fetchUnread])
+
+  // Listener de evento custom para refrescar inmediatamente al marcar como leído.
+  useEffect(() => {
+    window.addEventListener('inbox:mark-read', fetchUnread)
+    return () => window.removeEventListener('inbox:mark-read', fetchUnread)
+  }, [fetchUnread])
+
+  const fetchSimStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/senders')
+      const data = await res.json()
+      if (!Array.isArray(data)) return
+      const simSenders = data.filter((s: { alias: string }) =>
+        s.alias?.toLowerCase().includes('sim')
+      )
+      const inactive = simSenders.filter((s: { activo: boolean }) => !s.activo).length
+      setSimInactiveCount(inactive)
+    } catch {}
+  }, [])
+
+  // Polling cada 120s (antes 30s). El dot rojo del sidebar tolera de sobra
+  // este lag — un SIM caído ya lo cubre el cron de monitoreo del backend.
+  usePolling(fetchSimStatus, 120_000)
 
   return (
     <>

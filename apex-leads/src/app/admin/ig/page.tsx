@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useState, useCallback } from 'react'
+import { usePolling } from '@/hooks/usePolling'
 import {
   Instagram, ShieldAlert, ShieldCheck, Zap, MessageSquare,
   TrendingUp, Users, Clock, AlertTriangle, CheckCircle2,
@@ -121,11 +122,9 @@ export default function IgDashboardPage() {
     }
   }, [])
 
-  useEffect(() => {
-    fetchStats()
-    const interval = setInterval(fetchStats, 60_000)
-    return () => clearInterval(interval)
-  }, [fetchStats])
+  // Polling cada 180s (antes 60s). El dashboard de IG no necesita resolución
+  // por minuto — los eventos críticos los maneja el circuit-breaker en backend.
+  usePolling(fetchStats, 180_000)
 
   const handlePause = async (resume = false) => {
     setPausing(true)

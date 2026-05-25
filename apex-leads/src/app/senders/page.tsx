@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { usePolling } from '@/hooks/usePolling'
 import {
   Plus, ToggleLeft, ToggleRight,
   Send, Edit2, X, Loader2, CheckCircle, AlertCircle, Wifi,
@@ -100,6 +101,9 @@ export default function SendersPage() {
   // Delete
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
+  // Senders cuyo phone ya intentamos sincronizar en esta sesión (evita loop infinito de sync-phones)
+  const syncedPhonesRef = useRef<Set<string>>(new Set())
+
   // Toast
   const [toast, setToast] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const toastTimerRef = useRef<NodeJS.Timeout | null>(null)
@@ -120,12 +124,18 @@ export default function SendersPage() {
       const sendersList: Sender[] = Array.isArray(sendersData) ? sendersData : []
       setSenders(sendersList)
 
-      // backfill phone numbers for connected senders that still have _pending_ placeholder
-      if (sendersList.some(s => s.provider === 'evolution' && s.connected && s.phone_number?.startsWith('_pending_'))) {
-        fetch('/api/senders/sync-phones', { method: 'POST' })
-          .then(r => r.ok ? r.json() : null)
-          .then(res => { if (res?.updated > 0) cargar() })
-          .catch(() => {})
+      // backfill phone numbers for connected senders that still have _pending_ placeholder.
+      // Intentamos UNA VEZ por sender por mount; el próximo setInterval (30s) refresca el resultado
+      // si sync-phones lo resolvió. Sin guard había recursión: cargar()→sync→updated→cargar()→…
+      const pendingNuevos = sendersList.filter(s =>
+        s.provider === 'evolution' &&
+        s.connected &&
+        s.phone_number?.startsWith('_pending_') &&
+        !syncedPhonesRef.current.has(s.id),
+      )
+      if (pendingNuevos.length > 0) {
+        pendingNuevos.forEach(s => syncedPhonesRef.current.add(s.id))
+        fetch('/api/senders/sync-phones', { method: 'POST' }).catch(() => {})
       }
 
       const orphansData = orphansRes.ok ? await orphansRes.json() : { orphans: [] }
@@ -141,11 +151,9 @@ export default function SendersPage() {
     }
   }
 
-  useEffect(() => {
-    cargar()
-    const intervalo = setInterval(cargar, 30_000)
-    return () => clearInterval(intervalo)
-  }, [])
+  // Polling cada 120s (antes 30s) — 3 fetch en paralelo (senders, orphans,
+  // capacity); es el endpoint más caro del sistema. En pestaña oculta pausa.
+  usePolling(cargar, 120_000)
 
   // ─── ADD FLOW ─────────────────────────────────────────────────────────
   const abrirAgregar = () => {
@@ -1062,6 +1070,10 @@ function QRConnectModal({
   // + create tarda 3-5s), capturamos state='open' de la instance VIEJA y el
   // modal se cierra solo mostrando ✓ sin que el usuario haya escaneado. Por
   // eso esperamos a que fetchQr complete antes de empezar el polling.
+  //
+  // 2s es UX-crítico para detectar el escaneo: NO subir el intervalo. Pero
+  // añadimos visibility-gate manual (vs `usePolling`) para preservar la
+  // lógica de `stoppedRef` + `onConnected` sin reescribir el efecto.
   useEffect(() => {
     if (loadingQr) return
     stoppedRef.current = false
@@ -1085,11 +1097,51 @@ function QRConnectModal({
         // soft fail, seguimos polleando
       }
     }
-    interval = setInterval(poll, 2000)
-    poll()
+
+    const startInterval = () => {
+      if (interval !== null) return
+      interval = setInterval(poll, 2000)
+    }
+    const stopInterval = () => {
+      if (interval !== null) {
+        clearInterval(interval)
+        interval = null
+      }
+    }
+
+    const isVisible = () =>
+      typeof document === 'undefined' || document.visibilityState === 'visible'
+
+    const onVisibility = () => {
+      if (stoppedRef.current) return
+      if (isVisible()) {
+        // Al volver del background, refrescamos enseguida y reanudamos.
+        void poll()
+        startInterval()
+      } else {
+        stopInterval()
+      }
+    }
+
+    if (isVisible()) {
+      startInterval()
+      void poll()
+    }
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibility)
+      window.addEventListener('pageshow', onVisibility)
+      window.addEventListener('pagehide', onVisibility)
+    }
+
     return () => {
       stoppedRef.current = true
-      if (interval) clearInterval(interval)
+      stopInterval()
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibility)
+        window.removeEventListener('pageshow', onVisibility)
+        window.removeEventListener('pagehide', onVisibility)
+      }
     }
   }, [senderId, onConnected, loadingQr])
 

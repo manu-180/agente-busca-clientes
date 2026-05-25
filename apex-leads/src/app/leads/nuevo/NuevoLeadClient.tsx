@@ -1,6 +1,6 @@
 'use client'
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { FormEvent, useMemo, useRef, useState } from 'react'
 import {
   Loader2,
   MapPin,
@@ -30,6 +30,7 @@ import {
   filtrarPrincipales,
 } from '@/lib/localidades-principales-ar'
 import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
+import { usePolling } from '@/hooks/usePolling'
 
 const TODAS_LOCALIDADES = '__TODAS__'
 const TODAS_PROVINCIAS = '__TODAS_PROVINCIAS__'
@@ -345,50 +346,13 @@ export default function NuevoLeadClient() {
     }
   }
 
-  useEffect(() => {
-    let intervalo: ReturnType<typeof setInterval> | null = null
-
-    const tick = () => {
-      cargarStats()
-      cargarCapacity()
-      cargarPlacesKeys()
-    }
-
-    const arrancar = () => {
-      if (intervalo) return
-      // 2 min en vez de 30s (4× menos invocations a Vercel).
-      intervalo = setInterval(tick, 120_000)
-    }
-    const parar = () => {
-      if (!intervalo) return
-      clearInterval(intervalo)
-      intervalo = null
-    }
-
-    const onVisibility = () => {
-      if (typeof document === 'undefined') return
-      if (document.hidden) {
-        parar()
-      } else {
-        // Al volver a la pestaña, refresca enseguida y reanuda el ciclo.
-        tick()
-        arrancar()
-      }
-    }
-
-    tick()
-    arrancar()
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', onVisibility)
-    }
-
-    return () => {
-      parar()
-      if (typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', onVisibility)
-      }
-    }
-  }, [])
+  // Polling cada 120s con visibility-gate (vía usePolling). Pausa en pestaña
+  // oculta y refresca al volver. Reemplaza la implementación manual previa.
+  usePolling(() => {
+    cargarStats()
+    cargarCapacity()
+    cargarPlacesKeys()
+  }, 120_000)
 
   async function parseApiError(res: Response, fallback: string): Promise<{ msg: string; quota: boolean }> {
     try {
