@@ -111,9 +111,24 @@ ALTER TABLE public.project_info ADD COLUMN project_id uuid REFERENCES public.pro
 UPDATE public.project_info SET project_id = (SELECT id FROM public.projects WHERE slug='apex');
 ALTER TABLE public.project_info ALTER COLUMN project_id SET NOT NULL;
 CREATE INDEX project_info_project_id_idx ON public.project_info(project_id);
+-- Index parcial para la query típica (filter por proyecto activo):
+CREATE INDEX project_info_project_active_idx ON public.project_info(project_id) WHERE activo = true;
+
+-- RLS policy: renombrar para mantener consistencia con la tabla.
+ALTER POLICY "service_role_all_apex_info" ON public.project_info RENAME TO "service_role_all_project_info";
 ```
 
 Estructura final: `(id, project_id, categoria, titulo, contenido, activo, created_at)`.
+
+### 3.4 Atomicidad: toda la migración en una transacción
+
+Los 10 pasos (crear `projects` + seed, alter `leads`, rename + alter
+`apex_info`, rename policy, crear índices) van **dentro de un único
+`BEGIN/COMMIT`**. Esto evita una ventana de race condition: si el webhook de
+WhatsApp inserta un lead nuevo durante la migración (entre el `ADD COLUMN
+project_id` nullable y el `SET NOT NULL`), el lead quedaría con `project_id =
+NULL` y rompería el último ALTER. Con la migración transaccional, los inserts
+concurrentes ven el esquema viejo o el nuevo, nunca un estado intermedio.
 
 ### 3.4 Tipos TypeScript
 
@@ -147,7 +162,7 @@ visuales (cards) ya alineadas al sistema de diseño actual (`bg-apex-card`,
   y asistencia"). Esta descripción se inyecta al system prompt.
 
 **4.2.2 Búsqueda**
-- Toggle "Filtrar solo negocios sin web" (default según el proyecto)
+- Toggle "Filtrar solo negocios sin web" → persiste en `projects.filtro_sin_web`
 - Editor de rubros sugeridos:
   - Lista de chips, cada uno con un botón "X" para borrar
   - Input + botón "Agregar" para sumar uno nuevo
@@ -242,16 +257,16 @@ prompt actual son específicos del producto APEX:
 - "Mandame info por mail." → "el boceto se hace acá por WhatsApp".
 - Toda la mecánica del "boceto en 24 horas".
 
-Estos ejemplos se mantienen **solo cuando el proyecto activo es APEX**. Para los
-otros tres proyectos, se omiten. Implementación: una sección opcional
-`<objection_handling_proyecto>` que se inyecta solo si el proyecto tiene
-configurado un texto en un nuevo campo `objeciones_especificas` (opcional, sin
-DB nueva, podría vivir en `projects.descripcion` o sumarse como columna en V2).
+**Decisión V1:** estos ejemplos se mantienen condicionados a
+`project.slug === 'apex'`. La condición vive en **un único lugar**: la función
+`buildAgentPrompt` en `src/lib/prompts.ts`, junto a un comentario
+`// TODO V2: mover a projects.objection_handling` para no perder la deuda. No se
+propaga a otros archivos.
 
-Para V1, **mantenemos los ejemplos específicos de APEX condicionados al
-`project.slug === 'apex'`** dentro de la función `buildAgentPrompt`. Es la
-implementación más simple y refleja la realidad: solo APEX tiene esos casos
-maduros en este momento.
+**V2 (fuera de scope):** sumar columna `objeciones_especificas text` a
+`projects` y mover la lógica a leer ese campo (vacío = no inyecta nada). No se
+hace en V1 para no acoplar este refactor a una decisión sobre cómo se editan
+las objeciones (formato libre vs. estructurado).
 
 ### 5.3 Primer mensaje (`src/lib/generar-primer-mensaje.ts`)
 
@@ -291,7 +306,8 @@ el flag.
 
 ## 6. Migración
 
-Una sola migración SQL ejecuta los cambios en este orden:
+Una sola migración SQL **transaccional** (`BEGIN ... COMMIT`) ejecuta los
+cambios en este orden:
 
 1. Crear tabla `projects` con seed de los 4 proyectos.
 2. Agregar `project_id` a `leads` como nullable.
@@ -301,10 +317,38 @@ Una sola migración SQL ejecuta los cambios en este orden:
 6. Agregar `project_id` a `project_info` como nullable.
 7. UPDATE de info existente a `project_id = apex`.
 8. Hacer `project_id` NOT NULL en `project_info`.
+9. Renombrar RLS policy `service_role_all_apex_info` → `service_role_all_project_info`.
+10. Crear índices (`leads_project_id_idx`, `project_info_project_id_idx`,
+    `project_info_project_active_idx`).
 
 **Una vez aplicada, regenerar los types TypeScript** y arreglar los errores de
 compilación (cada `from('apex_info')` pasa a `from('project_info')` con un
 `.eq('project_id', ...)` extra).
+
+### 6.1 Inserts de lead a auditar (no se inyectan implícitamente)
+
+`leads.project_id` queda NOT NULL **sin DEFAULT**, así que cualquier insert
+existente que no especifique el campo va a fallar. Lista exhaustiva de lugares
+a auditar y corregir como parte del refactor (no asumir; verificar uno por uno
+durante el plan):
+
+- **`src/app/api/webhook/evolution/route.ts:1051-1066`** — crea lead inline
+  cuando llega un mensaje de un teléfono desconocido. **Asignar `project_id =
+  apex` por default**, porque ese lead no vino de una búsqueda explícita; APEX
+  es el proyecto por defecto del programa.
+- **`src/app/api/leads/bulk-queue/route.ts`** (endpoint usado por `/leads/nuevo`
+  al encolar) — debe recibir y persistir `project_id` desde el body.
+- **Cualquier otro `from('leads').insert(...)`** que aparezca en el grep
+  exhaustivo del plan.
+
+### 6.2 Tablas que NO migran (heredan por join)
+
+`conversaciones` y `conversational_events` **no reciben columna `project_id`**.
+El proyecto de una conversación se deriva siempre del lead asociado vía
+`conversaciones.lead_id → leads.project_id`. Razón: evita duplicar la fuente de
+verdad y simplifica la migración. Si en V2 se necesita filtrar conversaciones
+por proyecto sin pegar a `leads`, se puede sumar la columna después (sin
+romper nada).
 
 **Backward compat:** los leads y la info de APEX siguen funcionando como hoy,
 porque APEX es un proyecto más con la misma configuración que tenía implícita
@@ -312,7 +356,8 @@ antes.
 
 **Plan de rollback** si algo sale mal en producción: la migración es reversible
 con `ALTER TABLE project_info RENAME TO apex_info` + drop columnas
-`project_id`. No hay pérdida de datos.
+`project_id` + restaurar policy original. **El rollback debe testearse en local
+antes de aplicar a producción** (no asumir reversibilidad, verificarla).
 
 ## 7. Fuera de scope (V1)
 
@@ -360,8 +405,18 @@ con `ALTER TABLE project_info RENAME TO apex_info` + drop columnas
 
 ## 9. Definition of Done
 
-- [ ] Migración SQL aplicada en local y en producción.
+- [ ] Migración SQL aplicada en local **dentro de una transacción**; rollback
+      probado en local antes de aplicar a producción.
 - [ ] Types TypeScript regenerados; build pasa sin errores.
+- [ ] `grep -r "apex_info"` después del refactor no devuelve ninguna referencia
+      huérfana en código (solo en docs históricos).
+- [ ] RLS policy renombrada y verificada (`pg_policies` muestra
+      `service_role_all_project_info` sobre `project_info`).
+- [ ] Función `sanitizarApexInfoPorVertical` renombrada a
+      `sanitizarProjectInfoPorVertical` con sus call sites actualizados.
+- [ ] Insert de lead en webhook (`route.ts:1051`) asigna `project_id = apex`
+      por default. Test manual: enviar mensaje desde un número nuevo, verificar
+      que el lead queda con `project_id` poblado.
 - [ ] Sidebar muestra "Proyectos" con dropdown de los 4 (APEX, Assistify, Handy,
       botlode).
 - [ ] Panel `/proyectos/[slug]` funcional para los 4: edición de identidad,
@@ -373,8 +428,12 @@ con `ALTER TABLE project_info RENAME TO apex_info` + drop columnas
       bloque de info en Assistify ("nuestra app cuesta $10/mes"), mandar un
       mensaje a un lead de Assistify, confirmar que la respuesta no menciona
       precios de APEX.
+- [ ] Test E2E (Playwright): crear lead de Assistify desde `/leads/nuevo`,
+      simular respuesta entrante, verificar que el outbound del bot menciona
+      Assistify y no APEX.
 - [ ] Cron de primer envío genera mensajes con la plantilla del proyecto del
       lead, o salta si la plantilla está vacía.
 - [ ] El toggle "Agente IA activo/inactivo" funciona desde `/configuracion`.
 - [ ] El item "Agente IA" del sidebar fue removido.
-- [ ] Tests existentes pasan después de la actualización.
+- [ ] Tests existentes pasan después de la actualización (auditar
+      `apex-leads/__tests__/*` y mocks que referencien `apex_info`).
