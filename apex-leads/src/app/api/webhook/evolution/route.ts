@@ -26,7 +26,8 @@ import {
   instruccionRegeneracion,
   sanitizarRespuestaModelo,
 } from '@/lib/response-guardrails'
-import { detectarVertical, sanitizarApexInfoPorVertical } from '@/lib/verticales'
+import { detectarVertical, sanitizarProjectInfoPorVertical } from '@/lib/verticales'
+import { cargarProyectoApexDefault, cargarProyectoPorId } from '@/lib/projects'
 import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 import { extraerContenidoNuevo } from '@/lib/echo-detection'
 import {
@@ -646,16 +647,33 @@ async function procesarConLock(
   const anthropicKey = process.env.ANTHROPIC_API_KEY
   if (!anthropicKey) throw new Error('ANTHROPIC_API_KEY no configurada')
 
-  const [{ data: apexInfo }, { data: demosActivos }] = await Promise.all([
-    supabase.from('apex_info').select('categoria, titulo, contenido').eq('activo', true),
-    supabase.from('demos_rubro').select('url, strong_keywords').eq('active', true),
-  ])
-
   const { data: leadActualizado } = await supabase
     .from('leads')
     .select('*')
     .eq('id', p.leadId)
     .single()
+
+  if (!leadActualizado?.project_id) {
+    console.error('[BG] Lead sin project_id — no se puede responder:', p.leadId)
+    return
+  }
+  const project = await cargarProyectoPorId(supabase, leadActualizado.project_id)
+  if (!project) {
+    console.error('[BG] No se encontró el proyecto del lead:', leadActualizado.project_id)
+    return
+  }
+
+  // Info del proyecto del lead (NO mezclar con otros productos) + demos solo si es APEX.
+  const [{ data: projectInfo }, { data: demosActivos }] = await Promise.all([
+    supabase
+      .from('project_info')
+      .select('categoria, titulo, contenido')
+      .eq('project_id', project.id)
+      .eq('activo', true),
+    project.slug === 'apex'
+      ? supabase.from('demos_rubro').select('url, strong_keywords').eq('active', true)
+      : Promise.resolve({ data: [] as { url: string; strong_keywords: string[] }[] }),
+  ])
 
   const rubroLead = String(leadActualizado?.rubro ?? '')
   const descripcionLead = leadActualizado?.descripcion as string | null | undefined
@@ -674,13 +692,13 @@ async function procesarConLock(
     ? `[DEMO] Demo de sitio web para mostrar al cliente\nURL: ${demoMatch.url}\nUsá esta URL cuando el cliente quiera ver un ejemplo o pida la demo. Mostrala de forma natural, sin forzar.`
     : ''
 
-  const apexInfoTextoRaw = [
-    ...(apexInfo ?? []).map(info => `[${info.categoria.toUpperCase()}] ${info.titulo}\n${info.contenido}`),
+  const projectInfoTextoRaw = [
+    ...(projectInfo ?? []).map(info => `[${info.categoria.toUpperCase()}] ${info.titulo}\n${info.contenido}`),
     ...(demoBloque ? [demoBloque] : []),
   ].join('\n\n')
 
-  const apexInfoSanitizado = sanitizarApexInfoPorVertical(apexInfoTextoRaw, verticalLead)
-  const apexInfoTexto = apexInfoSanitizado.texto
+  const projectInfoSanitizado = sanitizarProjectInfoPorVertical(projectInfoTextoRaw, verticalLead)
+  const projectInfoTexto = projectInfoSanitizado.texto
 
   const ultimosMensajesAgente = filasHistorial
     .filter(h => h.rol === 'agente')
@@ -706,7 +724,8 @@ async function procesarConLock(
 
   const systemPrompt = buildAgentPrompt(
     p.leadOrigen as 'outbound' | 'inbound',
-    apexInfoTexto,
+    project,
+    projectInfoTexto,
     '',
     contextoLead
   )
@@ -1048,9 +1067,18 @@ async function procesarMensajeEntrante(p: ProcesarEntranteParams): Promise<void>
   if (!lead) {
     const origenDetectado = pareceMensajeAutomaticoNegocio(mensaje) ? 'outbound' : 'inbound'
     const telefonoCanonica = normalizarTelefonoArg(telefono)
+    // Lead inbound de un teléfono desconocido: asumimos APEX como default
+    // (es el proyecto fundacional del programa; los leads explícitos llegan
+    // por /leads/nuevo con project_id ya seteado).
+    const apexProject = await cargarProyectoApexDefault(supabase)
+    if (!apexProject) {
+      console.error('[Evolution] No se pudo cargar el proyecto APEX por default — abortando insert de lead')
+      return
+    }
     const { data: nuevoLead } = await supabase
       .from('leads')
       .insert({
+        project_id: apexProject.id,
         nombre: `Lead ${telefono.slice(-4)}`,
         rubro: 'Por definir',
         zona: 'Por definir',

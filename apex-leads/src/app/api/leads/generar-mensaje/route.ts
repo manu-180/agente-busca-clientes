@@ -1,21 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { generarPrimerMensaje } from '@/lib/generar-primer-mensaje'
+import { createSupabaseServer } from '@/lib/supabase-server'
+import { cargarProyectoApexDefault, cargarProyectoPorId } from '@/lib/projects'
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { nombre, rubro, zona, descripcion, instagram } = body
+    const { nombre, rubro, zona, descripcion, instagram, project_id } = body
 
-    const mensaje = await generarPrimerMensaje({
-      nombre,
-      rubro,
-      zona,
-      descripcion,
-      instagram,
-    })
+    const supabase = createSupabaseServer()
+    const project = project_id
+      ? await cargarProyectoPorId(supabase, project_id)
+      : await cargarProyectoApexDefault(supabase)
+
+    if (!project) {
+      return NextResponse.json({ error: 'No se encontró el proyecto' }, { status: 404 })
+    }
+
+    const mensaje = await generarPrimerMensaje(
+      { nombre, rubro, zona, descripcion, instagram },
+      project,
+    )
 
     if (!mensaje) {
-      return NextResponse.json({ error: 'No se pudo generar el mensaje.' }, { status: 500 })
+      return NextResponse.json(
+        { error: `No se pudo generar el mensaje. ${project.slug !== 'apex' && !(project.plantilla_primer_mensaje ?? '').trim() ? 'El proyecto no tiene plantilla configurada.' : ''}` },
+        { status: 500 },
+      )
     }
 
     return NextResponse.json({ mensaje })

@@ -1,11 +1,14 @@
-// Prompts del agente de ventas APEX — canal WhatsApp Business
-// Dos personalidades según el origen del lead (outbound / inbound)
+// Prompts del agente de ventas — canal WhatsApp Business
+// Dos personalidades según el origen del lead (outbound / inbound) +
+// scoping por proyecto: la identidad del equipo y las objeciones específicas
+// se condicionan al proyecto del lead (APEX, Assistify, Handy, botlode).
 
 import {
   bloqueLexicoVertical,
   detectarVertical,
   labelVertical,
 } from '@/lib/verticales'
+import type { ProjectRow } from '@/lib/projects'
 
 export const SYSTEM_PROMPT_BASE = `Sos Manuel, parte del equipo de APEX, una agencia de desarrollo web y apps en Buenos Aires. Llevás tres años trabajando con clientes y tu laburo en WhatsApp es atender consultas y cerrar proyectos de páginas web, e-commerce y aplicaciones. Hablás como una persona real del equipo y no mencionás sistemas automatizados, bots ni asistentes virtuales bajo ningún concepto.
 
@@ -448,7 +451,7 @@ export interface AgenteContextoLead {
   mensajeInicial?: string | null
 }
 
-function bloqueContextoNegocio(ctx: AgenteContextoLead): string {
+function bloqueContextoNegocio(ctx: AgenteContextoLead, project: ProjectRow): string {
   const desc = (ctx.descripcion ?? '').trim()
   const ini = (ctx.mensajeInicial ?? '').trim()
   const vertical = detectarVertical(ctx.rubro ?? '', ctx.descripcion)
@@ -461,11 +464,53 @@ function bloqueContextoNegocio(ctx: AgenteContextoLead): string {
   if (desc) lineas.push(`- Detalle / búsqueda: ${desc}`)
   if (ini) {
     lineas.push(
-      `- Primer mensaje que envió APEX a este contacto (mantené coherencia de rubro y oferta):`,
+      `- Primer mensaje que envió ${project.nombre} a este contacto (mantené coherencia de rubro y oferta):`,
       `  ${ini.replace(/\n/g, ' ')}`
     )
   }
   return lineas.join('\n')
+}
+
+/**
+ * Para proyectos != APEX, los ejemplos del prompt base (boceto, "ya tengo web",
+ * theapexweb.com, etc.) NO aplican: pertenecen al producto APEX. Este override
+ * neutraliza esos ejemplos y le dice al modelo que opere con la información del
+ * proyecto. APEX no necesita override; sus ejemplos son la realidad.
+ *
+ * TODO V2: mover a `projects.objection_handling` y dejar de condicionar por slug.
+ */
+function bloqueOverrideProyecto(project: ProjectRow): string {
+  if (project.slug === 'apex') return ''
+  const nombre = project.nombre
+  const desc = (project.descripcion ?? '').trim() || nombre
+  return `<project_override priority="MAXIMA">
+Los ejemplos del prompt base que mencionan "boceto", "página web", "agencia web", "tienda online" o la URL "www.theapexweb.com" son específicos del producto APEX y NO aplican a este lead. El producto de este lead es ${nombre}, no APEX.
+
+Para este lead:
+- NO ofrezcas "boceto en 24 horas".
+- NO menciones "página web", "tienda online" ni "rediseño" como propuesta (a menos que el cliente lo pida explícitamente y figure en <project_info>).
+- NO uses la URL theapexweb.com.
+- NO uses la objeción "Ya tengo web" como si fuera relevante.
+- Usá la información del bloque <project_info> de abajo y la <plantilla_proyecto> para entender qué ofrecés.
+
+Producto del lead: ${nombre}. ${desc ? `Descripción: ${desc}.` : ''}
+</project_override>`
+}
+
+/** Reemplaza la primera oración del prompt base ("Sos Manuel, parte del equipo de APEX...") por la identidad del proyecto del lead. */
+function reemplazarIdentidad(promptBase: string, project: ProjectRow): string {
+  const nuevaIdentidad =
+    `Sos Manuel, parte del equipo de ${project.nombre}.` +
+    (project.descripcion?.trim() ? ` ${project.descripcion.trim()}` : '') +
+    ` Llevás tres años trabajando con clientes y tu laburo en WhatsApp es atender consultas y cerrar oportunidades.`
+  // El prompt base arranca con esta cadena exacta (ver SYSTEM_PROMPT_BASE):
+  const original =
+    'Sos Manuel, parte del equipo de APEX, una agencia de desarrollo web y apps en Buenos Aires. Llevás tres años trabajando con clientes y tu laburo en WhatsApp es atender consultas y cerrar proyectos de páginas web, e-commerce y aplicaciones.'
+  if (project.slug === 'apex') {
+    // Mantener el texto original literal para no alterar el comportamiento maduro de APEX.
+    return promptBase
+  }
+  return promptBase.replace(original, nuevaIdentidad)
 }
 
 /**
@@ -475,20 +520,33 @@ function bloqueContextoNegocio(ctx: AgenteContextoLead): string {
  */
 export function buildAgentPrompt(
   origen: 'outbound' | 'inbound',
-  apexInfo: string,
+  project: ProjectRow,
+  projectInfo: string,
   historial: string,
   contextoLead: AgenteContextoLead
 ): string {
-  const basePrompt = origen === 'outbound' ? SYSTEM_PROMPT_OUTBOUND : SYSTEM_PROMPT_INBOUND
+  const basePromptRaw = origen === 'outbound' ? SYSTEM_PROMPT_OUTBOUND : SYSTEM_PROMPT_INBOUND
+  const basePrompt = reemplazarIdentidad(basePromptRaw, project)
   const vertical = detectarVertical(contextoLead.rubro ?? '', contextoLead.descripcion)
   const lexico = bloqueLexicoVertical(vertical)
+  const override = bloqueOverrideProyecto(project)
+  const plantilla = (project.plantilla_primer_mensaje ?? '').trim()
 
-  const partes = [
+  const partes: string[] = [
     basePrompt,
-    `<business_context>\n${bloqueContextoNegocio(contextoLead)}\n</business_context>`,
+    `<business_context>\n${bloqueContextoNegocio(contextoLead, project)}\n</business_context>`,
     lexico,
-    `<apex_info>\n${apexInfo}\n</apex_info>`,
   ]
+
+  if (plantilla) {
+    partes.push(
+      `<plantilla_proyecto priority="ALTA">\nReferencia de la propuesta del proyecto (la usaste al iniciar el contacto):\n${plantilla}\n</plantilla_proyecto>`
+    )
+  }
+
+  partes.push(`<project_info>\n${projectInfo}\n</project_info>`)
+
+  if (override) partes.push(override)
 
   // Solo incluir el historial en el system prompt si se pasó explícitamente.
   // Cuando se usa el array messages[] de la API, este campo viene vacío.
@@ -511,7 +569,7 @@ export function buildUserMessageWithLeadContext(
 }
 
 /** Mensaje de follow-up automático (cron): valor + tono personal rioplatense, sin "recordatorio" */
-export const SYSTEM_PROMPT_FOLLOWUP = `Sos Manuel del equipo de APEX. Esta NO es la primera vez que le escribís al cliente — ya hubo un mensaje tuyo antes (lo ves en el historial). Estás retomando una conversación sin respuesta.
+export const SYSTEM_PROMPT_FOLLOWUP_APEX = `Sos Manuel del equipo de APEX. Esta NO es la primera vez que le escribís al cliente — ya hubo un mensaje tuyo antes (lo ves en el historial). Estás retomando una conversación sin respuesta.
 
 <critical_rules>
 PROHIBIDO ABSOLUTO:
@@ -557,3 +615,49 @@ Ninguno de estos patrones es válido:
 </ejemplos_incorrectos>
 
 Contexto disponible del lead: nombre del negocio, rubro, zona, historial reciente.`
+
+/** Versión genérica para proyectos != APEX. Conserva las reglas pero sin ejemplos de "boceto" / "web". */
+function buildFollowupPromptGenerico(project: ProjectRow): string {
+  const propuesta = (project.plantilla_primer_mensaje ?? '').trim() || project.descripcion || project.nombre
+  return `Sos Manuel del equipo de ${project.nombre}. Esta NO es la primera vez que le escribís al cliente — ya hubo un mensaje tuyo antes (lo ves en el historial). Estás retomando una conversación sin respuesta.
+
+<critical_rules>
+PROHIBIDO ABSOLUTO:
+- Arrancar con "Hola", "Hey", "Buenas", "Buen día" — ya hablaron antes, no es un saludo nuevo.
+- Presentarte: NADA de "Soy Manuel", "Soy de ${project.nombre}", "Te escribo de ${project.nombre}", "Me llamo Manuel".
+- Palabras como "recordatorio", "seguimiento", "te contacto nuevamente", "hago follow-up", "me pongo en contacto".
+- Frases victimistas: "como no tuve respuesta", "todavía no me respondiste", "sigo esperando".
+- Emojis, signos "¡", mayúsculas completas.
+- Mencionar "boceto", "página web", "tienda online" si NO figuran en la propuesta del proyecto (abajo).
+</critical_rules>
+
+<objetivo>
+Retomar la conversación aportando algo de valor concreto vinculado a la propuesta del proyecto y proponer un paso concreto. Sonar como un mensaje personal de alguien que se acuerda del negocio, no un broadcast.
+</objetivo>
+
+<formato>
+- Máximo 350 caracteres.
+- 2 a 3 oraciones cortas.
+- Voseo rioplatense natural: vos, mirá, tenés, dale, te cuento.
+- Aperturas válidas: "Che,", "Mirá,", "Te cuento,", "Pasando por acá,", "Me quedó pensando,", o directo con el contenido.
+- Terminá con UNA pregunta concreta o UNA propuesta de próximo paso.
+</formato>
+
+<propuesta_del_proyecto>
+La oferta concreta de ${project.nombre} es:
+${propuesta}
+</propuesta_del_proyecto>
+
+Contexto disponible del lead: nombre del negocio, rubro, zona, historial reciente.`
+}
+
+/** Devuelve el system prompt de followup correcto para el proyecto del lead. */
+export function buildFollowupSystemPrompt(project: ProjectRow): string {
+  return project.slug === 'apex' ? SYSTEM_PROMPT_FOLLOWUP_APEX : buildFollowupPromptGenerico(project)
+}
+
+/**
+ * Alias legado. Se mantiene para callers que todavía no migraron.
+ * @deprecated Usar `buildFollowupSystemPrompt(project)` en su lugar.
+ */
+export const SYSTEM_PROMPT_FOLLOWUP = SYSTEM_PROMPT_FOLLOWUP_APEX

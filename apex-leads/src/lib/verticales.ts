@@ -254,7 +254,7 @@ export function detectarVerticalIntrusa(
 }
 
 /**
- * Capa 1 — saneamiento de apex_info.
+ * Capa 1 — saneamiento de project_info.
  * Recorre los bloques del texto (separados por línea en blanco) y descarta
  * los que mencionan vocabulario EXCLUSIVO de una vertical distinta a la del
  * lead. Evita que un ejemplo de gym "contamine" a un lead de moda.
@@ -262,14 +262,14 @@ export function detectarVerticalIntrusa(
  * Devuelve el texto filtrado y el listado de verticales cuyos bloques se
  * removieron (útil para logs).
  */
-export function sanitizarApexInfoPorVertical(
-  apexInfo: string,
+export function sanitizarProjectInfoPorVertical(
+  projectInfo: string,
   verticalLead: VerticalId
 ): { texto: string; removidas: VerticalId[] } {
-  if (!apexInfo || verticalLead === 'generico') {
-    return { texto: apexInfo ?? '', removidas: [] }
+  if (!projectInfo || verticalLead === 'generico') {
+    return { texto: projectInfo ?? '', removidas: [] }
   }
-  const bloques = apexInfo.split(/\n{2,}/)
+  const bloques = projectInfo.split(/\n{2,}/)
   const removidas: VerticalId[] = []
   const kept: string[] = []
   for (const bloque of bloques) {

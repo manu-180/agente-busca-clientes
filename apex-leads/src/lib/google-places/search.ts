@@ -70,6 +70,11 @@ export interface PlacesSearchOk {
   quota: number
 }
 
+export interface SearchPlacesOptions {
+  /** Si true, descarta resultados con `websiteUri` (uso clásico de APEX). */
+  filtroSinWeb: boolean
+}
+
 async function callPlacesApi(
   rubro: string,
   zona: string,
@@ -95,7 +100,11 @@ async function callPlacesApi(
   return { status: res.status, bodyText }
 }
 
-function parseResultados(rubro: string, bodyText: string): ResultadoBusquedaLead[] {
+function parseResultados(
+  rubro: string,
+  bodyText: string,
+  options: SearchPlacesOptions,
+): ResultadoBusquedaLead[] {
   let parsed: { places?: GooglePlace[] }
   try {
     parsed = JSON.parse(bodyText) as { places?: GooglePlace[] }
@@ -115,7 +124,10 @@ function parseResultados(rubro: string, bodyText: string): ResultadoBusquedaLead
 
     const urlWeb = place.websiteUri?.trim() || null
     const tieneWeb = Boolean(urlWeb)
-    if (tieneWeb) continue // queremos solo negocios sin web
+    // El filtro "solo sin web" es project-specific: APEX lo usa porque vende
+    // páginas web; Assistify/Handy/botlode lo dejan en false para no perder
+    // negocios que ya tienen presencia online.
+    if (options.filtroSinWeb && tieneWeb) continue
 
     vistos.add(telefono)
 
@@ -125,8 +137,8 @@ function parseResultados(rubro: string, bodyText: string): ResultadoBusquedaLead
       telefono,
       rating: typeof place.rating === 'number' ? place.rating : 0,
       cantidad_reviews: typeof place.userRatingCount === 'number' ? place.userRatingCount : 0,
-      tiene_web: false,
-      url_web: null,
+      tiene_web: tieneWeb,
+      url_web: urlWeb,
       google_maps_url: place.googleMapsUri || '',
       ya_registrado: false,
       rubro,
@@ -209,6 +221,7 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
 export async function searchPlaces(
   rubro: string,
   zona: string,
+  options: SearchPlacesOptions,
   signal?: AbortSignal,
 ): Promise<PlacesSearchOk> {
   const allKeys = getConfiguredPlacesKeys()
@@ -252,7 +265,7 @@ export async function searchPlaces(
 
       // 2xx → contamos y devolvemos.
       if (response.status >= 200 && response.status < 300) {
-        const resultados = parseResultados(rubro, response.bodyText)
+        const resultados = parseResultados(rubro, response.bodyText, options)
         const newUsed = await recordPlacesCall(picked.key)
         result = {
           ok: true,

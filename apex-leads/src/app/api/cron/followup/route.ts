@@ -5,6 +5,7 @@ import { enviarMensajeEvolution, EVO_ERR, isEvolutionError } from '@/lib/evoluti
 import { selectNextSender } from '@/lib/sender-pool'
 import { evaluarFollowup } from '@/lib/followup-eligibility'
 import { generarMensajeFollowupClaude } from '@/lib/generar-followup'
+import { cargarProyectoPorId } from '@/lib/projects'
 import { claveUnicaPaisLinea } from '@/lib/phone'
 import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
 import {
@@ -156,7 +157,16 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
       .join('\n')
 
     const clienteRespondioAlguna = mensajes.some(m => m.rol === 'cliente')
-    const texto = await generarMensajeFollowupClaude(lead, historialBreve, {
+    if (!lead.project_id) {
+      resultados.push({ lead_id: lead.id, ok: false, detalle: 'lead_sin_project_id' })
+      continue
+    }
+    const projectLead = await cargarProyectoPorId(supabase, lead.project_id)
+    if (!projectLead) {
+      resultados.push({ lead_id: lead.id, ok: false, detalle: 'project_not_found' })
+      continue
+    }
+    const texto = await generarMensajeFollowupClaude(lead, historialBreve, projectLead, {
       followupsPrevios: followupsEfectivos,
       clienteRespondioAlguna,
       mensajeInicialApex: lead.mensaje_inicial ?? null,

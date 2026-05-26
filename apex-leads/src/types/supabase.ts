@@ -71,13 +71,59 @@ export type Database = {
         }
         Relationships: []
       }
-      apex_info: {
+      projects: {
+        Row: {
+          id: string
+          slug: string
+          nombre: string
+          descripcion: string
+          url_publica: string | null
+          filtro_sin_web: boolean
+          rubros_sugeridos: string[]
+          plantilla_primer_mensaje: string
+          activo: boolean
+          orden: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          slug: string
+          nombre: string
+          descripcion?: string
+          url_publica?: string | null
+          filtro_sin_web?: boolean
+          rubros_sugeridos?: string[]
+          plantilla_primer_mensaje?: string
+          activo?: boolean
+          orden?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          slug?: string
+          nombre?: string
+          descripcion?: string
+          url_publica?: string | null
+          filtro_sin_web?: boolean
+          rubros_sugeridos?: string[]
+          plantilla_primer_mensaje?: string
+          activo?: boolean
+          orden?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      project_info: {
         Row: {
           activo: boolean
           categoria: string
           contenido: string
           created_at: string
           id: string
+          project_id: string
           titulo: string
         }
         Insert: {
@@ -86,6 +132,7 @@ export type Database = {
           contenido: string
           created_at?: string
           id?: string
+          project_id: string
           titulo: string
         }
         Update: {
@@ -94,9 +141,18 @@ export type Database = {
           contenido?: string
           created_at?: string
           id?: string
+          project_id?: string
           titulo?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "project_info_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       configuracion: {
         Row: {
@@ -931,6 +987,7 @@ export type Database = {
           primer_envio_error: string | null
           primer_envio_intentos: number
           procesando_hasta: string | null
+          project_id: string
           rubro: string
           sender_id: string | null
           telefono: string
@@ -958,6 +1015,7 @@ export type Database = {
           primer_envio_error?: string | null
           primer_envio_intentos?: number
           procesando_hasta?: string | null
+          project_id: string
           rubro: string
           sender_id?: string | null
           telefono: string
@@ -985,6 +1043,7 @@ export type Database = {
           primer_envio_error?: string | null
           primer_envio_intentos?: number
           procesando_hasta?: string | null
+          project_id?: string
           rubro?: string
           sender_id?: string | null
           telefono?: string

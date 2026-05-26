@@ -1,11 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { SYSTEM_PROMPT_FOLLOWUP } from '@/lib/prompts'
+import { buildFollowupSystemPrompt } from '@/lib/prompts'
 import {
   describeViolations,
   validateContinuationMessage,
 } from '@/lib/message-guards'
 import type { Lead } from '@/types'
 import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
+import type { ProjectRow } from '@/lib/projects'
 
 const MAX_CHARS = 300
 
@@ -40,7 +41,8 @@ function truncate(text: string): string {
 export async function generarMensajeFollowupClaude(
   lead: Lead,
   historialBreve: string,
-  stage?: FollowupStage
+  project: ProjectRow,
+  stage?: FollowupStage,
 ): Promise<string | null> {
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) {
@@ -49,13 +51,14 @@ export async function generarMensajeFollowupClaude(
   }
 
   const client = new Anthropic({ apiKey })
+  const systemPrompt = buildFollowupSystemPrompt(project)
 
   const stageInfo = stage
     ? `
 Estado de la conversación:
 - Followups previos enviados: ${stage.followupsPrevios}
 - ¿El cliente respondió alguna vez?: ${stage.clienteRespondioAlguna ? 'sí' : 'no'}
-- Este es el followup #${stage.followupsPrevios + 1} (máximo 2 permitidos).${stage.mensajeInicialApex ? `\n- Primer mensaje que APEX envió (para coherencia de oferta): "${stage.mensajeInicialApex.replace(/\n/g, ' ').slice(0, 200)}"` : ''}
+- Este es el followup #${stage.followupsPrevios + 1} (máximo 2 permitidos).${stage.mensajeInicialApex ? `\n- Primer mensaje que ${project.nombre} envió (para coherencia de oferta): "${stage.mensajeInicialApex.replace(/\n/g, ' ').slice(0, 200)}"` : ''}
 `
     : ''
 
@@ -68,16 +71,16 @@ ${stageInfo}
 Últimos mensajes de esta conversación (el cliente YA SABE quién sos — no te presentes):
 ${historialBreve || '(sin historial previo)'}
 
-Generá el follow-up ahora. Recordá: nada de "Hola", nada de "Soy Manuel / Soy de APEX", directo al valor.`
+Generá el follow-up ahora. Recordá: nada de "Hola", nada de "Soy Manuel / Soy de ${project.nombre}", directo al valor.`
 
   try {
-    let texto = await callClaude(client, SYSTEM_PROMPT_FOLLOWUP, userContent)
+    let texto = await callClaude(client, systemPrompt, userContent)
     if (!texto) return null
 
     let guard = validateContinuationMessage(texto)
     if (!guard.ok) {
       console.warn('[FOLLOWUP] Guard falló 1ra vez:', guard.violations.map(v => v.rule).join(','))
-      const hardenedSystem = `${SYSTEM_PROMPT_FOLLOWUP}
+      const hardenedSystem = `${systemPrompt}
 
 <regeneracion_obligatoria>
 La versión anterior del mensaje falló las reglas. Corregí EXACTAMENTE esto:

@@ -5,6 +5,7 @@ import {
   PlacesNoKeysError,
   searchPlaces,
 } from '@/lib/google-places/search'
+import { cargarProyectoApexDefault, cargarProyectoPorId } from '@/lib/projects'
 
 export const maxDuration = 30
 export const runtime = 'nodejs'
@@ -44,14 +45,25 @@ export async function POST(req: NextRequest) {
     const rubro = typeof body?.rubro === 'string' ? body.rubro.trim() : ''
     const zona =
       typeof body?.zona === 'string' && body.zona.trim() ? body.zona.trim() : 'Buenos Aires'
+    const projectIdBody = typeof body?.project_id === 'string' ? body.project_id : null
 
     if (!rubro) {
       return NextResponse.json({ error: 'El rubro es obligatorio.' }, { status: 400 })
     }
 
+    // Cargo el proyecto para saber si aplicar el filtro "solo sin web".
+    // Si no viene project_id en el body, fallback a APEX (compatibilidad con flujos viejos).
+    const supabaseForProject = createSupabaseServer()
+    const project = projectIdBody
+      ? await cargarProyectoPorId(supabaseForProject, projectIdBody)
+      : await cargarProyectoApexDefault(supabaseForProject)
+    if (!project) {
+      return NextResponse.json({ error: 'No se encontró el proyecto' }, { status: 404 })
+    }
+
     let searchOut
     try {
-      searchOut = await searchPlaces(rubro, zona)
+      searchOut = await searchPlaces(rubro, zona, { filtroSinWeb: project.filtro_sin_web })
     } catch (err) {
       if (err instanceof PlacesNoKeysError) {
         return NextResponse.json(

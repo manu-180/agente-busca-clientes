@@ -13,6 +13,8 @@ export type OrigenLead = 'outbound' | 'inbound'
 
 export interface Lead {
   id: string
+  /** Proyecto al que pertenece el lead (APEX, Assistify, Handy, botlode). */
+  project_id: string
   nombre: string
   rubro: string
   zona: string

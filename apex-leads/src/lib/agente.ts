@@ -24,7 +24,8 @@ import {
 } from '@/lib/response-guardrails'
 import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 import { MENSAJE_COMPROMISO_BOCETO_24H } from '@/lib/mensaje-boceto-24h'
-import { detectarVertical, sanitizarApexInfoPorVertical } from '@/lib/verticales'
+import { detectarVertical, sanitizarProjectInfoPorVertical } from '@/lib/verticales'
+import { cargarProyectoPorId } from '@/lib/projects'
 
 export async function generarRespuestaAgente({
   telefono,
@@ -81,14 +82,27 @@ export async function generarRespuestaAgente({
       return { respuesta: null }
     }
 
-    // 4. Traer info de APEX
-    console.log('[AGENTE] Cargando información de APEX...')
-    const { data: apexInfo } = await supabase
-      .from('apex_info')
+    // 3.5 Cargar el proyecto al que pertenece el lead
+    if (!lead.project_id) {
+      console.error('[AGENTE] Lead sin project_id — no se puede determinar contexto del producto:', lead.id)
+      return { respuesta: null }
+    }
+    const project = await cargarProyectoPorId(supabase, lead.project_id)
+    if (!project) {
+      console.error('[AGENTE] No se encontró el proyecto del lead:', lead.project_id)
+      return { respuesta: null }
+    }
+    console.log('[AGENTE] Proyecto del lead:', project.slug, '(' + project.nombre + ')')
+
+    // 4. Traer info del proyecto del lead (NO mezclar con otros proyectos)
+    console.log('[AGENTE] Cargando información del proyecto...')
+    const { data: projectInfo } = await supabase
+      .from('project_info')
       .select('categoria, titulo, contenido')
+      .eq('project_id', project.id)
       .eq('activo', true)
 
-    const apexInfoTextoRaw = (apexInfo ?? [])
+    const projectInfoTextoRaw = (projectInfo ?? [])
       .map(info => `[${info.categoria.toUpperCase()}] ${info.titulo}\n${info.contenido}`)
       .join('\n\n')
 
@@ -96,14 +110,14 @@ export async function generarRespuestaAgente({
       String(lead.rubro ?? ''),
       lead.descripcion as string | null | undefined
     )
-    const apexInfoSanitizado = sanitizarApexInfoPorVertical(apexInfoTextoRaw, verticalLead)
-    const apexInfoTexto = apexInfoSanitizado.texto
-    if (apexInfoSanitizado.removidas.length) {
+    const projectInfoSanitizado = sanitizarProjectInfoPorVertical(projectInfoTextoRaw, verticalLead)
+    const projectInfoTexto = projectInfoSanitizado.texto
+    if (projectInfoSanitizado.removidas.length) {
       console.log(
-        '[AGENTE] apex_info filtrado por vertical',
+        '[AGENTE] project_info filtrado por vertical',
         verticalLead,
         '→ removidas:',
-        apexInfoSanitizado.removidas
+        projectInfoSanitizado.removidas
       )
     }
 
@@ -264,11 +278,12 @@ export async function generarRespuestaAgente({
       historialMessages.shift()
     }
 
-    // 6. Construir prompt según origen
+    // 6. Construir prompt según origen — scopeado al proyecto del lead
     console.log('[AGENTE] Construyendo prompt del sistema...')
     const systemPrompt = buildAgentPrompt(
       lead.origen as 'outbound' | 'inbound',
-      apexInfoTexto,
+      project,
+      projectInfoTexto,
       '', // historial va en messages[], no en el system prompt
       contextoLead
     )

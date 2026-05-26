@@ -3,7 +3,8 @@ import { createSupabaseServer } from '@/lib/supabase-server'
 import Anthropic from '@anthropic-ai/sdk'
 import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 import { buildAgentPrompt } from '@/lib/prompts'
-import { detectarVertical, sanitizarApexInfoPorVertical } from '@/lib/verticales'
+import { detectarVertical, sanitizarProjectInfoPorVertical } from '@/lib/verticales'
+import { cargarProyectoPorId } from '@/lib/projects'
 
 export async function POST(request: Request) {
   const { lead_id } = await request.json()
@@ -17,18 +18,27 @@ export async function POST(request: Request) {
 
   const { data: lead } = await supabase.from('leads').select('*').eq('id', lead_id).single()
   if (!lead) return NextResponse.json({ error: 'Lead no encontrado' }, { status: 404 })
+  if (!lead.project_id) {
+    return NextResponse.json({ error: 'Lead sin project_id' }, { status: 400 })
+  }
 
-  const { data: apexInfo } = await supabase
-    .from('apex_info')
+  const project = await cargarProyectoPorId(supabase, lead.project_id)
+  if (!project) {
+    return NextResponse.json({ error: 'Proyecto del lead no encontrado' }, { status: 404 })
+  }
+
+  const { data: projectInfo } = await supabase
+    .from('project_info')
     .select('categoria, titulo, contenido')
+    .eq('project_id', project.id)
     .eq('activo', true)
 
-  const apexInfoTextoRaw = (apexInfo ?? [])
+  const projectInfoTextoRaw = (projectInfo ?? [])
     .map(info => `[${info.categoria.toUpperCase()}] ${info.titulo}\n${info.contenido}`)
     .join('\n\n')
 
   const verticalLead = detectarVertical(String(lead.rubro ?? ''), lead.descripcion as string | null)
-  const apexInfoTexto = sanitizarApexInfoPorVertical(apexInfoTextoRaw, verticalLead).texto
+  const projectInfoTexto = sanitizarProjectInfoPorVertical(projectInfoTextoRaw, verticalLead).texto
 
   const { data: historial } = await supabase
     .from('conversaciones')
@@ -38,7 +48,7 @@ export async function POST(request: Request) {
     .limit(20)
 
   const historialTexto = (historial ?? [])
-    .map(h => `[${h.rol === 'agente' ? 'APEX' : 'CLIENTE'}] ${h.mensaje}`)
+    .map(h => `[${h.rol === 'agente' ? project.nombre.toUpperCase() : 'CLIENTE'}] ${h.mensaje}`)
     .join('\n')
 
   const contextoLead = {
@@ -51,7 +61,8 @@ export async function POST(request: Request) {
 
   const systemPrompt = buildAgentPrompt(
     lead.origen as 'outbound' | 'inbound',
-    apexInfoTexto,
+    project,
+    projectInfoTexto,
     historialTexto,
     contextoLead
   )
