@@ -130,7 +130,7 @@ project_id` nullable y el `SET NOT NULL`), el lead quedaría con `project_id =
 NULL` y rompería el último ALTER. Con la migración transaccional, los inserts
 concurrentes ven el esquema viejo o el nuevo, nunca un estado intermedio.
 
-### 3.4 Tipos TypeScript
+### 3.5 Tipos TypeScript
 
 Regenerar `src/types/supabase.ts` con `supabase gen types typescript` después de
 aplicar la migración. Esto actualiza las definiciones de `leads`, `apex_info` (ya
@@ -336,6 +336,10 @@ durante el plan):
   cuando llega un mensaje de un teléfono desconocido. **Asignar `project_id =
   apex` por default**, porque ese lead no vino de una búsqueda explícita; APEX
   es el proyecto por defecto del programa.
+- **`src/app/api/leads/route.ts:43-58`** — endpoint `POST /api/leads` para
+  creación manual single-lead. Debe **recibir `project_id` desde el body** y
+  persistirlo (lo mismo que `bulk-queue`); si el caller no lo manda, fallback
+  a APEX para no romper compatibilidad.
 - **`src/app/api/leads/bulk-queue/route.ts`** (endpoint usado por `/leads/nuevo`
   al encolar) — debe recibir y persistir `project_id` desde el body.
 - **Cualquier otro `from('leads').insert(...)`** que aparezca en el grep
