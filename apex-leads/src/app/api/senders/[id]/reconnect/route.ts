@@ -5,6 +5,7 @@ import {
   connectInstance,
   createInstance,
   deleteInstance,
+  getInstanceState,
   logoutInstance,
 } from '@/lib/evolution-instance'
 
@@ -38,9 +39,44 @@ export const dynamic = 'force-dynamic'
 // va a hacer auto-restart durante el QR scan.
 
 const STEP_DELAY_MS = 800
+const DELETE_CONFIRM_POLL_MS = 600
+const DELETE_CONFIRM_MAX_TRIES = 8 // ~4.8s
 
 async function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms))
+}
+
+/**
+ * Después de pedir DELETE a Evolution, polea hasta que `getInstanceState`
+ * devuelva 'unknown' (404). Evolution puede tardar varios segundos en liberar
+ * el nombre — sobre todo si la instancia estaba en `connecting`. Si después
+ * de N intentos sigue existiendo, reintenta el DELETE una vez más.
+ */
+async function deleteAndWaitGone(name: string): Promise<void> {
+  try {
+    await deleteInstance(name)
+  } catch (err) {
+    console.warn(`[reconnect ${name}] delete fallo 1ra vez (ignorado):`, err)
+  }
+  for (let i = 0; i < DELETE_CONFIRM_MAX_TRIES; i++) {
+    await sleep(DELETE_CONFIRM_POLL_MS)
+    try {
+      const state = await getInstanceState(name)
+      if (state === 'unknown') return // confirmado: el nombre quedó libre
+    } catch (err) {
+      // si getInstanceState también falla, asumimos que ya no está
+      console.warn(`[reconnect ${name}] poll state error (asumimos delete OK):`, err)
+      return
+    }
+  }
+  // Último recurso: re-intentar delete.
+  console.warn(`[reconnect ${name}] instance sigue viva tras poll → segundo delete`)
+  try {
+    await deleteInstance(name)
+  } catch (err) {
+    console.warn(`[reconnect ${name}] segundo delete también falló:`, err)
+  }
+  await sleep(DELETE_CONFIRM_POLL_MS)
 }
 
 export async function POST(_req: NextRequest, { params }: { params: { id: string } }) {
@@ -68,24 +104,38 @@ export async function POST(_req: NextRequest, { params }: { params: { id: string
     }
     await sleep(STEP_DELAY_MS)
 
-    // 2. Delete instance — nukea creds en disco. Si ya no existe, 404 silencioso.
-    try {
-      await deleteInstance(name)
-    } catch (err) {
-      console.warn(`[reconnect ${name}] delete fallo (ignorado):`, err)
-    }
-    await sleep(STEP_DELAY_MS)
+    // 2. Delete instance — nukea creds en disco. Esperamos confirmación real:
+    // Evolution puede tardar varios segundos en liberar el nombre si la instance
+    // estaba en `connecting`. Sin esto, el siguiente createInstance falla con
+    // 403 "name already in use".
+    await deleteAndWaitGone(name)
 
-    // 3. Recrear instance con mismo nombre y webhook.
+    // 3. Recrear instance con mismo nombre y webhook. Si Evolution aún rechaza
+    // por "already in use", esperamos extra y reintentamos una vez.
     try {
       await createInstance(name, buildWebhookUrl())
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      console.error(`[reconnect ${name}] createInstance falló:`, msg)
-      return NextResponse.json(
-        { error: `No se pudo recrear la instancia: ${msg}` },
-        { status: 502 }
-      )
+      if (msg.toLowerCase().includes('already in use')) {
+        console.warn(`[reconnect ${name}] create still says already-in-use → 2nd delete+create`)
+        await deleteAndWaitGone(name)
+        try {
+          await createInstance(name, buildWebhookUrl())
+        } catch (err2) {
+          const msg2 = err2 instanceof Error ? err2.message : String(err2)
+          console.error(`[reconnect ${name}] createInstance falló (retry):`, msg2)
+          return NextResponse.json(
+            { error: `No se pudo recrear la instancia: ${msg2}` },
+            { status: 502 }
+          )
+        }
+      } else {
+        console.error(`[reconnect ${name}] createInstance falló:`, msg)
+        return NextResponse.json(
+          { error: `No se pudo recrear la instancia: ${msg}` },
+          { status: 502 }
+        )
+      }
     }
     await sleep(STEP_DELAY_MS)
 

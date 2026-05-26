@@ -22,6 +22,8 @@ export interface KeyStatus {
   label: string
   configured: boolean
   suffix: string | null
+  /** Alias humano editable desde la UI (ej: "Cuenta camila"). null si no se setteó. */
+  alias: string | null
   used: number
   quota: number
   exhausted: boolean
@@ -76,6 +78,48 @@ export async function getUsageForMonth(month: string): Promise<Map<string, KeyMo
 }
 
 /**
+ * Lee todos los aliases configurados (uno por key_label como máximo).
+ * Devuelve mapa label → alias. Best-effort: si la tabla no existe o falla la
+ * lectura, devolvemos un mapa vacío para no romper la UI.
+ */
+export async function getAliases(): Promise<Map<string, string>> {
+  const supabase = createSupabaseServer()
+  const { data, error } = await supabase
+    .from('places_api_key_alias')
+    .select('key_label,alias')
+
+  const map = new Map<string, string>()
+  if (error) {
+    console.error('[places.quota] No se pudo leer places_api_key_alias:', error.message)
+    return map
+  }
+  for (const row of data ?? []) {
+    const label = String(row.key_label ?? '').trim()
+    const alias = String(row.alias ?? '').trim()
+    if (label && alias) map.set(label, alias)
+  }
+  return map
+}
+
+/**
+ * Upsert del alias de una key_label. Alias vacío/null BORRA la fila (volvés
+ * al título genérico). Devuelve true si la operación se persistió.
+ */
+export async function setAlias(label: string, alias: string | null): Promise<boolean> {
+  const supabase = createSupabaseServer()
+  const trimmed = alias?.trim() ?? null
+  const { error } = await supabase.rpc('upsert_places_key_alias', {
+    p_label: label,
+    p_alias: trimmed && trimmed.length > 0 ? trimmed : null,
+  })
+  if (error) {
+    console.error('[places.quota] upsert_places_key_alias falló:', error.message)
+    return false
+  }
+  return true
+}
+
+/**
  * Construye el snapshot público para la UI: todas las keys configuradas (más
  * los slots vacíos típicos para que el usuario vea cómo agregar la siguiente)
  * con su uso del mes actual y cuál sería la próxima a rotar.
@@ -85,7 +129,7 @@ export async function getUsageForMonth(month: string): Promise<Map<string, KeyMo
 export async function getKeysStatusForUi(): Promise<KeysStatusSnapshot> {
   const month = currentMonthLabelPT()
   const configured = getConfiguredPlacesKeys()
-  const usage = await getUsageForMonth(month)
+  const [usage, aliases] = await Promise.all([getUsageForMonth(month), getAliases()])
 
   // Mostramos siempre al menos 3 slots (la #1 + dos siguientes vacíos), para
   // que el usuario sepa que puede sumar _2 y _3 con poner la env var.
@@ -114,6 +158,7 @@ export async function getKeysStatusForUi(): Promise<KeysStatusSnapshot> {
       label,
       configured: Boolean(cfg),
       suffix: cfg?.suffix ?? null,
+      alias: aliases.get(label) ?? null,
       used,
       quota,
       exhausted: Boolean(cfg) && used >= quota,

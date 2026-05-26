@@ -96,6 +96,7 @@ interface PlacesKeyStatus {
   label: string
   configured: boolean
   suffix: string | null
+  alias: string | null
   used: number
   quota: number
   exhausted: boolean
@@ -346,6 +347,59 @@ export default function NuevoLeadClient() {
   }
 
   const [reseteandoKey, setReseteandoKey] = useState<string | null>(null)
+  // Borrador local del input de alias por label (lo que el usuario está tipeando
+  // pero todavía no guardó). Cuando hace blur o Enter, mandamos al backend.
+  const [aliasDrafts, setAliasDrafts] = useState<Record<string, string>>({})
+  const [guardandoAlias, setGuardandoAlias] = useState<string | null>(null)
+
+  /** Texto actual del input: borrador si existe, sino el alias persistido. */
+  function aliasInputValue(k: PlacesKeyStatus): string {
+    if (Object.prototype.hasOwnProperty.call(aliasDrafts, k.label)) {
+      return aliasDrafts[k.label]
+    }
+    return k.alias ?? ''
+  }
+
+  async function guardarAlias(label: string) {
+    // Si no hay borrador (no editó), no hacemos nada.
+    if (!Object.prototype.hasOwnProperty.call(aliasDrafts, label)) return
+    const draft = aliasDrafts[label].trim()
+    // Si el draft coincide con el persistido, tampoco hace falta tocar el server.
+    const persisted = placesKeys?.keys.find((k) => k.label === label)?.alias ?? ''
+    if (draft === persisted) {
+      setAliasDrafts((prev) => {
+        const next = { ...prev }
+        delete next[label]
+        return next
+      })
+      return
+    }
+    setGuardandoAlias(label)
+    try {
+      const res = await fetch('/api/leads/places-keys/alias', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label, alias: draft }),
+      })
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null
+        window.alert(data?.error ?? 'No se pudo guardar el alias.')
+        return
+      }
+      // Refrescamos snapshot y limpiamos borrador.
+      await cargarPlacesKeys()
+      setAliasDrafts((prev) => {
+        const next = { ...prev }
+        delete next[label]
+        return next
+      })
+    } catch (err) {
+      const mensaje = err instanceof Error ? err.message : 'Error desconocido'
+      window.alert(`No se pudo guardar el alias: ${mensaje}`)
+    } finally {
+      setGuardandoAlias(null)
+    }
+  }
 
   async function rehabilitarKey(label: string) {
     if (reseteandoKey) return
@@ -886,10 +940,40 @@ export default function NuevoLeadClient() {
                   </div>
 
                   <div className="flex items-center justify-between gap-2 min-w-0">
-                    <p className="text-sm font-syne font-semibold truncate">{titulo}</p>
+                    <p className="text-sm font-syne font-semibold truncate" title={titulo}>
+                      {k.alias ? k.alias : titulo}
+                    </p>
                     <span className="text-[11px] font-mono text-apex-muted/90 shrink-0">
                       ••••{k.suffix ?? '----'}
                     </span>
+                  </div>
+
+                  <div>
+                    <label
+                      htmlFor={`alias-${k.label}`}
+                      className="text-[10px] font-mono uppercase tracking-wider text-apex-muted block mb-1"
+                    >
+                      Alias {k.alias ? '' : '(opcional)'}
+                    </label>
+                    <input
+                      id={`alias-${k.label}`}
+                      type="text"
+                      maxLength={60}
+                      value={aliasInputValue(k)}
+                      placeholder={k.alias ? '' : 'ej: Cuenta camila'}
+                      disabled={guardandoAlias === k.label}
+                      onChange={(e) =>
+                        setAliasDrafts((prev) => ({ ...prev, [k.label]: e.target.value }))
+                      }
+                      onBlur={() => guardarAlias(k.label)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          ;(e.target as HTMLInputElement).blur()
+                        }
+                      }}
+                      className="w-full bg-apex-black/60 border border-apex-border/60 focus:border-apex-lime/60 focus:outline-none rounded px-2 py-1.5 text-xs font-mono text-white placeholder:text-apex-muted/50 transition-colors disabled:opacity-50"
+                    />
                   </div>
 
                   <div>
