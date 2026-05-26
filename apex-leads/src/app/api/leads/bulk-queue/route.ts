@@ -3,6 +3,7 @@ import { createSupabaseServer } from '@/lib/supabase-server'
 import { esErrorDuplicadoLead, esErrorOnConflictSinIndice } from '@/lib/db-errors'
 import { normalizarTelefonoArg, soloDigitos, variantesTelefonoMismaLinea } from '@/lib/phone'
 import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
+import { cargarProyectoApexDefault } from '@/lib/projects'
 
 const LEADS_TABLE = 'leads'
 const CHUNK_IN = 200
@@ -17,6 +18,7 @@ interface LeadInput {
 }
 
 type FilaInsert = {
+  project_id: string
   nombre: string
   rubro: string
   zona: string
@@ -76,12 +78,25 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const leadsIn = Array.isArray(body?.leads) ? (body.leads as LeadInput[]) : []
+    const projectIdBody =
+      typeof body?.project_id === 'string' && body.project_id.trim() ? body.project_id.trim() : null
 
     if (leadsIn.length === 0) {
       return NextResponse.json({ error: 'Lista vacía' }, { status: 400 })
     }
 
     const supabase = createSupabaseServer()
+
+    // Determinar proyecto: si el body trae project_id explícito (caso normal desde
+    // /leads/nuevo con selector), lo usamos. Si no, fallback a APEX (legacy).
+    let projectId: string | null = projectIdBody
+    if (!projectId) {
+      const apex = await cargarProyectoApexDefault(supabase)
+      projectId = apex?.id ?? null
+    }
+    if (!projectId) {
+      return NextResponse.json({ error: 'No se pudo determinar el proyecto' }, { status: 500 })
+    }
 
     const telefonos = leadsIn
       .map(l => normalizarTelefono(l.telefono || ''))
@@ -134,6 +149,7 @@ export async function POST(req: NextRequest) {
       if (vistosEnRequest.has(t)) continue
       vistosEnRequest.add(t)
       filas.push({
+        project_id: projectId,
         nombre: String(l.nombre ?? 'Negocio sin nombre').slice(0, 255),
         rubro: String(l.rubro ?? 'Por definir').slice(0, 100),
         zona: String(l.zona ?? 'Por definir').slice(0, 200),

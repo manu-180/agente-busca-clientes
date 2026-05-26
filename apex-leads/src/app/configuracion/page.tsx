@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { CheckCircle } from 'lucide-react'
+import { Bot, BotOff, CheckCircle } from 'lucide-react'
 
 export default function ConfiguracionPage() {
   const [config, setConfig] = useState<Record<string, string>>({})
@@ -116,6 +116,50 @@ export default function ConfiguracionPage() {
           <span className="font-mono">first_contact_activo</span> en pausa. Usá{' '}
           <span className="font-mono">?force=true</span> solo para pruebas fuera de ventana.
         </p>
+      </div>
+
+      {/* Toggle global del agente */}
+      <div className="bg-apex-card border border-apex-border rounded-xl p-6 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div
+            className={`w-12 h-12 rounded-xl flex items-center justify-center ${
+              (config.agente_activo ?? 'true') === 'true' ? 'bg-apex-lime/10' : 'bg-apex-border'
+            }`}
+          >
+            {(config.agente_activo ?? 'true') === 'true' ? (
+              <Bot size={24} className="text-apex-lime" />
+            ) : (
+              <BotOff size={24} className="text-apex-muted" />
+            )}
+          </div>
+          <div>
+            <h2 className="font-semibold">
+              Agente IA {(config.agente_activo ?? 'true') === 'true' ? 'ACTIVO' : 'INACTIVO'}
+            </h2>
+            <p className="text-sm text-apex-muted">
+              {(config.agente_activo ?? 'true') === 'true'
+                ? 'Respondiendo automáticamente a todas las conversaciones'
+                : 'No responde a ninguna conversación (de ningún proyecto)'}
+            </p>
+          </div>
+        </div>
+        <button
+          onClick={() =>
+            guardar(
+              'agente_activo',
+              (config.agente_activo ?? 'true') === 'true' ? 'false' : 'true'
+            )
+          }
+          className={`relative w-14 h-7 rounded-full transition-colors ${
+            (config.agente_activo ?? 'true') === 'true' ? 'bg-apex-lime' : 'bg-apex-border'
+          }`}
+        >
+          <div
+            className={`absolute top-0.5 w-6 h-6 rounded-full bg-apex-black transition-transform ${
+              (config.agente_activo ?? 'true') === 'true' ? 'left-[30px]' : 'left-0.5'
+            }`}
+          />
+        </button>
       </div>
 
       {/* Inteligencia del agente */}

@@ -3,6 +3,7 @@ import { createSupabaseServer } from '@/lib/supabase-server'
 import { ejecutarConTablaLeads } from '@/lib/leads-table'
 import { normalizarTelefonoArg, variantesTelefonoMismaLinea } from '@/lib/phone'
 import { isTelefonoHardBlocked } from '@/lib/phone-blocklist'
+import { cargarProyectoApexDefault } from '@/lib/projects'
 
 export const dynamic = 'force-dynamic'
 
@@ -40,10 +41,23 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Determinar el proyecto: si el caller mandó project_id explícito, lo usa;
+  // si no, fallback a APEX (compatibilidad con clientes legados).
+  let projectId: string | null =
+    typeof body.project_id === 'string' && body.project_id.trim() ? body.project_id.trim() : null
+  if (!projectId) {
+    const apex = await cargarProyectoApexDefault(supabase)
+    projectId = apex?.id ?? null
+  }
+  if (!projectId) {
+    return NextResponse.json({ error: 'No se pudo determinar el proyecto' }, { status: 500 })
+  }
+
   const { data, error } = await ejecutarConTablaLeads((tabla) =>
     supabase
       .from(tabla)
       .insert({
+        project_id: projectId,
         nombre: body.nombre,
         rubro: body.rubro,
         zona: body.zona || 'Buenos Aires',

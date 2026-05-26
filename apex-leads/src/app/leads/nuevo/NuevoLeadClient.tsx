@@ -1,6 +1,6 @@
 'use client'
 
-import { FormEvent, useMemo, useRef, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Loader2,
   MapPin,
@@ -141,7 +141,17 @@ function pctColor(pct: number, exhausted: boolean): string {
   return 'bg-apex-lime'
 }
 
+interface ProjectOption {
+  id: string
+  slug: string
+  nombre: string
+  filtro_sin_web: boolean
+  rubros_sugeridos: string[]
+}
+
 export default function NuevoLeadClient() {
+  const [projects, setProjects] = useState<ProjectOption[]>([])
+  const [proyectoId, setProyectoId] = useState<string | null>(null)
   const [rubro, setRubro] = useState('')
   const [paisCodigo, setPaisCodigo] = useState(getDefaultPais().codigo)
   const [provinciaNombre, setProvinciaNombre] = useState(
@@ -293,6 +303,24 @@ export default function NuevoLeadClient() {
     }
   }
 
+  // Cargar proyectos al montar + setear APEX como default
+  useEffect(() => {
+    fetch('/api/projects')
+      .then(r => r.json())
+      .then(({ projects }) => {
+        const list = (projects ?? []) as ProjectOption[]
+        setProjects(list)
+        const apex = list.find(p => p.slug === 'apex')
+        setProyectoId(apex?.id ?? list[0]?.id ?? null)
+      })
+      .catch(() => {})
+  }, [])
+
+  const proyectoActual = useMemo(
+    () => projects.find(p => p.id === proyectoId) ?? null,
+    [projects, proyectoId]
+  )
+
   async function cargarCapacity() {
     try {
       const res = await fetch('/api/senders/capacity', { cache: 'no-store' })
@@ -371,7 +399,7 @@ export default function NuevoLeadClient() {
       const res = await fetch('/api/leads/buscar', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rubro, zona: zonaLocal }),
+        body: JSON.stringify({ rubro, zona: zonaLocal, project_id: proyectoId }),
         signal,
       })
       if (!res.ok) {
@@ -431,6 +459,7 @@ export default function NuevoLeadClient() {
     }
 
     const payload = {
+      project_id: proyectoId,
       leads: permitidos.map(l => ({
         nombre: l.nombre,
         rubro: l.rubro,
@@ -996,6 +1025,33 @@ export default function NuevoLeadClient() {
 
       <form onSubmit={buscarNegocios} className="bg-apex-card border border-apex-border rounded-xl p-6 space-y-4">
         <h2 className="font-syne font-semibold text-lg">Buscar negocios</h2>
+
+        {/* Selector de proyecto */}
+        <div>
+          <label className="text-xs text-apex-muted font-mono uppercase tracking-wider block mb-1.5">
+            Proyecto
+          </label>
+          <select
+            value={proyectoId ?? ''}
+            onChange={(event) => setProyectoId(event.target.value || null)}
+            className="w-full bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
+          >
+            {projects.length === 0 && <option value="">Cargando proyectos...</option>}
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.nombre}
+              </option>
+            ))}
+          </select>
+          {proyectoActual && (
+            <p className="text-[11px] text-apex-muted mt-1.5 font-mono">
+              {proyectoActual.filtro_sin_web
+                ? '🔎 Buscando solo negocios sin web'
+                : '🌐 Mostrando todos los resultados (negocios con o sin web)'}
+            </p>
+          )}
+        </div>
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="text-xs text-apex-muted font-mono uppercase tracking-wider block mb-1.5">
@@ -1008,6 +1064,25 @@ export default function NuevoLeadClient() {
               placeholder="Ej: pizzería, peluquería, gimnasio"
               className="w-full bg-apex-black border border-apex-border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-apex-lime/50"
             />
+            {/* Chips de rubros sugeridos del proyecto activo */}
+            {proyectoActual && proyectoActual.rubros_sugeridos.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {proyectoActual.rubros_sugeridos.map((r) => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setRubro(r)}
+                    className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                      rubro === r
+                        ? 'bg-apex-lime/15 border-apex-lime/50 text-apex-lime'
+                        : 'bg-apex-black border-apex-border text-apex-muted hover:text-white hover:border-apex-lime/30'
+                    }`}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <div className="space-y-3">
             <div>

@@ -4,18 +4,24 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, Users, UserPlus, MessageSquare,
-  Bot, Settings, Menu, X, Zap, Sparkles, Instagram, FileText, Smartphone, Briefcase
+  Settings, Menu, X, Zap, Sparkles, Instagram, FileText, Smartphone, Briefcase,
+  FolderKanban, ChevronDown, ChevronRight,
 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { usePolling } from '@/hooks/usePolling'
+
+interface ProjectNav {
+  id: string
+  slug: string
+  nombre: string
+}
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/leads', label: 'Leads WA', icon: Users },
   { href: '/leads/nuevo', label: 'Nuevo Lead', icon: UserPlus },
   { href: '/conversaciones', label: 'Inbox WA', icon: MessageSquare, showBadge: true },
-  { href: '/agente', label: 'Agente IA', icon: Bot },
   { href: '/demos', label: 'Demos', icon: Sparkles },
   { href: '/admin/ig', label: 'Instagram', icon: Instagram },
   { href: '/logs', label: 'Logs', icon: FileText },
@@ -29,6 +35,8 @@ export function Sidebar() {
   const [open, setOpen] = useState(false)
   const [unreadTotal, setUnreadTotal] = useState(0)
   const [simInactiveCount, setSimInactiveCount] = useState<number | null>(null)
+  const [projects, setProjects] = useState<ProjectNav[]>([])
+  const [projectsOpen, setProjectsOpen] = useState(true)
 
   const fetchUnread = useCallback(async () => {
     try {
@@ -38,16 +46,12 @@ export function Sidebar() {
     } catch {}
   }, [])
 
-  // Polling cada 60s (antes 15s). En pestañas ocultas no consume invocations.
   usePolling(fetchUnread, 60_000)
 
-  // Al cambiar de ruta, refrescamos el contador (preserva el comportamiento
-  // previo en que [pathname] era dependency del useEffect del setInterval).
   useEffect(() => {
     fetchUnread()
   }, [pathname, fetchUnread])
 
-  // Listener de evento custom para refrescar inmediatamente al marcar como leído.
   useEffect(() => {
     window.addEventListener('inbox:mark-read', fetchUnread)
     return () => window.removeEventListener('inbox:mark-read', fetchUnread)
@@ -66,9 +70,22 @@ export function Sidebar() {
     } catch {}
   }, [])
 
-  // Polling cada 120s (antes 30s). El dot rojo del sidebar tolera de sobra
-  // este lag — un SIM caído ya lo cubre el cron de monitoreo del backend.
   usePolling(fetchSimStatus, 120_000)
+
+  // Cargar proyectos para el dropdown
+  useEffect(() => {
+    fetch('/api/projects')
+      .then(r => r.json())
+      .then(({ projects }) => setProjects(projects ?? []))
+      .catch(() => {})
+  }, [])
+
+  // Abrir el dropdown automáticamente si estás dentro de /proyectos
+  useEffect(() => {
+    if (pathname?.startsWith('/proyectos')) setProjectsOpen(true)
+  }, [pathname])
+
+  const proyectosActivo = pathname?.startsWith('/proyectos') ?? false
 
   return (
     <>
@@ -80,7 +97,6 @@ export function Sidebar() {
         {open ? <X size={20} /> : <Menu size={20} />}
       </button>
 
-      {/* Overlay */}
       {open && (
         <div
           className="fixed inset-0 bg-black/60 z-30 lg:hidden"
@@ -88,7 +104,6 @@ export function Sidebar() {
         />
       )}
 
-      {/* Sidebar */}
       <aside
         className={cn(
           'fixed left-0 top-0 h-full w-64 bg-apex-dark border-r border-apex-border z-40',
@@ -97,7 +112,6 @@ export function Sidebar() {
           open ? 'translate-x-0' : '-translate-x-full'
         )}
       >
-        {/* Logo */}
         <div className="p-6 border-b border-apex-border">
           <Link href="/dashboard" className="flex items-center gap-3">
             <div className="w-9 h-9 bg-apex-lime rounded-lg flex items-center justify-center">
@@ -110,8 +124,7 @@ export function Sidebar() {
           </Link>
         </div>
 
-        {/* Nav */}
-        <nav className="flex-1 p-4 space-y-1">
+        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
           {navItems.map((item) => {
             const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
             const badgeCount = item.showBadge ? unreadTotal : 0
@@ -154,9 +167,52 @@ export function Sidebar() {
               </Link>
             )
           })}
+
+          {/* Sección Proyectos (dropdown) */}
+          <div className="pt-2">
+            <button
+              onClick={() => setProjectsOpen(o => !o)}
+              className={cn(
+                'w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-all',
+                proyectosActivo
+                  ? 'bg-apex-lime/15 text-apex-lime border border-apex-lime/35'
+                  : 'text-apex-muted hover:text-white hover:bg-apex-card'
+              )}
+            >
+              <FolderKanban size={18} />
+              <span className="flex-1 text-left">Proyectos</span>
+              {projectsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            </button>
+
+            {projectsOpen && (
+              <div className="mt-1 ml-3 pl-3 border-l border-apex-border space-y-0.5">
+                {projects.length === 0 && (
+                  <p className="px-3 py-2 text-xs text-apex-muted italic">Cargando...</p>
+                )}
+                {projects.map(p => {
+                  const href = `/proyectos/${p.slug}`
+                  const isActive = pathname === href
+                  return (
+                    <Link
+                      key={p.id}
+                      href={href}
+                      onClick={() => setOpen(false)}
+                      className={cn(
+                        'block px-3 py-2 rounded-md text-sm transition-colors',
+                        isActive
+                          ? 'bg-apex-lime/10 text-apex-lime'
+                          : 'text-apex-muted hover:text-white hover:bg-apex-card'
+                      )}
+                    >
+                      {p.nombre}
+                    </Link>
+                  )
+                })}
+              </div>
+            )}
+          </div>
         </nav>
 
-        {/* Footer */}
         <div className="p-4 border-t border-apex-border">
           <div className="flex items-center gap-2 px-4 py-2">
             <div className="w-2 h-2 rounded-full bg-emerald-400 pulse-lime" />
