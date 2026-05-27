@@ -1,7 +1,7 @@
 /**
  * Heurísticas para respuestas automáticas típicas de WhatsApp Business
  * (bienvenida + precios + promo) cuando el primer contacto lo hace APEX (outbound).
- * Última revisión: fix lock cron + loggeo webhook_lock_bloqueado (2026-04-25)
+ * Última revisión: bot-a-bot detection (2026-05-27)
  */
 
 const RE_BIENVENIDO = /bienvenid[oa]\b/i
@@ -32,6 +32,20 @@ const RE_DISCLAIMER_WA_NEGOCIO =
 const RE_RESPONDEREMOS_BREVEDAD =
   /\b(te\s+)?responderemos\s+(a\s+la\s+)?brevedad\b|\ba\s+la\s+brevedad\s+te\s+responderemos\b/i
 const RE_HORARIO_ATENCION_LITERAL = /\b(nuestro\s+)?horario\s+de\s+atenci[oó]n\b/i
+
+// ── Patrones de chatbots conversacionales (no detectados por las reglas de negocio) ──
+// Bot persona: "Soy [Nombre]" seguido de contexto profesional + años de experiencia
+const RE_BOT_PERSONA_INTRO =
+  /\b(soy|me\s+llamo)\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}[\s\S]*\b\d{1,2}\s+años?\b/i
+// 3+ preguntas directas seguidas (¿...? ¿...? ¿...?) — firma de chatbot de calificación
+// [^?] ya matchea \n sin necesidad del flag s
+const RE_TRIPLE_PREGUNTA = /\?[^?]{0,300}\?[^?]{0,300}\?/
+// "Para darte la info justa/correcta, ¿me contarías?" — frase de bot de captación
+const RE_PARA_DARTE_INFO = /para\s+darte\s+(la\s+)?info\b/i
+// "Qué bueno que te hayas interesado" — apertura típica de bot de ventas
+const RE_QUE_BUENO_INTERES = /qu[eé]\s+bueno\s+que\s+(te\s+)?hayas?\s+/i
+// "Llevo X años entrenando/trabajando/atendiendo" — experiencia en intro de bot persona
+const RE_LLEVO_ANOS = /\bllevo\s+\d{1,2}\s+años?\s+(entrenando|trabajando|atendiendo|ayudando)\b/i
 
 function tieneBloquesEmojisDecorativos(texto: string): boolean {
   // 3+ emojis consecutivos (pares sustitutos) — decoración típica de auto-replies de negocios
@@ -137,3 +151,51 @@ export const RESPUESTA_FAMILY_RELAY = `Dale, gracias. Si querés mostrale lo que
 
 /** Cliente pregunta de dónde sacamos el número (sospecha/desconfianza, sin negar negocio). */
 export const RESPUESTA_SUSPICION = `Tranqui, lo saqué de Google Maps — busco comercios de la zona y el rubro con el que trabajo, nada raro. Si no te interesa lo borro y listo.`
+
+/**
+ * Detecta mensajes de chatbots conversacionales de WhatsApp Business que no
+ * son capturados por `pareceMensajeAutomaticoNegocio` (que apunta a menús
+ * estáticos de precios/horarios). Este patrón apunta a bots de captación que
+ * se presentan como una persona y hacen preguntas de calificación.
+ */
+export function pareceMensajeBotConversacional(texto: string): boolean {
+  if (!texto || texto.length < 30) return false
+  if (RE_COMUNICARTE_CON.test(texto)) return true
+  if (RE_QUE_BUENO_INTERES.test(texto) && RE_TRIPLE_PREGUNTA.test(texto)) return true
+  if (RE_BOT_PERSONA_INTRO.test(texto) && texto.length > 120) return true
+  if (RE_LLEVO_ANOS.test(texto) && RE_PARA_DARTE_INFO.test(texto)) return true
+  if (RE_LLEVO_ANOS.test(texto) && RE_TRIPLE_PREGUNTA.test(texto)) return true
+  if (RE_PARA_DARTE_INFO.test(texto) && RE_TRIPLE_PREGUNTA.test(texto)) return true
+  return false
+}
+
+/**
+ * Analiza el historial completo y devuelve `true` si la conversación es
+ * bot-a-bot. Criterios:
+ * - 4+ mensajes del cliente que parecen automáticos/bot
+ * - o bien, 10+ mensajes del cliente y >= 50% son automáticos
+ *
+ * Cuando esto ocurre, el agente debe desactivarse para ese lead sin responder.
+ */
+export function detectarConversacionBot(
+  historial: Array<{ rol: string; mensaje: string | null | undefined }>
+): boolean {
+  const mensajesCliente = historial
+    .filter(h => h.rol === 'cliente' && h.mensaje)
+    .map(h => String(h.mensaje))
+
+  if (mensajesCliente.length < 2) return false
+
+  const esBot = (m: string) =>
+    pareceMensajeAutomaticoNegocio(m) || pareceMensajeBotConversacional(m)
+
+  const botCount = mensajesCliente.filter(esBot).length
+
+  // 4+ mensajes bot detectados → ban inmediato
+  if (botCount >= 4) return true
+
+  // Con >= 10 mensajes del cliente y mayoría automáticos → es un loop
+  if (mensajesCliente.length >= 10 && botCount / mensajesCliente.length >= 0.5) return true
+
+  return false
+}

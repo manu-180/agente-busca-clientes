@@ -5,6 +5,7 @@ import { createSupabaseServer } from '@/lib/supabase-server'
 import { buildAgentPrompt, buildUserMessageWithLeadContext } from '@/lib/prompts'
 import {
   clienteYaMandoAlgoNoAutomatico,
+  detectarConversacionBot,
   esAutoReplyCortoNegocio,
   esPlantillaRespuestaOutboundAuto,
   pareceMensajeAutomaticoNegocio,
@@ -407,6 +408,26 @@ async function procesarConLock(
     .limit(60)
 
   const filasHistorial = historialRows ?? []
+
+  // ── Blindaje: conversación bot-a-bot ──
+  if (detectarConversacionBot(filasHistorial)) {
+    const nCliente = filasHistorial.filter(h => h.rol === 'cliente').length
+    console.warn(`[BG] Bot-a-bot detectado (${nCliente} msgs cliente) → desactivando agente lead=${p.leadId}`)
+    await supabase
+      .from('leads')
+      .update({ agente_activo: false })
+      .eq('id', p.leadId)
+    await registrarEventoConversacional({
+      leadId: p.leadId,
+      telefono: p.telefono,
+      eventName: 'bot_conversacion_detectada',
+      decisionAction: 'no_reply',
+      decisionReason: 'opt_out',
+      confidence: 1,
+      metadata: { motivo: 'bot_a_bot_loop', n_cliente_msgs: nCliente },
+    })
+    return
+  }
 
   // ── Blindaje: outbound sin mensaje humano real ──
   const outboundSinHumanoReal =
