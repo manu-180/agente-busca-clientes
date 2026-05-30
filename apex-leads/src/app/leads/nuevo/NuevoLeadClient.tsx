@@ -16,6 +16,8 @@ import {
   KeyRound,
   AlertTriangle,
   Zap,
+  ChevronDown,
+  FolderKanban,
 } from 'lucide-react'
 import { ResultadoBusquedaLead } from '@/types'
 import {
@@ -181,6 +183,10 @@ export default function NuevoLeadClient() {
 
   const detenerBusquedaRef = useRef(false)
   const abortBusquedaRef = useRef<AbortController | null>(null)
+  const [showProjectPicker, setShowProjectPicker] = useState(false)
+  const pickerRef = useRef<HTMLDivElement>(null)
+  // Ref mutable para que el polling no quede con proyectoId stale en closure.
+  const proyectoIdRef = useRef<string | null>(null)
 
   const paisSeleccionado = useMemo(
     () => PAISES_HISPANOHABLANTES.find((p) => p.codigo === paisCodigo) || getDefaultPais(),
@@ -292,9 +298,12 @@ export default function NuevoLeadClient() {
     ]
   )
 
-  async function cargarStats() {
+  async function cargarStats(pid?: string | null) {
     try {
-      const res = await fetch('/api/leads/queue-stats', { cache: 'no-store' })
+      const url = pid
+        ? `/api/leads/queue-stats?project_id=${encodeURIComponent(pid)}`
+        : '/api/leads/queue-stats'
+      const res = await fetch(url, { cache: 'no-store' })
       if (res.ok) {
         const data = (await res.json()) as QueueStats
         setQueueStats(data)
@@ -304,23 +313,61 @@ export default function NuevoLeadClient() {
     }
   }
 
-  // Cargar proyectos al montar + setear APEX como default
+  // Cargar proyectos al montar + respetar el proyecto activo del cron (si existe).
   useEffect(() => {
-    fetch('/api/projects')
-      .then(r => r.json())
-      .then(({ projects }) => {
-        const list = (projects ?? []) as ProjectOption[]
-        setProjects(list)
-        const apex = list.find(p => p.slug === 'apex')
-        setProyectoId(apex?.id ?? list[0]?.id ?? null)
-      })
-      .catch(() => {})
+    Promise.all([
+      fetch('/api/projects').then(r => r.json()),
+      fetch('/api/leads/queue-project').then(r => r.json()).catch(() => ({ project_id: null })),
+    ]).then(([projectsRes, queueRes]) => {
+      const list = (projectsRes.projects ?? []) as ProjectOption[]
+      setProjects(list)
+      // Si el cron tiene un proyecto activo persistido, lo usamos; si no, default APEX.
+      const activeId = (queueRes as { project_id: string | null }).project_id
+      const resolved = activeId ?? list.find(p => p.slug === 'apex')?.id ?? list[0]?.id ?? null
+      setProyectoId(resolved)
+    }).catch(() => {})
   }, [])
 
   const proyectoActual = useMemo(
     () => projects.find(p => p.id === proyectoId) ?? null,
     [projects, proyectoId]
   )
+
+  // Mantener ref sincronizado (para polling sin closure stale).
+  useEffect(() => { proyectoIdRef.current = proyectoId }, [proyectoId])
+
+  async function activarColaDe(pid: string) {
+    setProyectoId(pid)
+    setShowProjectPicker(false)
+    // Persistir en DB para que el cron lo lea en el siguiente tick.
+    try {
+      await fetch('/api/leads/queue-project', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: pid }),
+      })
+    } catch {
+      // no es crítico — el counter de UI ya cambió
+    }
+  }
+
+  // Re-fetch stats cada vez que cambia el proyecto seleccionado.
+  useEffect(() => {
+    cargarStats(proyectoId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proyectoId])
+
+  // Click-outside para cerrar el picker de proyecto.
+  useEffect(() => {
+    if (!showProjectPicker) return
+    function handleClickOutside(e: MouseEvent) {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setShowProjectPicker(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showProjectPicker])
 
   async function cargarCapacity() {
     try {
@@ -431,7 +478,7 @@ export default function NuevoLeadClient() {
   // Polling cada 120s con visibility-gate (vía usePolling). Pausa en pestaña
   // oculta y refresca al volver. Reemplaza la implementación manual previa.
   usePolling(() => {
-    cargarStats()
+    cargarStats(proyectoIdRef.current)
     cargarCapacity()
     cargarPlacesKeys()
   }, 120_000)
@@ -703,7 +750,7 @@ export default function NuevoLeadClient() {
         try {
           const resultado = await encolarLeads(acumulados)
           setUltimoResultadoCola(resultado)
-          await cargarStats()
+          await cargarStats(proyectoIdRef.current)
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'Error encolando leads'
           setErrorBusqueda(msg)
@@ -765,9 +812,74 @@ export default function NuevoLeadClient() {
       {/* Stats bar */}
       {queueStats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="bg-apex-card border border-apex-border rounded-lg p-3">
-            <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">En cola</div>
-            <div className="text-2xl font-bold text-apex-lime mt-1">{queueStats.pendientes}</div>
+
+          {/* EN COLA — card clickeable con selector de proyecto */}
+          <div className="relative" ref={pickerRef}>
+            <button
+              type="button"
+              onClick={() => setShowProjectPicker(v => !v)}
+              className={`w-full text-left bg-apex-card border rounded-lg p-3 transition-all duration-200 group focus:outline-none focus:ring-2 focus:ring-apex-lime/50 ${
+                showProjectPicker
+                  ? 'border-apex-lime/60 shadow-[0_0_0_1px_rgba(190,242,100,0.15)]'
+                  : 'border-apex-border hover:border-apex-lime/40'
+              }`}
+            >
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">En cola</div>
+                <div className="flex items-center gap-1">
+                  <span className={`inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded-full border transition-colors ${
+                    showProjectPicker
+                      ? 'bg-apex-lime/20 border-apex-lime/60 text-apex-lime'
+                      : 'bg-apex-lime/10 border-apex-lime/30 text-apex-lime group-hover:bg-apex-lime/15 group-hover:border-apex-lime/50'
+                  }`}>
+                    <FolderKanban size={9} />
+                    {proyectoActual?.nombre ?? '—'}
+                  </span>
+                  <ChevronDown
+                    size={12}
+                    className={`text-apex-muted transition-all duration-200 ${
+                      showProjectPicker ? 'rotate-180 text-apex-lime' : 'group-hover:text-apex-lime'
+                    }`}
+                  />
+                </div>
+              </div>
+              <div className="text-2xl font-bold text-apex-lime tabular-nums">
+                {queueStats.pendientes.toLocaleString('es-AR')}
+              </div>
+              <div className="text-[10px] font-mono text-apex-muted mt-0.5">leads pendientes</div>
+            </button>
+
+            {/* Dropdown de proyectos */}
+            {showProjectPicker && projects.length > 0 && (
+              <div className="absolute top-full left-0 right-0 mt-1 z-50 bg-[#111] border border-apex-lime/30 rounded-xl shadow-2xl overflow-hidden animate-fade-in">
+                <div className="px-3 pt-2.5 pb-1">
+                  <p className="text-[9px] font-mono uppercase tracking-widest text-apex-muted/70">
+                    Cola por proyecto
+                  </p>
+                </div>
+                {projects.map(p => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => activarColaDe(p.id)}
+                    className={`w-full text-left px-3 py-2.5 flex items-center justify-between transition-colors ${
+                      p.id === proyectoId
+                        ? 'bg-apex-lime/10 text-apex-lime'
+                        : 'text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className={`w-1.5 h-1.5 rounded-full ${p.id === proyectoId ? 'bg-apex-lime' : 'bg-apex-border'}`} />
+                      <span className="text-sm font-mono">{p.nombre}</span>
+                    </div>
+                    {p.id === proyectoId && (
+                      <CheckCircle2 size={13} className="text-apex-lime shrink-0" />
+                    )}
+                  </button>
+                ))}
+                <div className="h-1" />
+              </div>
+            )}
           </div>
           <div className="bg-apex-card border border-apex-border rounded-lg p-3">
             <div className="text-xs text-apex-muted font-mono uppercase tracking-wider">Hoy</div>

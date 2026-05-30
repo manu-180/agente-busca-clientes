@@ -115,6 +115,14 @@ interface LeadColaRow {
   primer_envio_intentos: number
   primer_envio_error: string | null
   primer_envio_completado_at: string | null
+  project_id: string | null
+}
+
+interface ProjectRow {
+  id: string
+  slug: string
+  nombre: string
+  plantilla_primer_mensaje: string | null
 }
 
 function authCron(req: NextRequest): boolean {
@@ -123,9 +131,31 @@ function authCron(req: NextRequest): boolean {
   return req.headers.get('authorization') === `Bearer ${secret}`
 }
 
-function construirMensajePrimerContacto(lead: LeadColaRow): string {
+function interpolarPlantilla(
+  template: string,
+  lead: LeadColaRow,
+  rating: string,
+  demoHost: string,
+): string {
+  return template
+    .replace(/\{\{nombre\}\}/g, lead.nombre)
+    .replace(/\{\{rating\}\}/g, rating)
+    .replace(/\{\{zona\}\}/g, lead.zona)
+    .replace(/\{\{rubro\}\}/g, lead.rubro)
+    .replace(/\{\{demo_url\}\}/g, demoHost)
+    .replace(/\{\{sitio\}\}/g, SITIO_PRINCIPAL_APEX)
+}
+
+function construirMensajePrimerContacto(lead: LeadColaRow, plantilla?: string | null): string {
   const rating = extraerRatingParaPlantilla(lead.descripcion)
   const demoHost = resolveWhatsAppDemoHost(lead.rubro, lead.descripcion)
+
+  // Plantilla personalizada del proyecto (con variables {{nombre}}, {{rating}}, etc.)
+  if (plantilla?.trim()) {
+    return interpolarPlantilla(plantilla, lead, rating, demoHost)
+  }
+
+  // Mensaje default de APEX
   return [
     `Hola ${lead.nombre}`,
     `Vi que tu negocio tiene ${rating}⭐ en Google Maps.`,
@@ -137,9 +167,11 @@ function construirMensajePrimerContacto(lead: LeadColaRow): string {
 
 async function claimYEnviarLead(
   sup: SupabaseClient,
-  sender: PoolSender
+  sender: PoolSender,
+  projectsMap: Map<string, ProjectRow>,
+  activeProjectId: string | null,
 ): Promise<Record<string, unknown>> {
-  const { data: candidatos, error: candidatosErr } = await sup
+  let candidatosQuery = sup
     .from(LEADS_TABLE)
     .select('*')
     .eq('origen', 'outbound')
@@ -149,6 +181,12 @@ async function claimYEnviarLead(
     .not('telefono', 'is', null)
     .order('created_at', { ascending: true })
     .limit(50)
+
+  if (activeProjectId) {
+    candidatosQuery = candidatosQuery.eq('project_id', activeProjectId)
+  }
+
+  const { data: candidatos, error: candidatosErr } = await candidatosQuery
 
   if (candidatosErr) {
     console.error(`[cron] Error cargando candidatos: ${candidatosErr.message}`)
@@ -209,7 +247,8 @@ async function claimYEnviarLead(
     if (!claimed) continue // alguien más se lo llevó
 
     try {
-      const mensajeTexto = construirMensajePrimerContacto(lead)
+      const proyecto = lead.project_id ? projectsMap.get(lead.project_id) : null
+      const mensajeTexto = construirMensajePrimerContacto(lead, proyecto?.plantilla_primer_mensaje)
       const result = await enviarMensajeEvolution(telefono, mensajeTexto, sender.instance_name)
 
       // Increment atómico DESPUÉS del envío exitoso. Si falla por race no rollback
@@ -500,11 +539,15 @@ async function procesarUnTick(
   await resetDailyCountersIfNeeded(sup)
   await ejecutarHealthCheckInlineSiCorresponde(sup)
 
-  const { data: cfgActivo } = await sup
-    .from('configuracion').select('valor').eq('clave', 'first_contact_activo').maybeSingle()
-  if (cfgActivo?.valor !== 'true') {
+  const [cfgActivoRes, cfgProjectRes] = await Promise.all([
+    sup.from('configuracion').select('valor').eq('clave', 'first_contact_activo').maybeSingle(),
+    sup.from('configuracion').select('valor').eq('clave', 'active_queue_project_id').maybeSingle(),
+  ])
+  if (cfgActivoRes.data?.valor !== 'true') {
     return { status: 'skipped_first_contact_inactivo' }
   }
+  // project_id activo para esta ejecución (null = procesar todos sin filtro).
+  const activeProjectId = cfgProjectRes.data?.valor || null
 
   if (!forced && !estaEnVentanaPrimerContacto()) {
     return {
@@ -512,6 +555,16 @@ async function procesarUnTick(
       hora_argentina: getHoraArgentina(),
       ventana: { inicio: PRIMER_CONTACTO_HORA_INICIO_AR, fin: PRIMER_CONTACTO_HORA_FIN_AR },
     }
+  }
+
+  // Precargar proyectos activos para resolver plantilla de cada lead sin N+1 queries.
+  const { data: projectsData } = await sup
+    .from('projects')
+    .select('id, slug, nombre, plantilla_primer_mensaje')
+    .eq('activo', true)
+  const projectsMap = new Map<string, ProjectRow>()
+  for (const p of projectsData ?? []) {
+    projectsMap.set(p.id as string, p as ProjectRow)
   }
 
   // Reintentar hasta MAX_REINTENTOS_POOL veces si el sender elegido se cae.
@@ -533,7 +586,7 @@ async function procesarUnTick(
     sendersIntentados.push(sender.alias ?? sender.instance_name)
     sendersIntentadosIds.push(sender.id)
 
-    const leadResult = await claimYEnviarLead(sup, sender)
+    const leadResult = await claimYEnviarLead(sup, sender, projectsMap, activeProjectId)
 
     if (leadResult.status === 'sin_pendientes') {
       return { status: 'sin_pendientes', sender_intentado: sender.alias ?? sender.instance_name }

@@ -19,26 +19,40 @@ function inicioDelDiaArUtc(): Date {
   return new Date(diaArMs - offsetMs)
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   const supabase = createSupabaseServer()
+  const { searchParams } = new URL(req.url)
+  const projectId = searchParams.get('project_id')
 
   const inicioDiaUtc = inicioDelDiaArUtc().toISOString()
 
+  let pendientesQ = supabase
+    .from(LEADS_TABLE)
+    .select('id', { count: 'exact', head: true })
+    .eq('origen', 'outbound')
+    .eq('mensaje_enviado', false)
+    .eq('estado', 'pendiente')
+
+  let enviadosQ = supabase
+    .from(LEADS_TABLE)
+    .select('id', { count: 'exact', head: true })
+    .gte('primer_envio_completado_at', inicioDiaUtc)
+
+  let fallidosQ = supabase
+    .from(LEADS_TABLE)
+    .select('id', { count: 'exact', head: true })
+    .gte('primer_envio_fallido_at', inicioDiaUtc)
+
+  if (projectId) {
+    pendientesQ = pendientesQ.eq('project_id', projectId)
+    enviadosQ   = enviadosQ.eq('project_id', projectId)
+    fallidosQ   = fallidosQ.eq('project_id', projectId)
+  }
+
   const [pendientesRes, enviadosHoyRes, fallidosHoyRes, configRes] = await Promise.all([
-    supabase
-      .from(LEADS_TABLE)
-      .select('id', { count: 'exact', head: true })
-      .eq('origen', 'outbound')
-      .eq('mensaje_enviado', false)
-      .eq('estado', 'pendiente'),
-    supabase
-      .from(LEADS_TABLE)
-      .select('id', { count: 'exact', head: true })
-      .gte('primer_envio_completado_at', inicioDiaUtc),
-    supabase
-      .from(LEADS_TABLE)
-      .select('id', { count: 'exact', head: true })
-      .gte('primer_envio_fallido_at', inicioDiaUtc),
+    pendientesQ,
+    enviadosQ,
+    fallidosQ,
     supabase.from('configuracion').select('valor').eq('clave', 'first_contact_activo').maybeSingle(),
   ])
 
