@@ -255,6 +255,7 @@ interface BgParams {
   leadOrigen: string
   leadAgentActivo: boolean
   senderId: string | null
+  senderProjectId: string | null
   miMsgTimestamp: string | undefined
 }
 
@@ -674,17 +675,24 @@ async function procesarConLock(
     .eq('id', p.leadId)
     .single()
 
-  if (!leadActualizado?.project_id) {
-    console.error('[BG] Lead sin project_id — no se puede responder:', p.leadId)
+  // El proyecto del sender (canal de entrada) tiene prioridad sobre el del lead:
+  // si alguien escribe al número de APEX, respondemos con contexto APEX sin
+  // importar bajo qué proyecto está registrado el lead históricamente.
+  const contextProjectId = p.senderProjectId ?? leadActualizado?.project_id ?? null
+  if (!contextProjectId) {
+    console.error('[BG] Sin project_id en sender ni en lead — no se puede responder:', p.leadId)
     return
   }
-  const project = await cargarProyectoPorId(supabase, leadActualizado.project_id)
+  const project = await cargarProyectoPorId(supabase, contextProjectId)
   if (!project) {
-    console.error('[BG] No se encontró el proyecto del lead:', leadActualizado.project_id)
+    console.error('[BG] No se encontró el proyecto de contexto:', contextProjectId)
     return
+  }
+  if (p.senderProjectId && p.senderProjectId !== leadActualizado?.project_id) {
+    console.log(`[BG] Usando proyecto del sender (${project.slug}) en lugar del lead`)
   }
 
-  // Info del proyecto del lead (NO mezclar con otros productos) + demos solo si es APEX.
+  // Info del proyecto del canal de entrada (NO mezclar con otros productos) + demos solo si es APEX.
   const [{ data: projectInfo }, { data: demosActivos }] = await Promise.all([
     supabase
       .from('project_info')
@@ -1061,12 +1069,13 @@ async function procesarMensajeEntrante(p: ProcesarEntranteParams): Promise<void>
   // Lookup sender por instance_name
   const { data: senderData } = await supabase
     .from('senders')
-    .select('id, alias, phone_number, activo, instance_name')
+    .select('id, alias, phone_number, activo, instance_name, project_id')
     .eq('provider', 'evolution')
     .eq('instance_name', instanceName)
     .maybeSingle()
 
   const senderId = senderData?.id ?? null
+  const senderProjectId = senderData?.project_id ?? null
 
   // Buscar lead
   const telsMismaLinea = variantesTelefonoMismaLinea(telefono)
@@ -1088,18 +1097,21 @@ async function procesarMensajeEntrante(p: ProcesarEntranteParams): Promise<void>
   if (!lead) {
     const origenDetectado = pareceMensajeAutomaticoNegocio(mensaje) ? 'outbound' : 'inbound'
     const telefonoCanonica = normalizarTelefonoArg(telefono)
-    // Lead inbound de un teléfono desconocido: asumimos APEX como default
-    // (es el proyecto fundacional del programa; los leads explícitos llegan
-    // por /leads/nuevo con project_id ya seteado).
-    const apexProject = await cargarProyectoApexDefault(supabase)
-    if (!apexProject) {
-      console.error('[Evolution] No se pudo cargar el proyecto APEX por default — abortando insert de lead')
+    // Usar el proyecto configurado en el sender si existe; si no, APEX por default.
+    let projectForNewLead = senderProjectId
+      ? await cargarProyectoPorId(supabase, senderProjectId)
+      : null
+    if (!projectForNewLead) {
+      projectForNewLead = await cargarProyectoApexDefault(supabase)
+    }
+    if (!projectForNewLead) {
+      console.error('[Evolution] No se pudo cargar proyecto para el nuevo lead — abortando insert')
       return
     }
     const { data: nuevoLead } = await supabase
       .from('leads')
       .insert({
-        project_id: apexProject.id,
+        project_id: projectForNewLead.id,
         nombre: `Lead ${telefono.slice(-4)}`,
         rubro: 'Por definir',
         zona: 'Por definir',
@@ -1168,6 +1180,7 @@ async function procesarMensajeEntrante(p: ProcesarEntranteParams): Promise<void>
     leadOrigen: lead.origen ?? 'outbound',
     leadAgentActivo: !!lead.agente_activo,
     senderId,
+    senderProjectId,
     miMsgTimestamp,
   }
 
