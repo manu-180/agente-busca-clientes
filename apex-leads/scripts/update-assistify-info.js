@@ -18,112 +18,161 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 const PROJECT_ID = 'c2e63cda-ab8e-424e-9858-895f855609b7';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Plantilla del primer mensaje (enviado por el cron, interpola {{nombre}}, {{zona}})
-// ─────────────────────────────────────────────────────────────────────────────
+// ===========================================================================
+// Plantilla del primer mensaje
+// Enviada por el cron. Interpola {{nombre}}, {{zona}}, {{rubro}}.
+// Gancho: abre con el dolor concreto (bombardeo de WhatsApps), luego solución
+// + lista de espera automática (feature diferenciadora) + link + CTA suave.
+// ===========================================================================
 const PLANTILLA_PRIMER_MENSAJE = `Hola {{nombre}} de {{zona}}.
 
-Desarrollamos *Assistify*, una app completamente gratis para talleres como el tuyo. Sirve para que tus alumnos cancelen y recuperen clases solos, sin preguntarle a nadie. Cada movimiento te llega notificado por WhatsApp.
+¿Cuántos mensajes por semana recibís de alumnos que quieren cancelar, preguntar si hay lugar o recuperar una clase?
 
-Vos definís el plazo de anticipación para cancelar con crédito — por ejemplo, 24 horas. Si alguien cancela fuera de ese plazo, no gana el crédito para recuperar. También podés asignar o quitarle créditos a cualquier alumno manualmente, e inscribirlos o removerlos de las clases que armés.
+Desarrollamos *Assistify* gratis para que eso deje de pasar. El alumno cancela solo desde la app, recupera su crédito si lo hace a tiempo y se anota en otro horario disponible. Vos recibís cada movimiento por WhatsApp y no tenés que intervenir.
 
-Descargala acá: https://leads.theapexweb.com/d/assistify
+Si la clase está llena hay lista de espera automática: cuando alguien cancela, el siguiente de la lista entra solo y recibe aviso. Sin que vos hagas nada.
 
-¿Le das una vuelta?`;
+Descargála acá: https://leads.theapexweb.com/d/assistify
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Descripción del proyecto (aparece en la identidad del agente)
-// ─────────────────────────────────────────────────────────────────────────────
-const DESCRIPCION_PROYECTO = 'una app gratuita para talleres de danza, yoga, pilates y cualquier disciplina con clases fijas. Permite que los alumnos gestionen sus cancelaciones y recuperaciones solos, mientras el profesor mantiene control total y recibe notificaciones por WhatsApp.';
+¿Lo ves útil para tu taller?`;
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ===========================================================================
+// Descripcion del proyecto (identidad del agente en el system prompt)
+// ===========================================================================
+const DESCRIPCION_PROYECTO = 'una app gratuita para talleres de danza, yoga, pilates, ceramica y cualquier disciplina con clases fijas. Permite que los alumnos gestionen sus cancelaciones y recuperaciones solos, mientras el profesor mantiene control total y recibe notificaciones por WhatsApp.';
+
+// ===========================================================================
 // Knowledge base del agente (project_info)
-// ─────────────────────────────────────────────────────────────────────────────
+// El agente usa estos datos para responder sin inventar nada.
+// ===========================================================================
 const PROJECT_INFO = [
+  // Descripcion general
   {
     categoria: 'descripcion',
-    titulo: 'Qué es Assistify',
-    contenido: 'Assistify es una app completamente gratuita para talleres de danza, yoga, pilates, gimnasia y cualquier disciplina que maneje clases fijas con alumnos que pagan por el mes. Elimina la gestión manual de cancelaciones y la reubicación de alumnos: los propios alumnos se manejan solos, y el profesor queda libre de esa tarea.',
+    titulo: 'Que es Assistify',
+    contenido: 'Assistify es una app completamente gratuita para talleres y estudios: ceramica, yoga, danza, pilates, idiomas, fitness y cualquier disciplina con clases fijas. Disponible en Android, iOS, web y Windows. Elimina el caos de gestionar cancelaciones y recuperaciones por WhatsApp: los alumnos se manejan solos, y el profesor recibe todo notificado sin intervenir.',
     activo: true,
   },
   {
     categoria: 'precio',
     titulo: 'Costo de Assistify',
-    contenido: 'Assistify es completamente gratuita. No tiene costo de instalación, suscripción mensual ni límite de alumnos. El objetivo es ayudar a los talleres a funcionar mejor sin ninguna barrera económica.',
+    contenido: 'Assistify es completamente gratuita. No tiene costo de instalacion, suscripcion mensual ni limite de alumnos. No hay planes pagos activos. Todos los talleres usan la app sin ningun costo.',
+    activo: true,
+  },
+
+  // Funcionalidades core
+  {
+    categoria: 'funcionalidades',
+    titulo: 'Gestion de clases y horarios',
+    contenido: 'El profesor crea sus clases con nombre, dia, horario y capacidad maxima de alumnos. La app genera la grilla del mes automaticamente a partir de esos horarios. Cuando una clase se llena, el boton de inscripcion se deshabilita solo, sin que el profesor haga nada.',
     activo: true,
   },
   {
     categoria: 'funcionalidades',
-    titulo: 'Gestión de clases y horarios',
-    contenido: 'El profesor crea sus clases desde la app: define el nombre, el día, el horario y la cantidad máxima de alumnos que entran. Cuando una clase se llena, el botón de inscripción se deshabilita automáticamente para que ningún alumno pueda anotarse cuando ya no hay lugar.',
+    titulo: 'Sistema de creditos',
+    contenido: 'Cada alumno tiene creditos (en la app aparece como "clases disponibles"). Inscribirse a una clase consume 1 credito. Cancelar dentro del plazo de anticipacion devuelve 1 credito. El profesor puede dar o quitar creditos manualmente desde Gestion de usuarios.',
     activo: true,
   },
   {
     categoria: 'funcionalidades',
-    titulo: 'Sistema de créditos para cancelar y recuperar',
-    contenido: 'Los alumnos necesitan créditos para inscribirse en clases disponibles cuando quieren recuperar una ausencia. Cuando un alumno cancela dentro del plazo definido por el profesor, gana automáticamente un crédito. Con ese crédito puede inscribirse en cualquier clase futura que tenga lugar libre.',
+    titulo: 'Plazo de anticipacion para cancelar con credito',
+    contenido: 'El profesor configura cuantas horas de anticipacion necesita un alumno para cancelar y recuperar el credito (en Configuracion -> Cancelaciones). Si cancela dentro de ese plazo, no se devuelve el credito. El alumno ve claramente antes de confirmar si va a ganar el credito o no.',
     activo: true,
   },
   {
     categoria: 'funcionalidades',
-    titulo: 'Plazo de anticipación para cancelar con crédito',
-    contenido: 'El profesor define cuántas horas de anticipación necesita un alumno para cancelar y ganar el crédito. Por ejemplo, si el plazo es 24 horas y un alumno cancela el mismo día de la clase, no genera crédito y no puede recuperar esa clase. Si cancela con más anticipación, sí gana el crédito.',
+    titulo: 'Lista de espera automatica',
+    contenido: 'Cuando una clase esta llena, el alumno puede anotarse en lista de espera sin consumir credito. Si alguien cancela, el sistema promueve al primero de la lista que tenga credito disponible: le descuenta el credito, lo agrega a la clase y le manda un WhatsApp avisando que ya esta confirmado. El profesor no tiene que hacer nada.',
     activo: true,
   },
   {
     categoria: 'funcionalidades',
-    titulo: 'Notificaciones automáticas al profesor por WhatsApp',
-    contenido: 'Cada movimiento que ocurre en la app — cancelaciones, inscripciones, recuperaciones — le llega notificado automáticamente al profesor por WhatsApp. No necesita revisar la app ni preguntar nada: toda la actividad de sus alumnos le llega directo al celular.',
+    titulo: 'Notificaciones automaticas al profesor por WhatsApp',
+    contenido: 'Cada movimiento en la app le llega al profesor por WhatsApp: cuando un alumno se inscribe, cancela, o es promovido desde la lista de espera. No necesita abrir la app para saber que paso con sus clases.',
     activo: true,
   },
   {
     categoria: 'funcionalidades',
-    titulo: 'Control manual de créditos por el profesor',
-    contenido: 'El profesor tiene control total sobre los créditos: puede dar o quitar créditos a cualquier alumno de forma manual desde la app. Esto sirve para casos especiales, excepciones o ajustes puntuales que el sistema automático no cubre.',
+    titulo: 'Control manual del profesor sobre alumnos y creditos',
+    contenido: 'El profesor puede inscribir o remover a cualquier alumno de una clase, y dar o quitar creditos manualmente. Sirve para excepciones, alumnos que avisaron por otro canal, o ajustes puntuales.',
     activo: true,
   },
   {
     categoria: 'funcionalidades',
-    titulo: 'El profesor puede inscribir o remover alumnos de las clases',
-    contenido: 'Además de lo que hacen los alumnos por su cuenta, el profesor puede inscribir manualmente a cualquier alumno en una clase o removerlo cuando lo necesite. Tiene control total sobre la composición de cada clase.',
+    titulo: 'Grupo familiar (padre que paga por hijos)',
+    contenido: 'Un padre puede crear una cuenta y agregar familiares dependientes (hijos) desde Configuracion -> Familia. Cada hijo tiene su propio perfil e historial, pero los creditos se descuentan del saldo del padre. Si un hijo cancela a tiempo, el credito vuelve al padre.',
     activo: true,
   },
   {
     categoria: 'funcionalidades',
-    titulo: 'Auto-gestión del alumno',
-    contenido: 'Los alumnos pueden cancelar sus clases y recuperarlas en cualquier horario disponible sin necesidad de escribirle al profesor. Solo ven las clases con lugar disponible para inscribirse. El proceso es simple: cancelar → ganar crédito → inscribirse en una clase libre.',
+    titulo: 'Asistente de voz',
+    contenido: 'Los alumnos pueden usar un boton flotante para hablar con la app: "cancelame la clase del martes", "inscribime el jueves a las 18", "que clases tengo esta semana". La app interpreta el comando y ejecuta la accion.',
+    activo: true,
+  },
+
+  // Beneficios
+  {
+    categoria: 'beneficios',
+    titulo: 'Beneficio principal: cero interrupciones para el profesor',
+    contenido: 'El dolor real que resuelve Assistify es el bombardeo de WhatsApps: alumnos que cancelan por mensaje, preguntan si hay lugar, piden recuperar. Con Assistify todo eso desaparece: el alumno lo hace solo en la app y el profesor solo recibe el aviso.',
     activo: true,
   },
   {
     categoria: 'beneficios',
-    titulo: 'Beneficio principal: elimina el trabajo de reubicar alumnos',
-    contenido: 'Como los alumnos tienen sus clases pagas, siempre hay un flujo de cancelaciones y pedidos de recuperación. Antes el profesor tenía que gestionar eso manualmente. Con Assistify, los alumnos mismos se reasignan a clases con lugar disponible, y el profesor no tiene que intervenir.',
+    titulo: 'Lista de espera = cero cupos perdidos',
+    contenido: 'Antes, cuando alguien cancelaba, el cupo quedaba libre y nadie se enteraba a tiempo. Ahora el primero de la lista de espera entra automaticamente en segundos. El taller nunca pierde capacidad por falta de comunicacion.',
+    activo: true,
+  },
+
+  // Objeciones y casos borde
+  {
+    categoria: 'objeciones',
+    titulo: 'Cancelo a tiempo pero no ve el credito',
+    contenido: 'Si el alumno es parte de un grupo familiar, el credito aparece en la cuenta del padre/titular, no en la del hijo. Hay que revisar los creditos del titular del grupo.',
     activo: true,
   },
   {
     categoria: 'objeciones',
-    titulo: 'El alumno ya pagó y quiere recuperar la clase',
-    contenido: 'Exactamente para eso está Assistify. El alumno cancela su clase dentro del plazo, gana el crédito y puede inscribirse solo en cualquier clase que tenga lugar disponible, cuando quiera y sin molestar al profesor.',
+    titulo: 'Cancelo tarde y reclama el credito',
+    contenido: 'La politica la define el taller. Fuera del plazo de anticipacion no se devuelve el credito. Si el alumno quiere una excepcion, tiene que pedírsela al profesor directamente.',
     activo: true,
   },
   {
     categoria: 'objeciones',
-    titulo: 'Qué pasa cuando la clase está llena',
-    contenido: 'Cuando una clase alcanzó su capacidad máxima, el botón de inscripción se deshabilita automáticamente. El alumno ve que no hay lugar disponible y puede elegir otra clase con espacio libre. El profesor definió esa capacidad al crear la clase.',
+    titulo: 'Todas las clases estan llenas',
+    contenido: 'El alumno puede anotarse en lista de espera de cualquier clase. No consume credito hasta que sea promovido. No hay limite de personas en lista de espera.',
     activo: true,
   },
   {
     categoria: 'objeciones',
-    titulo: 'Cómo sabe el profesor lo que pasa si no está mirando la app',
-    contenido: 'No necesita estar pendiente de la app. Cada cancelación, inscripción o cambio genera una notificación automática que le llega por WhatsApp. Si un alumno cancela a las 8pm, el profesor lo sabe al instante en el celular.',
+    titulo: 'Esta en espera y nunca le llego el aviso de que entro',
+    contenido: 'Para ser promovido automaticamente desde la lista de espera, el alumno necesita tener al menos 1 credito disponible en el momento en que se libera el cupo. Si no tiene credito, el sistema pasa al siguiente de la lista.',
+    activo: true,
+  },
+  {
+    categoria: 'objeciones',
+    titulo: 'No puede inscribirse aunque tiene credito',
+    contenido: 'Las razones mas comunes son: la clase esta llena (puede anotarse en espera), la clase ya paso (la UI filtra las pasadas), es un feriado marcado por el taller, o es una cuenta de hijo con el saldo del padre en 0.',
+    activo: true,
+  },
+  {
+    categoria: 'objeciones',
+    titulo: 'Quiere recuperar una clase del mes pasado',
+    contenido: 'No es posible. Los meses cerrados estan archivados. Solo se puede inscribir en clases del mes activo.',
+    activo: true,
+  },
+  {
+    categoria: 'objeciones',
+    titulo: 'Como se une un alumno al taller',
+    contenido: 'El alumno descarga la app, en el onboarding ingresa el codigo de invitacion que le da el profesor (un codigo unico por taller), crea su cuenta y queda vinculado automaticamente. El profesor le carga los creditos iniciales desde Gestion de usuarios.',
     activo: true,
   },
 ];
 
 async function run() {
-  console.log('── Actualizando proyecto Assistify ──\n');
+  console.log('-- Actualizando proyecto Assistify --\n');
 
-  // 1. Actualizar plantilla y descripción del proyecto
+  // 1. Actualizar plantilla y descripcion del proyecto
   const { error: projErr } = await supabase
     .from('projects')
     .update({
@@ -136,7 +185,7 @@ async function run() {
     console.error('Error actualizando proyecto:', projErr);
     return;
   }
-  console.log('✓ plantilla_primer_mensaje y descripcion actualizadas en projects\n');
+  console.log('ok plantilla_primer_mensaje y descripcion actualizadas en projects\n');
 
   // 2. Borrar project_info existente (evitar duplicados)
   const { error: delErr } = await supabase
@@ -148,7 +197,7 @@ async function run() {
     console.error('Error borrando project_info existente:', delErr);
     return;
   }
-  console.log('✓ project_info anterior eliminada\n');
+  console.log('ok project_info anterior eliminada\n');
 
   // 3. Insertar nueva knowledge base
   for (const info of PROJECT_INFO) {
@@ -159,11 +208,11 @@ async function run() {
     if (error) {
       console.error('Error insertando:', info.titulo, error);
     } else {
-      console.log(`✓ ${info.titulo}`);
+      console.log(`ok ${info.titulo}`);
     }
   }
 
-  console.log('\n── Listo. ──');
+  console.log('\n-- Listo. --');
 }
 
 run();
