@@ -27,6 +27,8 @@ Desarrollamos *Assistify*, una app completamente gratis para talleres como el tu
 
 Vos definís el plazo de anticipación para cancelar con crédito — por ejemplo, 24 horas. Si alguien cancela fuera de ese plazo, no gana el crédito para recuperar. También podés asignar o quitarle créditos a cualquier alumno manualmente, e inscribirlos o removerlos de las clases que armés.
 
+Descargala acá: https://leads.theapexweb.com/d/assistify
+
 ¿Le das una vuelta?`;
 
 // ─────────────────────────────────────────────────────────────────────────────
