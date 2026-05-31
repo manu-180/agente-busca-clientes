@@ -484,33 +484,36 @@ function bloqueOverrideProyecto(project: ProjectRow): string {
   const nombre = project.nombre
   const desc = (project.descripcion ?? '').trim() || nombre
   return `<project_override priority="MAXIMA">
-Los ejemplos del prompt base que mencionan "boceto", "página web", "agencia web", "tienda online" o la URL "www.theapexweb.com" son específicos del producto APEX y NO aplican a este lead. El producto de este lead es ${nombre}, no APEX.
+Este lead es de ${nombre}, NO de APEX. Los ejemplos del prompt base que mencionan "boceto", "página web", "agencia web", "tienda online", "theapexweb.com" o "trabajos de APEX" son específicos del producto APEX y NO aplican.
 
 Para este lead:
 - NO ofrezcas "boceto en 24 horas".
-- NO menciones "página web", "tienda online" ni "rediseño" como propuesta (a menos que el cliente lo pida explícitamente y figure en <project_info>).
-- NO uses la URL theapexweb.com.
+- NO menciones "página web", "tienda online" ni "rediseño" como propuesta (a menos que el cliente lo pida y figure en <project_info>).
+- NUNCA uses la URL theapexweb.com ni menciones "trabajos de APEX" ni el portafolio de APEX.
 - NO uses la objeción "Ya tengo web" como si fuera relevante.
+- Cuando respondés a un mensaje automático de WhatsApp Business, la respuesta termina en 2 líneas: reconocés el mensaje y recordás que la propuesta quedó arriba. NO agregues links ni sugerencias de portafolio externo.
 - Usá la información del bloque <project_info> de abajo y la <plantilla_proyecto> para entender qué ofrecés.
 
 Producto del lead: ${nombre}. ${desc ? `Descripción: ${desc}.` : ''}
 </project_override>`
 }
 
-/** Reemplaza la primera oración del prompt base ("Sos Manuel, parte del equipo de APEX...") por la identidad del proyecto del lead. */
+/** Reemplaza la identidad y todas las referencias a APEX en el prompt base para proyectos no-APEX. */
 function reemplazarIdentidad(promptBase: string, project: ProjectRow): string {
-  const nuevaIdentidad =
-    `Sos Manuel, parte del equipo de ${project.nombre}.` +
-    (project.descripcion?.trim() ? ` ${project.descripcion.trim()}` : '') +
-    ` Llevás tres años trabajando con clientes y tu laburo en WhatsApp es atender consultas y cerrar oportunidades.`
-  // El prompt base arranca con esta cadena exacta (ver SYSTEM_PROMPT_BASE):
-  const original =
-    'Sos Manuel, parte del equipo de APEX, una agencia de desarrollo web y apps en Buenos Aires. Llevás tres años trabajando con clientes y tu laburo en WhatsApp es atender consultas y cerrar proyectos de páginas web, e-commerce y aplicaciones.'
   if (project.slug === 'apex') {
     // Mantener el texto original literal para no alterar el comportamiento maduro de APEX.
     return promptBase
   }
-  return promptBase.replace(original, nuevaIdentidad)
+  const nuevaIdentidad =
+    `Sos Manuel, parte del equipo de ${project.nombre}.` +
+    (project.descripcion?.trim() ? ` ${project.descripcion.trim()}` : '') +
+    ` Llevás tres años trabajando con clientes y tu laburo en WhatsApp es atender consultas y cerrar oportunidades.`
+  const original =
+    'Sos Manuel, parte del equipo de APEX, una agencia de desarrollo web y apps en Buenos Aires. Llevás tres años trabajando con clientes y tu laburo en WhatsApp es atender consultas y cerrar proyectos de páginas web, e-commerce y aplicaciones.'
+  const conIdentidad = promptBase.replace(original, nuevaIdentidad)
+  // Reemplazar TODAS las menciones restantes de "APEX" con el nombre del proyecto para que el
+  // modelo no caiga en comportamientos o URLs específicos de APEX (e.g. theapexweb.com).
+  return conIdentidad.replace(/\bAPEX\b/g, project.nombre)
 }
 
 /**
