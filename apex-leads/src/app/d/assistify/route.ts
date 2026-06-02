@@ -1,7 +1,7 @@
 /**
  * Smart redirect para descarga de Assistify.
  *
- * URL pública: https://leads.theapexweb.com/d/assistify
+ * URL pública: https://assistify.lat/download
  *
  * - Android  → Play Store
  * - iOS      → App Store

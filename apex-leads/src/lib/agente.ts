@@ -4,13 +4,17 @@ import { buildAgentPrompt, buildUserMessageWithLeadContext } from '@/lib/prompts
 import {
   clienteYaMandoAlgoNoAutomatico,
   pareceMensajeAutomaticoNegocio,
-  RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
   RESPUESTA_WRONG_TARGET,
   RESPUESTA_BUSINESS_CLOSED,
   RESPUESTA_FAMILY_RELAY,
   RESPUESTA_SUSPICION,
   RESPUESTA_GATEKEEPER,
 } from '@/lib/outbound-auto-reply'
+import {
+  respuestaTrasAutomatico,
+  mensajeCierreInteresado,
+  mensajeHandoffHumano,
+} from '@/lib/respuestas-canned'
 import { obtenerConfigConversacional } from '@/lib/conversation-config'
 import { decidirRespuestaConversacional } from '@/lib/response-decision'
 import { registrarEventoConversacional } from '@/lib/conversation-events'
@@ -23,7 +27,6 @@ import {
   sanitizarRespuestaModelo,
 } from '@/lib/response-guardrails'
 import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
-import { MENSAJE_COMPROMISO_BOCETO_24H } from '@/lib/mensaje-boceto-24h'
 import { detectarVertical, sanitizarProjectInfoPorVertical } from '@/lib/verticales'
 import { cargarProyectoPorId } from '@/lib/projects'
 
@@ -219,7 +222,7 @@ export async function generarRespuestaAgente({
     }
 
     if (decision.action === 'handoff_human') {
-      return { respuesta: MENSAJE_COMPROMISO_BOCETO_24H }
+      return { respuesta: mensajeHandoffHumano(project) }
     }
 
     if (decision.action === 'confirm_close') {
@@ -231,9 +234,7 @@ export async function generarRespuestaAgente({
           conversacion_cerrada_at: new Date().toISOString(),
         })
         .eq('id', lead.id)
-      return {
-        respuesta: 'Genial. Te escribe alguien del equipo a la brevedad para coordinar los detalles.',
-      }
+      return { respuesta: mensajeCierreInteresado(project) }
     }
 
     if (
@@ -251,7 +252,7 @@ export async function generarRespuestaAgente({
         confidence: decision.confidence,
         metadata: { source: 'agente.ts' },
       })
-      return { respuesta: RESPUESTA_OUTBOUND_TRAS_AUTOMATICO }
+      return { respuesta: respuestaTrasAutomatico(project) }
     }
 
     const contextoLead = {

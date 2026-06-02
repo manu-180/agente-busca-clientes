@@ -32,7 +32,7 @@ Desarrollamos *Assistify* gratis para que eso deje de pasar. El alumno cancela s
 
 Si la clase está llena hay lista de espera automática: cuando alguien cancela, el siguiente de la lista entra solo y recibe aviso. Sin que vos hagas nada.
 
-Descargála acá: https://leads.theapexweb.com/d/assistify
+Descargála acá: https://assistify.lat/download
 
 ¿Lo ves útil para tu taller?`;
 
@@ -130,7 +130,7 @@ const PROJECT_INFO = [
   {
     categoria: 'cierre',
     titulo: 'Que hacer cuando alguien quiere empezar o probar la app',
-    contenido: 'Cuando el taller dice "dale, lo pruebo", "como arranco", "me interesa", "la descargo" o similar, el siguiente paso concreto es: descargar Assistify desde https://leads.theapexweb.com/d/assistify, elegir "Crear taller" en el onboarding, configurar los horarios y la capacidad de cada clase, y compartir el codigo de invitacion con los alumnos. Es gratis, no hay proceso largo ni instalacion compleja. En minutos el taller ya esta operativo.',
+    contenido: 'Cuando el taller dice "dale, lo pruebo", "como arranco", "me interesa", "la descargo" o similar, el siguiente paso concreto es: descargar Assistify desde https://assistify.lat/download, elegir "Crear taller" en el onboarding, configurar los horarios y la capacidad de cada clase, y compartir el codigo de invitacion con los alumnos. Es gratis, no hay proceso largo ni instalacion compleja. En minutos el taller ya esta operativo.',
     activo: true,
   },
 
@@ -156,7 +156,7 @@ const PROJECT_INFO = [
   {
     categoria: 'objeciones',
     titulo: 'Quiero verla antes de instalarla o me mandas mas info',
-    contenido: 'La mejor forma de verla es descargandola directamente: https://leads.theapexweb.com/d/assistify. Es gratis y en el onboarding se ve todo claramente. No hay demo separada ni video de presentacion.',
+    contenido: 'La mejor forma de verla es descargandola directamente: https://assistify.lat/download. Es gratis y en el onboarding se ve todo claramente. No hay demo separada ni video de presentacion.',
     activo: true,
   },
   {

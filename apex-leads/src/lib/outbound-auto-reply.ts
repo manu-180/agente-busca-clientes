@@ -127,10 +127,18 @@ export function pareceMensajeAutomaticoNegocio(texto: string): boolean {
   return false
 }
 
-/** Respuesta fija post–menú automático de WA Business (no cuenta como “pitch” para el cap outbound). */
+/**
+ * Respuesta fija post–menú automático de WA Business (no cuenta como “pitch” para el
+ * cap outbound). Detecta TODAS las variantes por proyecto (APEX → theapexweb.com,
+ * Assistify/self-serve → link de descarga) vía el prefijo compartido. Si cambia el
+ * prefijo en `respuestas-canned.ts`/`RESPUESTA_OUTBOUND_TRAS_AUTOMATICO`, actualizá esto.
+ */
 export function esPlantillaRespuestaOutboundAuto(mensaje: string | null | undefined): boolean {
   if (!mensaje || typeof mensaje !== 'string') return false
-  return mensaje.includes('theapexweb.com') && mensaje.includes('Gracias por la info')
+  return (
+    mensaje.includes('Eso suele ser el mensaje automático del negocio') &&
+    mensaje.includes('la propuesta ya quedó arriba')
+  )
 }
 
 export const RESPUESTA_OUTBOUND_TRAS_AUTOMATICO = `Gracias por la info. Eso suele ser el mensaje automático del negocio: *la propuesta ya quedó arriba* en nuestro primer mensaje.

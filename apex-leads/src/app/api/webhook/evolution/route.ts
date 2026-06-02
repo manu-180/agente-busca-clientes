@@ -12,7 +12,6 @@ import {
   RESPUESTA_BUSINESS_CLOSED,
   RESPUESTA_FAMILY_RELAY,
   RESPUESTA_GATEKEEPER,
-  RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
   RESPUESTA_SUSPICION,
   RESPUESTA_WRONG_TARGET,
 } from '@/lib/outbound-auto-reply'
@@ -40,7 +39,11 @@ import { markConnected, markDisconnected } from '@/lib/sender-pool'
 import { fetchPhoneNumber } from '@/lib/evolution-instance'
 import { normalizarTelefonoArg, soloDigitos, variantesTelefonoMismaLinea } from '@/lib/phone'
 import { debePersistirBocetoAceptado } from '@/lib/boceto-aceptacion'
-import { MENSAJE_COMPROMISO_BOCETO_24H } from '@/lib/mensaje-boceto-24h'
+import {
+  respuestaTrasAutomatico,
+  mensajeCierreInteresado,
+  mensajeHandoffHumano,
+} from '@/lib/respuestas-canned'
 import { estaEnVentanaPrimerContacto, getHoraArgentina } from '@/lib/first-contact-window'
 
 // maxDuration = 30s → da margen para el background tras devolver 200
@@ -410,6 +413,23 @@ async function procesarConLock(
 
   const filasHistorial = historialRows ?? []
 
+  // Proyecto de contexto, resuelto UNA sola vez (el sender pisa al lead, igual que en
+  // el full_reply). TODAS las respuestas — canned y del LLM — deben salir con el
+  // producto correcto: nunca textos de APEX (boceto, theapexweb.com, "coordina un
+  // humano") en un lead de un producto self-serve como Assistify.
+  let contextProjectId = p.senderProjectId ?? null
+  if (!contextProjectId) {
+    const { data: leadProj } = await supabase
+      .from('leads')
+      .select('project_id')
+      .eq('id', p.leadId)
+      .maybeSingle()
+    contextProjectId = leadProj?.project_id ?? null
+  }
+  const project = contextProjectId
+    ? await cargarProyectoPorId(supabase, contextProjectId)
+    : null
+
   // ── Blindaje: conversación bot-a-bot ──
   if (detectarConversacionBot(filasHistorial)) {
     const nCliente = filasHistorial.filter(h => h.rol === 'cliente').length
@@ -478,7 +498,7 @@ async function procesarConLock(
         supabase,
         p.telefono,
         p.leadId,
-        RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
+        respuestaTrasAutomatico(project),
         p.instanceName,
         p.senderId
       )
@@ -571,7 +591,7 @@ async function procesarConLock(
         supabase,
         p.telefono,
         p.leadId,
-        RESPUESTA_OUTBOUND_TRAS_AUTOMATICO,
+        respuestaTrasAutomatico(project),
         p.instanceName,
         p.senderId
       )
@@ -598,18 +618,23 @@ async function procesarConLock(
 
   if (decision.action === 'handoff_human') {
     const ahora = new Date().toISOString()
+    const esApexProject = !project || project.slug === 'apex'
     await enviarEvolutionYGuardar(
       supabase,
       p.telefono,
       p.leadId,
-      MENSAJE_COMPROMISO_BOCETO_24H,
+      mensajeHandoffHumano(project),
       p.instanceName,
       p.senderId
     )
-    await supabase
-      .from('leads')
-      .update({ boceto_prometido_24h: true, boceto_prometido_24h_at: ahora })
-      .eq('id', p.leadId)
+    // El compromiso de "boceto en 24h" es propio de APEX (agencia). En productos
+    // self-serve no existe boceto, así que no marcamos esa promesa.
+    if (esApexProject) {
+      await supabase
+        .from('leads')
+        .update({ boceto_prometido_24h: true, boceto_prometido_24h_at: ahora })
+        .eq('id', p.leadId)
+    }
     await registrarEventoConversacional({
       leadId: p.leadId,
       telefono: p.telefono,
@@ -617,7 +642,7 @@ async function procesarConLock(
       decisionAction: 'handoff_human',
       decisionReason: decision.reason,
       confidence: decision.confidence,
-      metadata: { source: 'evolution_webhook_bg', boceto_24h: true },
+      metadata: { source: 'evolution_webhook_bg', boceto_24h: esApexProject },
     })
     return
   }
@@ -648,9 +673,12 @@ async function procesarConLock(
   }
 
   if (decision.action === 'confirm_close') {
-    const closeMsg = 'Genial. Te escribe alguien del equipo a la brevedad para coordinar los detalles.'
+    const closeMsg = mensajeCierreInteresado(project)
     const ultAgent = [...filasHistorial].reverse().find(h => h.rol === 'agente')?.mensaje
-    const marcarBoceto = debePersistirBocetoAceptado(decision.eventName, ultAgent)
+    // "boceto aceptado" solo aplica a APEX (agencia). En self-serve no hay boceto.
+    const marcarBoceto =
+      (!project || project.slug === 'apex') &&
+      debePersistirBocetoAceptado(decision.eventName, ultAgent)
     const ahora = new Date().toISOString()
     await enviarEvolutionYGuardar(supabase, p.telefono, p.leadId, closeMsg, p.instanceName, p.senderId)
     await supabase
@@ -675,17 +703,10 @@ async function procesarConLock(
     .eq('id', p.leadId)
     .single()
 
-  // El proyecto del sender (canal de entrada) tiene prioridad sobre el del lead:
-  // si alguien escribe al número de APEX, respondemos con contexto APEX sin
-  // importar bajo qué proyecto está registrado el lead históricamente.
-  const contextProjectId = p.senderProjectId ?? leadActualizado?.project_id ?? null
-  if (!contextProjectId) {
-    console.error('[BG] Sin project_id en sender ni en lead — no se puede responder:', p.leadId)
-    return
-  }
-  const project = await cargarProyectoPorId(supabase, contextProjectId)
+  // El proyecto de contexto ya se resolvió al inicio (el sender pisa al lead).
+  // Para el full_reply es obligatorio: sin proyecto no podemos responder.
   if (!project) {
-    console.error('[BG] No se encontró el proyecto de contexto:', contextProjectId)
+    console.error('[BG] Sin proyecto de contexto — no se puede responder:', p.leadId)
     return
   }
   if (p.senderProjectId && p.senderProjectId !== leadActualizado?.project_id) {

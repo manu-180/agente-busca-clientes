@@ -71,3 +71,21 @@ export async function listarProyectosActivos(
   }
   return (data ?? []) as ProjectRow[]
 }
+
+/**
+ * True si el proyecto es de uso gratuito (se deduce de su `descripcion`).
+ * Misma heurística que usa el system prompt para activar la regla "es gratis".
+ */
+export function esProyectoGratis(project: ProjectRow): boolean {
+  return /gratuit|gratis/i.test((project.descripcion ?? '').trim())
+}
+
+/**
+ * Primer link http(s) que aparece en la plantilla del primer mensaje del proyecto.
+ * En productos self-serve (Assistify, etc.) ese link es el de descarga/acceso, y es
+ * el "próximo paso" al que todas las respuestas deben empujar. Devuelve null si no hay.
+ */
+export function linkDescargaProyecto(project: ProjectRow): string | null {
+  const m = (project.plantilla_primer_mensaje ?? '').match(/https?:\/\/[^\s)]+/i)
+  return m ? m[0].replace(/[.,;]+$/, '') : null
+}
