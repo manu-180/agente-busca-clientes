@@ -33,6 +33,32 @@ const RE_RESPONDEREMOS_BREVEDAD =
   /\b(te\s+)?responderemos\s+(a\s+la\s+)?brevedad\b|\ba\s+la\s+brevedad\s+te\s+responderemos\b/i
 const RE_HORARIO_ATENCION_LITERAL = /\b(nuestro\s+)?horario\s+de\s+atenci[oó]n\b/i
 
+// ── Patrones de bots de menú numerado (Typebot, ManyChat, Botmaker, etc.) ──
+// "escribe SOLO EL NÚMERO de la opción" — firma inequívoca de bot de flujo interactivo
+const RE_SOLO_NUMERO_OPCION =
+  /\b(escrib[ií]\s+(solo\s+)?el\s+n[uú]mero|solo\s+el\s+n[uú]mero\s+de\s+la\s+opci[oó]n)\b/i
+// "Aún estoy aprendiendo" — auto-disclosure de bot de WA Business API
+const RE_AUN_APRENDIENDO = /a[uú]n\s+estoy\s+aprendiendo/i
+
+function contarLineasNumeradasMenu(texto: string): number {
+  // Líneas que comienzan con "1.", "2.", etc. — menú de opciones típico de bot de flujo
+  return (texto.match(/^\s*[1-9]\s*[.)]/gm) ?? []).length
+}
+
+/**
+ * Detecta bots de menú numerado / flujo interactivo (Typebot, ManyChat, Botmaker).
+ * Estos bots NO son capturados por `pareceMensajeAutomaticoNegocio` ni por
+ * `pareceMensajeBotConversacional` porque no tienen precios, horarios, ni persona.
+ */
+export function pareceMensajeMenuNumerado(texto: string): boolean {
+  if (!texto || texto.length < 20) return false
+  if (RE_SOLO_NUMERO_OPCION.test(texto)) return true
+  if (RE_AUN_APRENDIENDO.test(texto)) return true
+  // 3+ líneas "N. texto" consecutivas = menú de opciones
+  if (contarLineasNumeradasMenu(texto) >= 3) return true
+  return false
+}
+
 // ── Patrones de chatbots conversacionales (no detectados por las reglas de negocio) ──
 // Bot persona: "Soy [Nombre]" seguido de contexto profesional + años de experiencia
 const RE_BOT_PERSONA_INTRO =
@@ -85,6 +111,7 @@ export function esAutoReplyCortoNegocio(texto: string): boolean {
 export function pareceMensajeAutomaticoNegocio(texto: string): boolean {
   if (!texto) return false
   if (esAutoReplyCortoNegocio(texto)) return true
+  if (pareceMensajeMenuNumerado(texto)) return true
   if (texto.length < 40) return false
   const t = texto.toLowerCase()
   const dolares = (texto.match(/\$/g) || []).length
@@ -180,8 +207,8 @@ export function pareceMensajeBotConversacional(texto: string): boolean {
 /**
  * Analiza el historial completo y devuelve `true` si la conversación es
  * bot-a-bot. Criterios:
- * - 4+ mensajes del cliente que parecen automáticos/bot
- * - o bien, 10+ mensajes del cliente y >= 50% son automáticos
+ * - 2+ mensajes del cliente que parecen automáticos/bot
+ * - o bien, 6+ mensajes del cliente y >= 50% son automáticos
  *
  * Cuando esto ocurre, el agente debe desactivarse para ese lead sin responder.
  */
@@ -199,11 +226,11 @@ export function detectarConversacionBot(
 
   const botCount = mensajesCliente.filter(esBot).length
 
-  // 4+ mensajes bot detectados → ban inmediato
-  if (botCount >= 4) return true
+  // 2+ mensajes bot detectados → ban inmediato (antes: 4 — se bajó por el caso menú numerado)
+  if (botCount >= 2) return true
 
-  // Con >= 10 mensajes del cliente y mayoría automáticos → es un loop
-  if (mensajesCliente.length >= 10 && botCount / mensajesCliente.length >= 0.5) return true
+  // Con >= 6 mensajes del cliente y mayoría automáticos → es un loop
+  if (mensajesCliente.length >= 6 && botCount / mensajesCliente.length >= 0.5) return true
 
   return false
 }

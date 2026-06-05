@@ -9,6 +9,8 @@ import {
   esAutoReplyCortoNegocio,
   esPlantillaRespuestaOutboundAuto,
   pareceMensajeAutomaticoNegocio,
+  pareceMensajeBotConversacional,
+  pareceMensajeMenuNumerado,
   RESPUESTA_BUSINESS_CLOSED,
   RESPUESTA_FAMILY_RELAY,
   RESPUESTA_GATEKEEPER,
@@ -482,7 +484,9 @@ async function procesarConLock(
     }
 
     const esAutoCliente =
-      pareceMensajeAutomaticoNegocio(mensajeCombinado) || esAutoReplyCortoNegocio(mensajeCombinado)
+      pareceMensajeAutomaticoNegocio(mensajeCombinado) ||
+      pareceMensajeBotConversacional(mensajeCombinado) ||
+      pareceMensajeMenuNumerado(mensajeCombinado)
 
     console.log(`[BG] esAutoCliente=${esAutoCliente} mensaje="${mensajeCombinado.slice(0, 80)}"`)
 
