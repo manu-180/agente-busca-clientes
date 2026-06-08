@@ -10,6 +10,13 @@ export interface ContextoPrimerMensaje {
   zona?: string | null
   descripcion?: string | null
   instagram?: string | null
+  /**
+   * URL de la página personalizada del negocio (proyecto Carta — `public.leads.pagina_url`).
+   * Si está presente, se prefiere por sobre cualquier demo genérica por rubro: es la propia
+   * web del lead. Cuando viene seteada, se saltea por completo la búsqueda de demos (ahorra
+   * una lectura a la DB). Si está vacía/ausente, se cae al match de demo por rubro (sin cambios).
+   */
+  paginaUrl?: string | null
 }
 
 // Prompt para APEX (legacy, hardcoded): el flujo original de la agencia web.
@@ -71,9 +78,16 @@ export async function generarPrimerMensaje(
     project.slug === 'apex' ? SYSTEM_PROMPT_APEX : buildSystemPromptDesdeProyecto(project)
 
   try {
+    // Página personalizada del negocio (proyecto Carta). Si el lead ya tiene su propia
+    // web generada, la preferimos por sobre cualquier demo genérica por rubro y salteamos
+    // listDemos()/matchDemoFromTexts() (ahorra una lectura a la DB y es su propia página).
+    const paginaUrl = (ctx.paginaUrl ?? '').trim()
+
     // Las demos solo se buscan para APEX (es el flujo que las usa).
     let demoDisponible = ''
-    if (project.slug === 'apex') {
+    if (paginaUrl) {
+      demoDisponible = `Página personalizada del negocio (preferí ESTA sobre cualquier demo, es su propia web): ${paginaUrl}`
+    } else if (project.slug === 'apex') {
       const demos = await listDemos()
       const match = matchDemoFromTexts(demos, {
         rubroGuardado: ctx.rubro,

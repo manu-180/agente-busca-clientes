@@ -87,8 +87,25 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
     })
   }
 
+  // Proyección explícita (no select('*')) para reducir egress: solo las columnas
+  // que se leen de cada lead aguas abajo en este loop.
+  //   id                   -> count/historial/insert/return en todo el loop
+  //   telefono             -> dedup (claveUnicaPaisLinea) + isTelefonoHardBlocked + insert/envío
+  //   nombre/rubro/zona    -> generarMensajeFollowupClaude userContent (lib/generar-followup)
+  //   origen               -> dedup sort + userContent
+  //   estado               -> ESTADOS_EXCLUIDOS.has(l.estado)
+  //   mensaje_enviado      -> dedup sort (preferencia)
+  //   mensaje_inicial      -> stage.mensajeInicialApex (coherencia de oferta)
+  //   created_at           -> dedup sort (desempate por antigüedad)
+  //   project_id           -> cargarProyectoPorId
+  //   conversacion_cerrada -> filtro + evaluarFollowup
+  // agente_activo se filtra server-side (.eq) y no se lee de la fila.
+  const COLS_LEAD_FOLLOWUP =
+    'id, telefono, nombre, rubro, zona, estado, origen, mensaje_enviado, mensaje_inicial, created_at, project_id, conversacion_cerrada'
   const { data: leadsRaw, error: errLeads } = await ejecutarConTablaLeads<Lead[]>((tabla) =>
-    supabase.from(tabla).select('*').eq('agente_activo', true).eq('mensaje_enviado', true).neq('estado', 'pendiente').limit(15)
+    // .returns<Lead[]>(): la proyección angosta no infiere `Lead[]`; el loop solo
+    // lee columnas presentes en COLS_LEAD_FOLLOWUP, así que afirmamos el tipo.
+    supabase.from(tabla).select(COLS_LEAD_FOLLOWUP).eq('agente_activo', true).eq('mensaje_enviado', true).neq('estado', 'pendiente').limit(15).returns<Lead[]>()
   )
 
   if (errLeads || !leadsRaw) {
@@ -122,19 +139,32 @@ async function runFollowup(supabase: ReturnType<typeof createSupabaseServer>) {
 
     const followupsEnviados = nFollowups ?? 0
 
-    const { data: mensajes, error: errMsg } = await supabase
+    // Egress: antes esto traía TODO el historial (incl. texto completo de cada
+    // `mensaje`) sin límite, por lead, por tick. Solo se necesitan los últimos 8
+    // mensajes (historialBreve = slice(-8)); evaluarFollowup inspecciona la cola
+    // de la conversación (último msg, último cliente, último followup), todos
+    // dentro de esa ventana. Traemos descendente con limit(8) y revertimos a
+    // ascendente en JS para preservar el orden que esperan los consumidores.
+    const { data: mensajesDesc, error: errMsg } = await supabase
       .from('conversaciones')
       .select('timestamp, rol, es_followup, mensaje')
       .eq('lead_id', lead.id)
-      .order('timestamp', { ascending: true })
+      .order('timestamp', { ascending: false })
+      .limit(8)
 
-    if (errMsg || !mensajes) {
+    if (errMsg || !mensajesDesc) {
       resultados.push({ lead_id: lead.id, ok: false, detalle: errMsg?.message })
       continue
     }
 
-    const followupsEnHistorial = mensajes.filter(m => m.es_followup === true).length
-    const followupsEfectivos = Math.max(followupsEnviados, followupsEnHistorial)
+    // Orden ascendente (más viejo → más nuevo), igual que el select original.
+    const mensajes = [...mensajesDesc].reverse()
+
+    // El conteo autoritativo de followups ya viene del query count:'exact' de
+    // arriba (cuenta TODOS los followups del lead en DB, no la ventana). Antes
+    // se recontaba sobre el historial completo y se hacía Math.max — ahora ese
+    // recuento es redundante (y un full-scan); usamos el count directamente.
+    const followupsEfectivos = followupsEnviados
 
     const evaluacion = evaluarFollowup({
       mensajes: mensajes.map(m => ({

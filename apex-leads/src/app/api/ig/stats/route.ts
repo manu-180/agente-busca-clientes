@@ -4,6 +4,26 @@ import { igConfig } from '@/lib/ig/config'
 
 export const dynamic = 'force-dynamic'
 
+// Universo completo del enum `lead_status` (ver src/types/supabase.ts).
+// Lo usamos para contar por estado vía head-count en vez de traer todas las
+// filas de instagram_leads. Es exhaustivo: cualquier status posible está acá.
+const LEAD_STATUSES = [
+  'discovered',
+  'qualified',
+  'queued',
+  'contacted',
+  'follow_up_sent',
+  'replied',
+  'interested',
+  'meeting_booked',
+  'closed_positive',
+  'closed_negative',
+  'closed_ghosted',
+  'owner_takeover',
+  'blacklisted',
+  'error',
+] as const
+
 export async function GET() {
   const supabase = createSupabaseServer()
   const IG_SENDER = igConfig.IG_SENDER_USERNAME
@@ -20,16 +40,25 @@ export async function GET() {
     replyRate7d,
     queuePending,
   ] = await Promise.all([
-    supabase
-      .from('instagram_leads')
-      .select('status')
-      .then(({ data }) => {
-        const counts: Record<string, number> = {}
-        for (const row of data ?? []) {
-          counts[row.status] = (counts[row.status] ?? 0) + 1
-        }
-        return counts
-      }),
+    // EGRESS: antes traía TODA la tabla (.select('status')) para tallar en JS.
+    // Ahora un head-count por estado del enum: transfiere 0 filas. El objeto
+    // resultante es idéntico — solo incluimos estados con count > 0, igual que
+    // el tally anterior omitía los ausentes.
+    Promise.all(
+      LEAD_STATUSES.map((status) =>
+        supabase
+          .from('instagram_leads')
+          .select('*', { count: 'exact', head: true })
+          .eq('status', status)
+          .then(({ count }) => [status, count ?? 0] as const),
+      ),
+    ).then((pairs) => {
+      const counts: Record<string, number> = {}
+      for (const [status, count] of pairs) {
+        if (count > 0) counts[status] = count
+      }
+      return counts
+    }),
 
     supabase
       .from('dm_daily_quota')
@@ -56,16 +85,24 @@ export async function GET() {
       .limit(10)
       .then(({ data }) => data ?? []),
 
-    supabase
-      .from('instagram_leads')
-      .select('reply_count, contacted_at')
-      .gte('contacted_at', ago7d)
-      .then(({ data }) => {
-        const rows = data ?? []
-        const total = rows.length
-        const replied = rows.filter((r) => (r.reply_count ?? 0) > 0).length
-        return total > 0 ? { total, replied, rate: (replied / total) * 100 } : { total: 0, replied: 0, rate: 0 }
-      }),
+    // EGRESS: antes traía todas las filas (reply_count, contacted_at) de los
+    // últimos 7d para contar en JS. Solo se usan los totales (total/replied/rate),
+    // así que dos head-counts equivalentes que transfieren 0 filas.
+    Promise.all([
+      supabase
+        .from('instagram_leads')
+        .select('*', { count: 'exact', head: true })
+        .gte('contacted_at', ago7d)
+        .then(({ count }) => count ?? 0),
+      supabase
+        .from('instagram_leads')
+        .select('*', { count: 'exact', head: true })
+        .gte('contacted_at', ago7d)
+        .gt('reply_count', 0)
+        .then(({ count }) => count ?? 0),
+    ]).then(([total, replied]) =>
+      total > 0 ? { total, replied, rate: (replied / total) * 100 } : { total: 0, replied: 0, rate: 0 },
+    ),
 
     supabase
       .from('dm_queue')

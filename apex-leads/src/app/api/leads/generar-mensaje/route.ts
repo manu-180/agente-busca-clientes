@@ -7,6 +7,10 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const { nombre, rubro, zona, descripcion, instagram, project_id } = body
+    // URL de la página personalizada del negocio (Carta — `public.leads.pagina_url`).
+    // Si el caller la manda, la preferimos sobre la demo genérica por rubro.
+    // Toleramos ambas formas: `paginaUrl` (camelCase) y `pagina_url` (columna cruda).
+    const paginaUrl: string | null = body.paginaUrl ?? body.pagina_url ?? null
 
     const supabase = createSupabaseServer()
     const project = project_id
@@ -18,7 +22,7 @@ export async function POST(req: NextRequest) {
     }
 
     const mensaje = await generarPrimerMensaje(
-      { nombre, rubro, zona, descripcion, instagram },
+      { nombre, rubro, zona, descripcion, instagram, paginaUrl },
       project,
     )
 

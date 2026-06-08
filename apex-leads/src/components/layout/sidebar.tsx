@@ -59,7 +59,9 @@ export function Sidebar() {
 
   const fetchSimStatus = useCallback(async () => {
     try {
-      const res = await fetch('/api/senders')
+      // EGRESS: ?slim=1 devuelve solo id/alias/activo/project_id y omite el
+      // join conversaciones(count). Acá solo leemos alias + activo.
+      const res = await fetch('/api/senders?slim=1')
       const data = await res.json()
       if (!Array.isArray(data)) return
       const simSenders = data.filter((s: { alias: string }) =>

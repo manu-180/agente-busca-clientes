@@ -227,42 +227,20 @@ export default function ConversacionesPage() {
       const list: ConversacionGrupo[] = data.grupos ?? []
       const sel = seleccionadoRef.current
       if (id !== cargaInboxIdRef.current) return
-      if (sel) {
-        const t = Date.now()
-        const r2 = await fetch(
-          `/api/conversaciones/messages?lead_id=${encodeURIComponent(sel)}&_=${t}`,
-          { cache: 'no-store' }
+      // El poll del listado YA NO re-descarga el hilo completo del chat abierto.
+      // Antes hacía un segundo fetch a /messages (hasta 300/5000 filas) en CADA
+      // tick → enorme egress redundante. El hilo abierto se mantiene fresco vía
+      // Supabase Realtime (INSERT) + la carga on-select. Acá sólo preservamos
+      // los mensajes ya cargados y forzamos no_leidos=0 en el chat visible.
+      setGrupos(prev => {
+        if (!sel) return list
+        const prevSel = prev.find(g => g.lead.id === sel)
+        return list.map(g =>
+          g.lead.id === sel
+            ? { ...g, no_leidos: 0, mensajes: prevSel?.mensajes ?? g.mensajes }
+            : g
         )
-        if (id !== cargaInboxIdRef.current) return
-        if (r2.ok) {
-          const d2 = await r2.json()
-          if (id !== cargaInboxIdRef.current) return
-          const mensajes = (d2.mensajes ?? []) as MensajeConSender[]
-          setGrupos(prev => {
-            const prevSel = prev.find(g => g.lead.id === sel)
-            return list.map(g => {
-              if (g.lead.id !== sel) return g
-              return {
-                ...g,
-                no_leidos: 0, // el usuario lo está viendo → siempre 0
-                mensajes: elegirMensajesMasRecientes(prevSel?.mensajes ?? [], mensajes),
-              }
-            })
-          })
-        } else {
-          // Si falla el fetch del hilo, no perder el estado del chat visible.
-          setGrupos(prev => {
-            const prevSel = prev.find(g => g.lead.id === sel)
-            return list.map(g =>
-              g.lead.id === sel && prevSel
-                ? { ...g, no_leidos: 0, mensajes: prevSel.mensajes }
-                : g
-            )
-          })
-        }
-      } else {
-        setGrupos(list)
-      }
+      })
     } catch (err) {
       console.error(err)
     } finally {
@@ -272,9 +250,10 @@ export default function ConversacionesPage() {
     }
   }, [])
 
-  // Polling cada 30s (antes 10s). El listado de hilos también se actualiza
-  // por Supabase Realtime cuando llega un mensaje al hilo abierto.
-  usePolling(cargarConversaciones, 30_000)
+  // Polling del listado cada 60s. El hilo abierto se actualiza al instante por
+  // Supabase Realtime (no depende de este intervalo), así que subirlo de 30s a
+  // 60s recorta a la mitad el egress del listado sin afectar la UX del chat.
+  usePolling(cargarConversaciones, 60_000)
 
   useEffect(() => {
     if (!seleccionado) return

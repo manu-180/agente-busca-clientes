@@ -29,7 +29,7 @@ import {
   sanitizarRespuestaModelo,
 } from '@/lib/response-guardrails'
 import { detectarVertical, sanitizarProjectInfoPorVertical } from '@/lib/verticales'
-import { cargarProyectoApexDefault, cargarProyectoPorId } from '@/lib/projects'
+import { cargarProyectoApexDefault, cargarProyectoPorId, cargarProjectInfoActivo } from '@/lib/projects'
 import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 import { extraerContenidoNuevo } from '@/lib/echo-detection'
 import {
@@ -701,9 +701,11 @@ async function procesarConLock(
   const anthropicKey = process.env.ANTHROPIC_API_KEY
   if (!anthropicKey) throw new Error('ANTHROPIC_API_KEY no configurada')
 
+  // Proyección: sólo las columnas que el branch full_reply consume (716, 732-737).
+  // Antes `*` re-traía las ~30 columnas del lead en cada respuesta del agente.
   const { data: leadActualizado } = await supabase
     .from('leads')
-    .select('*')
+    .select('project_id, rubro, descripcion, nombre, zona, mensaje_inicial, conversacion_cerrada')
     .eq('id', p.leadId)
     .single()
 
@@ -718,12 +720,8 @@ async function procesarConLock(
   }
 
   // Info del proyecto del canal de entrada (NO mezclar con otros productos) + demos solo si es APEX.
-  const [{ data: projectInfo }, { data: demosActivos }] = await Promise.all([
-    supabase
-      .from('project_info')
-      .select('categoria, titulo, contenido')
-      .eq('project_id', project.id)
-      .eq('activo', true),
+  const [projectInfo, { data: demosActivos }] = await Promise.all([
+    cargarProjectInfoActivo(supabase, project.id),
     project.slug === 'apex'
       ? supabase.from('demos_rubro').select('url, strong_keywords').eq('active', true)
       : Promise.resolve({ data: [] as { url: string; strong_keywords: string[] }[] }),
@@ -1104,9 +1102,12 @@ async function procesarMensajeEntrante(p: ProcesarEntranteParams): Promise<void>
 
   // Buscar lead
   const telsMismaLinea = variantesTelefonoMismaLinea(telefono)
+  // Proyección: sólo lo que se usa para elegir/rutear el lead (sort + campos
+  // leídos en 1164-1206). Las columnas anchas (descripcion, mensaje_inicial,
+  // notas) NO se necesitan acá — el branch full_reply las re-lee por id.
   const { data: candsMismaLinea } = await supabase
     .from('leads')
-    .select('*')
+    .select('id, telefono, sender_id, estado, origen, agente_activo, mensaje_enviado, created_at')
     .in('telefono', telsMismaLinea)
 
   let lead = candsMismaLinea?.length
@@ -1150,7 +1151,7 @@ async function procesarMensajeEntrante(p: ProcesarEntranteParams): Promise<void>
         origen: origenDetectado,
         agente_activo: true,
       })
-      .select()
+      .select('id, telefono, sender_id, estado, origen, agente_activo, mensaje_enviado, created_at')
       .single()
     lead = nuevoLead
   }

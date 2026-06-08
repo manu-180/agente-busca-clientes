@@ -33,7 +33,12 @@ export async function GET() {
         .eq('estado', 'interesado'),
       supabase.from('leads').select('id', { count: 'exact', head: true })
         .eq('estado', 'cerrado').gte('updated_at', firstOfMonth.toISOString()),
-      supabase.from('leads').select('*').order('created_at', { ascending: false }).limit(10),
+      // EGRESS: el dashboard solo renderiza estas columnas de leads_recientes
+      // (nombre, rubro, zona, estado, origen, created_at + id como key).
+      // Proyectamos en vez de select('*') para no traer columnas que no se usan.
+      supabase.from('leads')
+        .select('id, nombre, rubro, zona, estado, origen, created_at')
+        .order('created_at', { ascending: false }).limit(10),
       supabase.from('conversational_events').select('id', { count: 'exact', head: true })
         .eq('event_name', 'no_reply_emoji').gte('created_at', last7d.toISOString()),
       supabase.from('conversational_events').select('id', { count: 'exact', head: true })

@@ -10,7 +10,11 @@ const SELECT_CONV = `
   sender:sender_id (id, alias, color, provider, phone_number)
 ` as const
 
-const MAX_MENSAJES_POR_HILO = 5000
+// Ventana de historial por hilo. Antes 5000: re-transmitía hasta 5000 filas
+// (con el texto completo de `mensaje`) en cada carga. El chat sólo necesita el
+// contexto reciente; 300 cubre cualquier hilo real y recorta egress ~16x en el
+// peor caso. Realtime + el merge-por-id en el cliente conservan lo ya cargado.
+const MAX_MENSAJES_POR_HILO = 300
 
 /**
  * Historial de un lead (un solo hilo). El listado del inbox no carga esto

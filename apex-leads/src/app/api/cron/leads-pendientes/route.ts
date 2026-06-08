@@ -173,7 +173,18 @@ async function claimYEnviarLead(
 ): Promise<Record<string, unknown>> {
   let candidatosQuery = sup
     .from(LEADS_TABLE)
-    .select('*')
+    // Proyección explícita (no select('*')) para reducir egress: solo las columnas
+    // que se leen de cada fila aguas abajo en este archivo.
+    //   id                    -> updates/inserts/locks/returns (ej. lines 204,222,250,262,279,298,354,402)
+    //   telefono              -> verificarNumeroWhatsApp + variantes (lines 197,208,219)
+    //   nombre                -> construirMensajePrimerContacto + return (lines 160,163,287)
+    //   rubro                 -> plantilla + resolveWhatsAppDemoHost (lines 144,151,163)
+    //   zona                  -> plantilla / mensaje default (lines 143,163)
+    //   descripcion           -> extraerRatingParaPlantilla + resolveWhatsAppDemoHost (lines 150,151)
+    //   project_id            -> projectsMap.get(lead.project_id) (line 250)
+    //   primer_envio_intentos -> cálculo de reintentos (lines 354,402)
+    // origen/mensaje_enviado/estado se filtran server-side (.eq) y no se leen de la fila.
+    .select('id, telefono, nombre, rubro, zona, descripcion, project_id, primer_envio_intentos')
     .eq('origen', 'outbound')
     .eq('mensaje_enviado', false)
     .eq('estado', 'pendiente')

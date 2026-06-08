@@ -10,8 +10,18 @@ export const dynamic = 'force-dynamic'
 // GET - listar leads
 export async function GET() {
   const supabase = createSupabaseServer()
+  // EGRESS: antes traía toda la tabla con select('*'). La página /leads filtra
+  // y busca en memoria (sin paginación), así que proyectamos solo las columnas
+  // que renderiza/filtra (nombre, rubro, zona → búsqueda; telefono, estado,
+  // origen → tabla/acciones) y capamos a 1000 filas. Cap generoso: cubre el
+  // volumen actual sin truncar el uso normal; si en el futuro se acerca al tope,
+  // conviene paginar en lugar de subirlo.
   const { data, error } = await ejecutarConTablaLeads((tabla) =>
-    supabase.from(tabla).select('*').order('created_at', { ascending: false })
+    supabase
+      .from(tabla)
+      .select('id, nombre, rubro, zona, telefono, estado, origen')
+      .order('created_at', { ascending: false })
+      .limit(1000)
   )
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

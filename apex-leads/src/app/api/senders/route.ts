@@ -10,8 +10,24 @@ import {
 
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const supabase = createSupabaseServer()
+  const slim = new URL(req.url).searchParams.get('slim') === '1'
+
+  // EGRESS: el sidebar (fetchSimStatus, polea cada 120s en TODA página) solo
+  // usa alias + activo. En modo slim devolvemos esas columnas y EVITAMOS el
+  // join conversaciones(count), que fuerza un COUNT sobre toda la tabla
+  // conversaciones por cada sender. La página /senders (admin) sigue pidiendo
+  // /api/senders sin ?slim y conserva la respuesta completa con el count.
+  if (slim) {
+    const { data, error } = await supabase
+      .from('senders')
+      .select('id, alias, activo, project_id')
+      .order('created_at', { ascending: true })
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json(data)
+  }
+
   const { data, error } = await supabase
     .from('senders')
     .select('*, conversaciones(count)')
