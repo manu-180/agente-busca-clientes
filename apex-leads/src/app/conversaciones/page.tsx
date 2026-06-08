@@ -30,13 +30,6 @@ interface ConversacionGrupo {
   inicio_rol?: string | null
 }
 
-/** Cola "Enviar bocetos": el webhook marcó `boceto_prometido_24h` al enviar el mensaje de compromiso 24h. */
-function enColaBocetos(g: ConversacionGrupo): boolean {
-  if (g.lead.boceto_prometido_24h !== true) return false
-  if (g.lead.conversacion_cerrada === true) return false
-  return true
-}
-
 function ts(msj: MensajeConSender | undefined): number {
   if (!msj?.timestamp) return 0
   const n = new Date(msj.timestamp).getTime()
@@ -163,10 +156,7 @@ export default function ConversacionesPage() {
   const [soloWeb, setSoloWeb] = useState(false)
   /** Leads cuyo estado ya indica respuesta del cliente. */
   const [soloRespond, setSoloRespond] = useState(false)
-  /** Cola operativa: compromiso de boceto 24h (flag en DB) */
-  const [soloBocetos, setSoloBocetos] = useState(false)
   const [soloFavoritos, setSoloFavoritos] = useState(false)
-  const [marcandoBocetoEnviado, setMarcandoBocetoEnviado] = useState(false)
   const [favoritoIds, setFavoritoIds] = useState<Set<string>>(readFavoritoIdsFromStorage)
   const [menuCtx, setMenuCtx] = useState<{ leadId: string; x: number; y: number } | null>(null)
   const menuCtxRef = useRef<HTMLDivElement | null>(null)
@@ -518,28 +508,6 @@ export default function ConversacionesPage() {
     await cargarConversaciones()
   }
 
-  const marcarBocetoEnviado = async (leadId: string) => {
-    setMarcandoBocetoEnviado(true)
-    try {
-      const res = await fetch('/api/leads', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: leadId, boceto_prometido_24h: false }),
-      })
-      if (!res.ok) console.error('[Inbox] PATCH boceto enviado', res.status)
-      await cargarConversaciones()
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setMarcandoBocetoEnviado(false)
-    }
-  }
-
-  const countBocetoPendientes = useMemo(
-    () => grupos.filter(enColaBocetos).length,
-    [grupos]
-  )
-
   const gruposFiltrados = useMemo(() => {
     const primerMensaje = (g: ConversacionGrupo) => {
       if (!g.mensajes?.length) return null
@@ -553,7 +521,6 @@ export default function ConversacionesPage() {
     }
 
     let list = grupos
-    if (soloBocetos) list = list.filter(enColaBocetos)
     if (soloWeb) list = list.filter(inicioDesdeCliente)
     if (soloRespond) list = list.filter(g => g.lead.estado === 'respondio')
     if (soloFavoritos) list = list.filter(g => favoritoIds.has(g.lead.id))
@@ -562,7 +529,7 @@ export default function ConversacionesPage() {
       list = list.filter(g => (g.lead.nombre || '').toLowerCase().includes(q))
     }
     return list
-  }, [grupos, soloBocetos, soloWeb, soloRespond, soloFavoritos, favoritoIds, busquedaNombre])
+  }, [grupos, soloWeb, soloRespond, soloFavoritos, favoritoIds, busquedaNombre])
 
   const gruposOrdenados = useMemo(() => {
     return [...gruposFiltrados].sort((a, b) => {
@@ -605,24 +572,6 @@ export default function ConversacionesPage() {
                 </p>
               </div>
               <div className="flex items-center gap-1.5 flex-shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setSoloBocetos(v => !v)}
-                  className={`text-xs font-semibold px-2.5 py-1.5 rounded-lg border transition-all ${
-                    soloBocetos
-                      ? 'bg-apex-lime text-apex-black border-apex-lime'
-                      : 'bg-apex-black/60 text-apex-lime border-apex-lime/45 hover:border-apex-lime'
-                  }`}
-                >
-                  Enviar bocetos
-                  {countBocetoPendientes > 0 && (
-                    <span
-                      className={`ml-1 tabular-nums ${soloBocetos ? 'text-apex-black/75' : 'text-apex-lime'}`}
-                    >
-                      ({countBocetoPendientes})
-                    </span>
-                  )}
-                </button>
                 {totalNoLeidos > 0 && (
                   <button
                     type="button"
@@ -642,14 +591,13 @@ export default function ConversacionesPage() {
             <button
               type="button"
               onClick={() => {
-                setSoloBocetos(false)
                 setSoloWeb(false)
                 setSoloRespond(false)
                 setSoloFavoritos(false)
                 setBusquedaNombre('')
               }}
               className={`text-[10px] font-medium px-2.5 py-1 rounded-full transition-all ${
-                !soloBocetos && !soloWeb && !soloRespond && !soloFavoritos
+                !soloWeb && !soloRespond && !soloFavoritos
                   ? 'bg-apex-lime text-apex-black'
                   : 'bg-apex-card border border-apex-border text-apex-muted hover:bg-apex-border'
               }`}
@@ -761,9 +709,7 @@ export default function ConversacionesPage() {
                 <p className="text-sm text-apex-muted text-center px-2">
                   {busquedaNombre.trim()
                     ? 'Ninguna conversación coincide con tu búsqueda'
-                    : soloBocetos
-                      ? 'Nadie con boceto prometido (~24h) pendiente de enviar'
-                      : soloWeb
+                    : soloWeb
                         ? 'No hay chats que empiecen con un mensaje del cliente'
                         : soloRespond
                           ? 'No hay chats de leads que hayan respondido'
@@ -925,17 +871,6 @@ export default function ConversacionesPage() {
                 </div>
 
                 <div className="flex items-center gap-2 flex-wrap justify-end">
-                  {grupoActivo.lead.boceto_prometido_24h === true && (
-                    <button
-                      type="button"
-                      onClick={() => void marcarBocetoEnviado(grupoActivo.lead.id)}
-                      disabled={marcandoBocetoEnviado}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-apex-lime/20 text-apex-lime border border-apex-lime/50 hover:bg-apex-lime/30 transition-colors disabled:opacity-50"
-                    >
-                      {marcandoBocetoEnviado ? <Loader2 size={13} className="animate-spin" /> : <CheckCheck size={13} />}
-                      Boceto enviado
-                    </button>
-                  )}
                   <button
                     onClick={() => toggleAgente(grupoActivo.lead.id, !grupoActivo.lead.agente_activo)}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border ${

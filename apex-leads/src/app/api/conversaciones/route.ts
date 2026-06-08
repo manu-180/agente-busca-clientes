@@ -88,7 +88,7 @@ async function fetchLeadsByIds(supabase: Sb, leadIds: string[]) {
   // el mayor consumidor de egress del proyecto. El hilo completo se pide aparte
   // en /api/conversaciones/messages.
   const SELECT_LEAD =
-    'id, nombre, telefono, rubro, estado, agente_activo, boceto_prometido_24h, conversacion_cerrada, project_id, sender:sender_id (id, alias, color, provider, phone_number)' as const
+    'id, nombre, telefono, rubro, estado, agente_activo, conversacion_cerrada, project_id, sender:sender_id (id, alias, color, provider, phone_number)' as const
   const resultados = await Promise.all(
     chunkArray(unique, CHUNK_IDS).map((chunk) =>
       supabase.from('leads').select(SELECT_LEAD).in('id', chunk)
