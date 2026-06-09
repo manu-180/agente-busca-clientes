@@ -6,11 +6,9 @@ import { buildAgentPrompt, buildUserMessageWithLeadContext } from '@/lib/prompts
 import {
   clienteYaMandoAlgoNoAutomatico,
   detectarConversacionBot,
-  esAutoReplyCortoNegocio,
   esPlantillaRespuestaOutboundAuto,
+  pareceMensajeAutomaticoCliente,
   pareceMensajeAutomaticoNegocio,
-  pareceMensajeBotConversacional,
-  pareceMensajeMenuNumerado,
   RESPUESTA_BUSINESS_CLOSED,
   RESPUESTA_FAMILY_RELAY,
   RESPUESTA_GATEKEEPER,
@@ -483,10 +481,7 @@ async function procesarConLock(
       return
     }
 
-    const esAutoCliente =
-      pareceMensajeAutomaticoNegocio(mensajeCombinado) ||
-      pareceMensajeBotConversacional(mensajeCombinado) ||
-      pareceMensajeMenuNumerado(mensajeCombinado)
+    const esAutoCliente = pareceMensajeAutomaticoCliente(mensajeCombinado)
 
     console.log(`[BG] esAutoCliente=${esAutoCliente} mensaje="${mensajeCombinado.slice(0, 80)}"`)
 
@@ -576,8 +571,7 @@ async function procesarConLock(
   }
 
   // Override: auto-reply de negocio outbound que llegó después de la decisión
-  const comboAutoCliente =
-    pareceMensajeAutomaticoNegocio(mensajeCombinado) || esAutoReplyCortoNegocio(mensajeCombinado)
+  const comboAutoCliente = pareceMensajeAutomaticoCliente(mensajeCombinado)
   if (
     p.leadOrigen === 'outbound' &&
     !clienteYaMandoAlgoNoAutomatico(filasHistorial) &&

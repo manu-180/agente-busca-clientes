@@ -103,6 +103,26 @@ describe('buildAgentPrompt — proyecto no-APEX sin precio gratis', () => {
   })
 })
 
+describe('buildAgentPrompt — manejo de mensajes automáticos/predefinidos del contacto', () => {
+  const assistify = fakeProject({ slug: 'assistify', nombre: 'Assistify', descripcion: DESC_ASSISTIFY })
+  const apex = fakeProject({ slug: 'apex', nombre: 'APEX', descripcion: 'Agencia web.' })
+
+  it('el prompt genérico trae la regla y el ítem del checklist', () => {
+    const prompt = buildAgentPrompt('outbound', assistify, '[INFO] x', '', lead)
+    expect(prompt).toContain('MENSAJE AUTOMÁTICO / PREDEFINIDO DEL CONTACTO')
+    // El caso real (iglesia) aparece como mal ejemplo a NO imitar.
+    expect(prompt).toContain('te equivoqué de contacto')
+    expect(prompt).toContain('Modo de contratación')
+  })
+
+  it('el prompt de APEX también trae la regla y los casos reales', () => {
+    const prompt = buildAgentPrompt('outbound', apex, '[INFO] x', '', lead)
+    expect(prompt).toContain('MENSAJE AUTOMÁTICO / PREDEFINIDO DEL CONTACTO')
+    expect(prompt).toContain('te equivoqué de contacto')
+    expect(prompt).toContain('Modo de contratación')
+  })
+})
+
 describe('buildAgentPrompt — APEX queda intacto', () => {
   const project = fakeProject({ slug: 'apex', nombre: 'APEX', descripcion: 'Agencia web.' })
   const prompt = buildAgentPrompt('outbound', project, '[INFO] x', '', lead)

@@ -3,7 +3,7 @@ import { createSupabaseServer } from '@/lib/supabase-server'
 import { buildAgentPrompt, buildUserMessageWithLeadContext } from '@/lib/prompts'
 import {
   clienteYaMandoAlgoNoAutomatico,
-  pareceMensajeAutomaticoNegocio,
+  pareceMensajeAutomaticoCliente,
   RESPUESTA_WRONG_TARGET,
   RESPUESTA_BUSINESS_CLOSED,
   RESPUESTA_FAMILY_RELAY,
@@ -240,7 +240,7 @@ export async function generarRespuestaAgente({
     if (
       lead.origen === 'outbound' &&
       !clienteYaMandoAlgoNoAutomatico(filasHistorial) &&
-      pareceMensajeAutomaticoNegocio(mensaje_nuevo)
+      pareceMensajeAutomaticoCliente(mensaje_nuevo)
     ) {
       console.log('[AGENTE] Outbound: mensaje del cliente parece respuesta automática del negocio')
       await registrarEventoConversacional({

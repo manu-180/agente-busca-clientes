@@ -33,6 +33,26 @@ const RE_RESPONDEREMOS_BREVEDAD =
   /\b(te\s+)?responderemos\s+(a\s+la\s+)?brevedad\b|\ba\s+la\s+brevedad\s+te\s+responderemos\b/i
 const RE_HORARIO_ATENCION_LITERAL = /\b(nuestro\s+)?horario\s+de\s+atenci[oó]n\b/i
 
+// ── Plantillas de bienvenida institucionales (iglesias, ONGs, consultorios,
+// estudios) que NO traen precios ni horarios comerciales pero son claramente
+// automáticas: agradecen el contacto, piden tus datos y describen la institución.
+// "gracias por tu mensaje / tu consulta / tu contacto"
+const RE_GRACIAS_MENSAJE =
+  /gracias\s+por\s+(tu|su)\s+(mensaje|consulta|contacto|comunicaci[oó]n|inter[eé]s|preferencia)/i
+// "te pedimos que nos digas tu nombre", "dejanos tu nombre y consulta"
+const RE_PEDIR_DATOS_CONTACTO =
+  /\b(d[eé]janos|dejanos|d[eé]jame|dejame|indicanos|indícanos|decinos|decínos)\b[\s\S]{0,30}\b(nombre|apellido|datos|consulta)\b|te\s+pedimos\s+que\s+nos\s+(digas|indiques|dej[eé]s|cuentes|brindes)/i
+// "todos los viernes a las 19:30", "todos los domingos" — agenda recurrente de culto/clase
+const RE_DIAS_RECURRENTES =
+  /\btodos\s+los\s+(lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bados?|domingos?)\b/i
+// Marcadores institucionales (iglesia / comunidad / centro)
+const RE_INSTITUCIONAL =
+  /\b(entrada\s+(es\s+)?(libre|gratuita)|pedido\s+de\s+oraci[oó]n|bendiciones|culto|misa|congregaci[oó]n|feligreses|actividades\s+especiales)\b/i
+// Auto-disclosure: el propio mensaje declara que es automático / fuera de horario.
+// Firmas casi imposibles en un comprador real → señal fuerte individual.
+const RE_AUTO_DISCLOSURE =
+  /\b(este\s+es\s+un\s+)?mensaje\s+autom[aá]tico\b|\brespuesta\s+autom[aá]tica\b|\btu\s+mensaje\s+es\s+(muy\s+)?importante\b|fuera\s+de(l)?\s+horario\s+de\s+atenci[oó]n/i
+
 // ── Patrones de bots de menú numerado (Typebot, ManyChat, Botmaker, etc.) ──
 // "escribe SOLO EL NÚMERO de la opción" — firma inequívoca de bot de flujo interactivo
 const RE_SOLO_NUMERO_OPCION =
@@ -72,6 +92,34 @@ const RE_PARA_DARTE_INFO = /para\s+darte\s+(la\s+)?info\b/i
 const RE_QUE_BUENO_INTERES = /qu[eé]\s+bueno\s+que\s+(te\s+)?hayas?\s+/i
 // "Llevo X años entrenando/trabajando/atendiendo" — experiencia en intro de bot persona
 const RE_LLEVO_ANOS = /\bllevo\s+\d{1,2}\s+años?\s+(entrenando|trabajando|atendiendo|ayudando)\b/i
+// ── Presentación / bio institucional: "Mi nombre es X", CV de persona o negocio ──
+// Apertura típica de presentación (admite asterisco/comilla de WhatsApp antes del nombre).
+// El keyword puede arrancar en mayúscula (inicio de oración: "Mi nombre es") o minúscula,
+// pero el NOMBRE exige inicial mayúscula (propio) para no matchear "soy bueno"/"soy de acá".
+const RE_PRESENTACION_INTRO =
+  /\b([Mm]i\s+nombre\s+es|[Mm]e\s+presento|[Mm]e\s+llamo|[Ss]oy)\s+[*"“]?[A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}/
+// "Modo de contratación:" — firma inequívoca de tarjeta de presentación / catálogo de servicios
+const RE_MODO_CONTRATACION = /\bmodo\s+de\s+contrataci[oó]n\b/i
+// Señal de comprador real: si el mensaje pide algo concreto o muestra interés,
+// NO es una presentación automática aunque incluya datos personales.
+const RE_INTERES_COMPRADOR =
+  /\b(me\s+interesa|quiero|cu[aá]nto\s+(sale|cuesta|vale)|es\s+gratis|c[oó]mo\s+(funciona|lo\s+descargo|la\s+descargo|me\s+sumo|me\s+anoto)|sirve\s+para|me\s+sumo|lo\s+pruebo|la\s+pruebo|m[aá]s\s+info|informaci[oó]n|precio|presupuesto)\b/i
+// Marcadores de bio/CV (tercera persona, trayectoria, servicios profesionales)
+function contarBioMarkers(texto: string): number {
+  const checks = [
+    /\btrayectoria\b/i,
+    /\bespecializad[oa]\b/i,
+    /\bmi\s+labor\b/i,
+    /\bme\s+dedico\b/i,
+    /\bamplia\s+experiencia\b/i,
+    /\bcuento\s+con\b/i,
+    /\bbrindo\b/i,
+    /\bofrezco\b/i,
+    /\ba[nñ]os\s+de\s+experiencia\b/i,
+    /\bacompa[nñ]amiento\b/i,
+  ]
+  return checks.filter(re => re.test(texto)).length
+}
 
 function tieneBloquesEmojisDecorativos(texto: string): boolean {
   // 3+ emojis consecutivos (pares sustitutos) — decoración típica de auto-replies de negocios
@@ -89,7 +137,7 @@ export function clienteYaMandoAlgoNoAutomatico(
 ): boolean {
   return historial
     .filter(h => h.rol === 'cliente' && h.mensaje)
-    .some(h => !pareceMensajeAutomaticoNegocio(String(h.mensaje)))
+    .some(h => !pareceMensajeAutomaticoCliente(String(h.mensaje)))
 }
 
 /**
@@ -112,6 +160,9 @@ export function pareceMensajeAutomaticoNegocio(texto: string): boolean {
   if (!texto) return false
   if (esAutoReplyCortoNegocio(texto)) return true
   if (pareceMensajeMenuNumerado(texto)) return true
+  // Auto-disclosure ("mensaje automático", "fuera del horario de atención") es señal
+  // fuerte por sí sola, sin importar la longitud.
+  if (RE_AUTO_DISCLOSURE.test(texto)) return true
   if (texto.length < 40) return false
   const t = texto.toLowerCase()
   const dolares = (texto.match(/\$/g) || []).length
@@ -134,6 +185,10 @@ export function pareceMensajeAutomaticoNegocio(texto: string): boolean {
     RE_RESPONDEREMOS_BREVEDAD.test(texto),
     RE_HORARIO_ATENCION_LITERAL.test(texto),
     tieneBloquesEmojisDecorativos(texto),
+    RE_GRACIAS_MENSAJE.test(t),
+    RE_PEDIR_DATOS_CONTACTO.test(texto),
+    RE_DIAS_RECURRENTES.test(texto),
+    RE_INSTITUCIONAL.test(t),
   ]
   const n = señales.filter(Boolean).length
   if (n >= 2) return true
@@ -201,7 +256,32 @@ export function pareceMensajeBotConversacional(texto: string): boolean {
   if (RE_LLEVO_ANOS.test(texto) && RE_PARA_DARTE_INFO.test(texto)) return true
   if (RE_LLEVO_ANOS.test(texto) && RE_TRIPLE_PREGUNTA.test(texto)) return true
   if (RE_PARA_DARTE_INFO.test(texto) && RE_TRIPLE_PREGUNTA.test(texto)) return true
+  // Presentación / bio institucional (CV de persona o negocio). Se descarta si el
+  // mensaje muestra interés concreto del comprador (no queremos tratar a un lead
+  // real que se presenta y pregunta como si fuera un auto-reply).
+  if (!RE_INTERES_COMPRADOR.test(texto)) {
+    if (RE_MODO_CONTRATACION.test(texto)) return true
+    const bioHits = contarBioMarkers(texto)
+    if (RE_PRESENTACION_INTRO.test(texto) && texto.length > 120 && bioHits >= 1) return true
+    if (bioHits >= 2 && texto.length > 160) return true
+  }
   return false
+}
+
+/**
+ * Predicado unificado: ¿el mensaje del cliente parece automático / predefinido?
+ * Cubre los tres tipos: auto-reply de WhatsApp Business (precios/horarios/bienvenida
+ * institucional), bots de menú numerado, y presentaciones/bios. Es la ÚNICA fuente
+ * de verdad para decidir si en outbound respondemos con la plantilla project-aware
+ * ("la propuesta quedó arriba") en lugar de abrir el LLM con un pitch.
+ */
+export function pareceMensajeAutomaticoCliente(texto: string | null | undefined): boolean {
+  if (!texto || typeof texto !== 'string') return false
+  return (
+    pareceMensajeAutomaticoNegocio(texto) ||
+    pareceMensajeBotConversacional(texto) ||
+    pareceMensajeMenuNumerado(texto)
+  )
 }
 
 /**
