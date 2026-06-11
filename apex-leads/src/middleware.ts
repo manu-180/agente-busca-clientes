@@ -129,6 +129,8 @@ export function middleware(request: NextRequest) {
   // 1. Always allow excluded routes (webhooks, cron, ig callback, auth login)
   if (pathname.startsWith('/api/webhook')) return NextResponse.next()
   if (pathname.startsWith('/api/cron/'))   return NextResponse.next()
+  // Bridge de reservas desde theapexweb.com — self-auth con Bearer CRON_SECRET.
+  if (pathname.startsWith('/api/booking/')) return NextResponse.next()
   if (pathname.startsWith('/api/ig/'))     return NextResponse.next()
   if (pathname === '/api/auth')            return NextResponse.next()
 
