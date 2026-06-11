@@ -152,7 +152,9 @@ export async function POST(req: NextRequest) {
     }
 
     try {
-      const adminPhone = normalizarTelefonoArg(sender.phone_number || APEX_MAIN_PHONE)
+      // phone_number puede ser '_pending_' u otro placeholder → fallback al número principal.
+      const senderDigits = normalizarTelefonoArg(sender.phone_number ?? '')
+      const adminPhone = senderDigits.length >= 10 ? senderDigits : normalizarTelefonoArg(APEX_MAIN_PHONE)
       await enviarMensajeEvolution(adminPhone, textAdmin, sender.instance_name, {
         skipBlockCheck: true,
       })
