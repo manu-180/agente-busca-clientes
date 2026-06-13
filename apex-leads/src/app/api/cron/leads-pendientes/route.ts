@@ -116,6 +116,7 @@ interface LeadColaRow {
   primer_envio_error: string | null
   primer_envio_completado_at: string | null
   project_id: string | null
+  pagina_url: string | null
 }
 
 interface ProjectRow {
@@ -148,7 +149,7 @@ function interpolarPlantilla(
 
 function construirMensajePrimerContacto(lead: LeadColaRow, plantilla?: string | null): string {
   const rating = extraerRatingParaPlantilla(lead.descripcion)
-  const demoHost = resolveWhatsAppDemoHost(lead.rubro, lead.descripcion)
+  const demoHost = lead.pagina_url?.trim() || resolveWhatsAppDemoHost(lead.rubro, lead.descripcion)
 
   // Plantilla personalizada del proyecto (con variables {{nombre}}, {{rating}}, etc.)
   if (plantilla?.trim()) {
@@ -184,7 +185,7 @@ async function claimYEnviarLead(
     //   project_id            -> projectsMap.get(lead.project_id) (line 250)
     //   primer_envio_intentos -> cálculo de reintentos (lines 354,402)
     // origen/mensaje_enviado/estado se filtran server-side (.eq) y no se leen de la fila.
-    .select('id, telefono, nombre, rubro, zona, descripcion, project_id, primer_envio_intentos')
+    .select('id, telefono, nombre, rubro, zona, descripcion, project_id, primer_envio_intentos, pagina_url')
     .eq('origen', 'outbound')
     .eq('mensaje_enviado', false)
     .eq('estado', 'pendiente')
