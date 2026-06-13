@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 import { listDemos } from '@/lib/demos-repo'
 import { matchDemoFromTexts } from '@/lib/demo-match'
+import { normalizarPaginaUrlCarta } from '@/lib/carta-url'
 import type { ProjectRow } from '@/lib/projects'
 
 export interface ContextoPrimerMensaje {
@@ -81,7 +82,7 @@ export async function generarPrimerMensaje(
     // Página personalizada del negocio (proyecto Carta). Si el lead ya tiene su propia
     // web generada, la preferimos por sobre cualquier demo genérica por rubro y salteamos
     // listDemos()/matchDemoFromTexts() (ahorra una lectura a la DB y es su propia página).
-    const paginaUrl = (ctx.paginaUrl ?? '').trim()
+    const paginaUrl = normalizarPaginaUrlCarta(ctx.paginaUrl) ?? ''
 
     // Las demos solo se buscan para APEX (es el flujo que las usa).
     let demoDisponible = ''

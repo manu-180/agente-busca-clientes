@@ -14,6 +14,7 @@ import {
   resolveWhatsAppDemoHost,
   SITIO_PRINCIPAL_APEX,
 } from '@/lib/whatsapp-template-demos'
+import { normalizarPaginaUrlCarta } from '@/lib/carta-url'
 import { enviarMensajeEvolution, EVO_ERR, isEvolutionError } from '@/lib/evolution'
 import { fetchAllInstances, restartInstance } from '@/lib/evolution-instance'
 import {
@@ -149,7 +150,12 @@ function interpolarPlantilla(
 
 function construirMensajePrimerContacto(lead: LeadColaRow, plantilla?: string | null): string {
   const rating = extraerRatingParaPlantilla(lead.descripcion)
-  const demoHost = lead.pagina_url?.trim() || resolveWhatsAppDemoHost(lead.rubro, lead.descripcion)
+  // `pagina_url` es la página de Carta del lead. La normalizamos para que el
+  // dominio gratuito de Vercel de las filas viejas (`*.vercel.app`) nunca llegue
+  // al mensaje: siempre sale `https://www.carta.it.com/r/<slug>`. Si está vacía,
+  // caemos a la demo genérica por rubro como siempre.
+  const demoHost =
+    normalizarPaginaUrlCarta(lead.pagina_url) || resolveWhatsAppDemoHost(lead.rubro, lead.descripcion)
 
   // Plantilla personalizada del proyecto (con variables {{nombre}}, {{rating}}, etc.)
   if (plantilla?.trim()) {
