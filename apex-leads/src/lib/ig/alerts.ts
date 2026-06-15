@@ -86,7 +86,7 @@ async function sendEmail(payload: AlertPayload): Promise<void> {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: 'APEX Alerts <alerts@apex-leads.com>',
+      from: 'APEX Alerts <alerts@botlode.com>',
       to: [toEmail],
       subject: `${emoji} [APEX IG] ${payload.title}`,
       html: `<p>${payload.message}</p>${metaHtml}`,

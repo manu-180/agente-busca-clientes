@@ -24,7 +24,7 @@ export interface SenderBanAlertInput {
 }
 
 const RESEND_ENDPOINT = 'https://api.resend.com/emails'
-const RESEND_FROM = 'APEX Alerts <alerts@apex-leads.com>'
+const RESEND_FROM = 'APEX Alerts <alerts@botlode.com>'
 
 function construirMensaje(input: SenderBanAlertInput): string {
   const nombre = input.alias ?? input.instanceName
