@@ -247,6 +247,7 @@ async function claimYEnviarLead(
       await sup.from(LEADS_TABLE).update({
         mensaje_enviado: true,
         estado: 'contactado',
+        agente_activo: true,
         mensaje_inicial: mensajeTexto,
         primer_envio_completado_at: new Date().toISOString(),
         primer_envio_error: null,
