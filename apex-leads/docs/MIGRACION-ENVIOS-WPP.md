@@ -199,3 +199,21 @@ Sesión corta para cerrar pendientes que requerían acción de Manuel (tokens / 
 - **DECISIÓN (sesión 3) — principio global:** *ningún proyecto manda link en el primer mensaje* (Manuel: "ese fue un error"). APEX y Carta ya cumplen. **Assistify: PENDIENTE de implementar en sesión nueva** — sacar `assistify.lat/download` del `plantilla_primer_mensaje` y asegurar que el link de descarga se mande **al responder** (vía `project_info`, porque es link estático self-serve, no un boceto per-lead → el `[BOCETO]` no le sirve). ⚠️ Cambio **ACOPLADO**: sacar el link sin cablear el reply-side deja a los leads de Assistify SIN link (funnel roto) — mismo riesgo que se evitó en Carta. Requiere código + tests + deploy + verificación e2e.
 - **Reinicio de Claude Code: PENDIENTE** (conecta el MCP `supabase-apex` con el PAT nuevo ya escrito en `~/.claude.json`). Cierre natural de la sesión.
 - **Fases futuras (2🟡/🟢, 3, 0):** sin tocar, cuando Manuel quiera.
+
+## Estado de implementación (sesión 4 — 2026-06-15) — Assistify anti-ban ✅ CERRADO
+
+**Principio implementado:** ningún proyecto manda link en el primer mensaje (Assistify era el único pendiente).
+
+**Código (commit `fab0721`, deployado READY en `leads.theapexweb.com`):**
+
+- `src/lib/projects.ts` — nueva fn `linkDescargaDeProjectInfo(info: ProjectInfoRow[]): string | null`: extrae el primer link http(s) de las filas activas de `project_info`. Úsala en el reply-side para proyectos self-serve donde el link vive en `project_info`, no en la plantilla.
+- `src/lib/respuestas-canned.ts` — parámetro opcional `downloadLink?: string | null` en `respuestaTrasAutomatico`, `mensajeCierreInteresado`, `mensajeHandoffHumano`. Fallback interno a `linkDescargaProyecto` (backward compat). Corregido texto roto `"el link que te pasé arriba"` (funnel roto) → `"son un par de minutos y la tenés andando"`.
+- `src/app/api/webhook/evolution/route.ts` — carga temprana de `project_info` (vía `cargarProjectInfoActivo`, cacheada 5 min) para proyectos no-APEX, antes de los canned responses. Extrae `linkDescarga` con `linkDescargaDeProjectInfo` y lo pasa a los 4 call sites de canned responses.
+- `src/lib/__tests__/respuestas-canned.test.ts` — 4 tests nuevos para el parámetro `downloadLink`. Suite completa: 297/297 verde.
+
+**DB (aplicado en prod vía MCP `supabase-apex`):**
+- `projects` slug='assistify': `plantilla_primer_mensaje` actualizado — sin link, mantiene gancho (pregunta de cancelaciones/lugar), `*Assistify* gratis`, opt-out 🙌, cierra con pregunta. El link `https://assistify.lat/download` YA existía en 2 filas de `project_info` (cierre + objeciones) — Claude lo surfacea en `full_reply`; los canned responses lo sacan de `project_info` vía `linkDescargaDeProjectInfo`.
+
+**Auditoría completa:** 5/5 proyectos activos (apex, assistify, handy, botlode, carta) tienen `plantilla_primer_mensaje` sin links (`LIKE '%http%' = false`). Principio global cumplido.
+
+**Fases futuras (2🟡/🟢, 3, 0):** sin tocar, cuando Manuel quiera.
