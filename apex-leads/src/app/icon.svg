@@ -1,19 +1,41 @@
-<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
-  <rect width="32" height="32" rx="8" fill="#0a0a0a" stroke="#c8f135" stroke-width="1.5" />
-  <g transform="translate(6,6)">
-    <polygon
-      points="10,2 18,18 2,18"
-      fill="none"
-      stroke="#c8f135"
-      stroke-width="1.8"
-      stroke-linejoin="round"
-    />
-    <line
-      x1="10" y1="8" x2="10" y2="14"
-      stroke="#c8f135"
-      stroke-width="1.8"
-      stroke-linecap="round"
-    />
-    <circle cx="10" cy="16.5" r="1" fill="#c8f135" />
-  </g>
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="triStroke" x1="16" y1="7.5" x2="16" y2="25.5" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#c8f135"/>
+      <stop offset="100%" stop-color="#7faa1a"/>
+    </linearGradient>
+    <radialGradient id="bgGlow" cx="50%" cy="30%" r="55%" gradientUnits="objectBoundingBox">
+      <stop offset="0%" stop-color="#c8f135" stop-opacity="0.1"/>
+      <stop offset="100%" stop-color="#c8f135" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="apexGlow" x="-250%" y="-250%" width="600%" height="600%">
+      <feGaussianBlur stdDeviation="1.4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="32" height="32" rx="7" fill="#0a0a0a"/>
+  <rect width="32" height="32" rx="7" fill="url(#bgGlow)"/>
+
+  <path d="M16 7.5 L26.5 25.5 L5.5 25.5 Z"
+        stroke="url(#triStroke)"
+        stroke-width="2"
+        fill="none"
+        stroke-linejoin="round"
+        stroke-linecap="round"/>
+
+  <path d="M16 7.5 L26.5 25.5 L5.5 25.5 Z" fill="#c8f135" opacity="0.03"/>
+
+  <line x1="5.5" y1="25.5" x2="26.5" y2="25.5"
+        stroke="#c8f135" stroke-width="0.5" stroke-linecap="round" opacity="0.3"/>
+  <circle cx="5.5" cy="25.5" r="0.8" fill="#c8f135" opacity="0.45"/>
+  <circle cx="26.5" cy="25.5" r="0.8" fill="#c8f135" opacity="0.45"/>
+
+  <circle cx="16" cy="7.5" r="5" fill="#c8f135" opacity="0.07"/>
+  <circle cx="16" cy="7.5" r="2.8" fill="#c8f135" opacity="0.16"/>
+  <circle cx="16" cy="7.5" r="1.4" fill="#c8f135" filter="url(#apexGlow)"/>
+  <circle cx="16" cy="7.5" r="1.1" fill="#c8f135"/>
 </svg>

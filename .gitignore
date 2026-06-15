@@ -70,3 +70,6 @@ apex-leads.zip
 *.zip
 
 .vercel
+
+# graphify knowledge-graph output (scratch, regenerable)
+graphify-out/

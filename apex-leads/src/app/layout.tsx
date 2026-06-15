@@ -2,7 +2,12 @@ import type { Metadata } from 'next'
 import './globals.css'
 import { Sidebar } from '@/components/layout/sidebar'
 
+const appUrl = process.env.VERCEL_URL
+  ? `https://${process.env.VERCEL_URL}`
+  : 'http://localhost:3000'
+
 export const metadata: Metadata = {
+  metadataBase: new URL(appUrl),
   title: 'APEX Lead Engine',
   description: 'Sistema de prospección y agente de ventas IA',
 }
