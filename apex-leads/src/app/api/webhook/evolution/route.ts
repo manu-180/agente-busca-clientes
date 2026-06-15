@@ -27,7 +27,12 @@ import {
   sanitizarRespuestaModelo,
 } from '@/lib/response-guardrails'
 import { detectarVertical, sanitizarProjectInfoPorVertical } from '@/lib/verticales'
-import { cargarProyectoApexDefault, cargarProyectoPorId, cargarProjectInfoActivo } from '@/lib/projects'
+import {
+  cargarProyectoApexDefault,
+  cargarProyectoPorId,
+  cargarProjectInfoActivo,
+  linkDescargaDeProjectInfo,
+} from '@/lib/projects'
 import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 import { extraerContenidoNuevo } from '@/lib/echo-detection'
 import {
@@ -433,6 +438,16 @@ async function procesarConLock(
     ? await cargarProyectoPorId(supabase, contextProjectId)
     : null
 
+  // Anti-ban (Fase 2): proyectos self-serve guardan el link en project_info, no en
+  // plantilla_primer_mensaje. Se carga aquí para los canned responses; el full_reply
+  // branch llama cargarProjectInfoActivo de nuevo pero el cache de TTL lo hace gratis.
+  const projectInfoCanned = project && project.slug !== 'apex'
+    ? await cargarProjectInfoActivo(supabase, project.id)
+    : []
+  const linkDescarga = projectInfoCanned.length > 0
+    ? linkDescargaDeProjectInfo(projectInfoCanned)
+    : null
+
   // ── Blindaje: conversación bot-a-bot ──
   if (detectarConversacionBot(filasHistorial)) {
     const nCliente = filasHistorial.filter(h => h.rol === 'cliente').length
@@ -500,7 +515,7 @@ async function procesarConLock(
         supabase,
         p.telefono,
         p.leadId,
-        respuestaTrasAutomatico(project),
+        respuestaTrasAutomatico(project, linkDescarga),
         p.instanceName,
         p.senderId
       )
@@ -592,7 +607,7 @@ async function procesarConLock(
         supabase,
         p.telefono,
         p.leadId,
-        respuestaTrasAutomatico(project),
+        respuestaTrasAutomatico(project, linkDescarga),
         p.instanceName,
         p.senderId
       )
@@ -624,7 +639,7 @@ async function procesarConLock(
       supabase,
       p.telefono,
       p.leadId,
-      mensajeHandoffHumano(project),
+      mensajeHandoffHumano(project, linkDescarga),
       p.instanceName,
       p.senderId
     )
@@ -674,7 +689,7 @@ async function procesarConLock(
   }
 
   if (decision.action === 'confirm_close') {
-    const closeMsg = mensajeCierreInteresado(project)
+    const closeMsg = mensajeCierreInteresado(project, linkDescarga)
     const ultAgent = [...filasHistorial].reverse().find(h => h.rol === 'agente')?.mensaje
     // "boceto aceptado" solo aplica a APEX (agencia). En self-serve no hay boceto.
     const marcarBoceto =

@@ -105,12 +105,25 @@ export function esProyectoGratis(project: ProjectRow): boolean {
 
 /**
  * Primer link http(s) que aparece en la plantilla del primer mensaje del proyecto.
- * En productos self-serve (Assistify, etc.) ese link es el de descarga/acceso, y es
- * el "próximo paso" al que todas las respuestas deben empujar. Devuelve null si no hay.
+ * Devuelve null si no hay. Usado como fallback cuando el link no está en project_info.
  */
 export function linkDescargaProyecto(project: ProjectRow): string | null {
   const m = (project.plantilla_primer_mensaje ?? '').match(/https?:\/\/[^\s)]+/i)
   return m ? m[0].replace(/[.,;]+$/, '') : null
+}
+
+/**
+ * Primer link http(s) encontrado en las filas activas de project_info de un proyecto.
+ * Anti-ban (Fase 2): para proyectos self-serve (Assistify, etc.) el link de descarga
+ * vive en project_info y NO en plantilla_primer_mensaje (que ya no manda links en frío).
+ * Devuelve null si no hay URL en ninguna fila.
+ */
+export function linkDescargaDeProjectInfo(info: ProjectInfoRow[]): string | null {
+  for (const row of info) {
+    const m = row.contenido.match(/https?:\/\/[^\s)]+/i)
+    if (m) return m[0].replace(/[.,;]+$/, '')
+  }
+  return null
 }
 
 /** Filas activas de `project_info` (knowledge base que el agente cita). */

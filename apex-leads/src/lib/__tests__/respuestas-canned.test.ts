@@ -84,3 +84,35 @@ describe('respuestas-canned — Assistify empuja SIEMPRE a probar la app', () =>
     expect(r).not.toContain('gratis')
   })
 })
+
+describe('respuestas-canned — parámetro downloadLink (anti-ban Fase 2)', () => {
+  const sinLinkEnTemplate = fakeProject({
+    slug: 'assistify',
+    nombre: 'Assistify',
+    descripcion: 'una app gratuita para talleres con clases fijas.',
+    plantilla_primer_mensaje: 'Hola {{nombre}}. ¿Lo ves útil para tu taller?',
+  })
+  const linkProjectInfo = 'https://assistify.lat/download'
+
+  it('downloadLink explícito se usa aunque la plantilla no tenga link', () => {
+    expect(mensajeCierreInteresado(sinLinkEnTemplate, linkProjectInfo)).toContain(linkProjectInfo)
+    expect(respuestaTrasAutomatico(sinLinkEnTemplate, linkProjectInfo)).toContain(linkProjectInfo)
+    expect(mensajeHandoffHumano(sinLinkEnTemplate, linkProjectInfo)).toContain(linkProjectInfo)
+  })
+
+  it('sin downloadLink y sin link en plantilla usa el fallback sin-link (texto limpio)', () => {
+    const r = mensajeCierreInteresado(sinLinkEnTemplate)
+    expect(r).not.toContain('http')
+    expect(r).not.toContain('arriba')
+  })
+
+  it('downloadLink=null cae al link de la plantilla como antes (backward compat)', () => {
+    expect(mensajeCierreInteresado(assistify, null)).toContain('https://assistify.lat/download')
+  })
+
+  it('APEX ignora downloadLink aunque se pase', () => {
+    const r = mensajeCierreInteresado(apex, linkProjectInfo)
+    expect(r).toContain('Te escribe alguien del equipo')
+    expect(r).not.toContain(linkProjectInfo)
+  })
+})
