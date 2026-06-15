@@ -187,3 +187,11 @@ Si no te interesa, avisame y no te escribo más 🙌
 WHERE slug = 'carta';
 ```
 **Assistify** (no es la queue activa): su template también manda un link en frío (`assistify.lat/download`). Mismo principio aplica, pero es producto self-serve (el link es descarga de app, no un boceto por-lead → el `[BOCETO]` no le sirve; el link de descarga debería vivir en `project_info` para que el agente lo mande al responder). **Decisión de Manuel pendiente** antes de tocarlo.
+
+## Estado de implementación (sesión 3 — 2026-06-15) — cierre de pendientes operativos
+
+Sesión corta para cerrar pendientes que requerían acción de Manuel (tokens / env / decisiones).
+
+- **PAT de Supabase para el MCP `supabase-apex`: HECHO.** Manuel generó el token `claude-mcp-apex` en la cuenta dueña de apex/carta. Validado: `GET https://api.supabase.com/v1/projects/hpbxscfbnhspeckdmkvu` → **200** (`Apex-leads`, us-east-2, ACTIVE_HEALTHY). Escrito en `~/.claude.json` (server `supabase-apex`, reemplaza el placeholder); JSON validado OK. **Pendiente: reiniciar Claude Code** para que el MCP conecte con el token nuevo (se deja para el final de la sesión; el token ya está en disco).
+- **Hook de auto-deploy (push a master = prod): config verificada.** `.claude/auto-deploy-master.sh` existe y es correcto; Stop hook cableado en `.claude/settings.local.json`; rama = master; remote = `github.com/manu-180/agente-busca-clientes`; master sincronizado con origin (0 ahead / 0 behind). **Este commit de docs es el test en vivo** del push automático.
+- **Pendientes restantes de la sesión:** Resend env vars en Vercel (`RESEND_API_KEY` + `ALERT_EMAIL`) para el push por email del aviso de baneo; decisión de Assistify (plantilla con link en frío `assistify.lat/download`); fases futuras (2🟡/🟢, 3, 0).
