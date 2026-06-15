@@ -36,6 +36,8 @@ import {
 } from '@/lib/message-guards'
 import { enviarMensajeEvolution } from '@/lib/evolution'
 import { markConnected, markDisconnected } from '@/lib/sender-pool'
+import { classifyDisconnection, markBanned, promoteFromReserve } from '@/lib/sender-lifecycle'
+import { alertSenderBanned } from '@/lib/sender-alerts'
 import { fetchPhoneNumber } from '@/lib/evolution-instance'
 import { normalizarTelefonoArg, soloDigitos, variantesTelefonoMismaLinea } from '@/lib/phone'
 import { debePersistirBocetoAceptado } from '@/lib/boceto-aceptacion'
@@ -45,6 +47,7 @@ import {
   mensajeHandoffHumano,
 } from '@/lib/respuestas-canned'
 import { estaEnVentanaPrimerContacto, getHoraArgentina } from '@/lib/first-contact-window'
+import { normalizarPaginaUrlCarta } from '@/lib/carta-url'
 
 // maxDuration = 30s → da margen para el background tras devolver 200
 export const maxDuration = 30
@@ -699,7 +702,7 @@ async function procesarConLock(
   // Antes `*` re-traía las ~30 columnas del lead en cada respuesta del agente.
   const { data: leadActualizado } = await supabase
     .from('leads')
-    .select('project_id, rubro, descripcion, nombre, zona, mensaje_inicial, conversacion_cerrada')
+    .select('project_id, rubro, descripcion, nombre, zona, mensaje_inicial, conversacion_cerrada, pagina_url')
     .eq('id', p.leadId)
     .single()
 
@@ -738,8 +741,20 @@ async function procesarConLock(
     ? `[DEMO] Demo de sitio web para mostrar al cliente\nURL: ${demoMatch.url}\nUsá esta URL cuando el cliente quiera ver un ejemplo o pida la demo. Mostrala de forma natural, sin forzar.`
     : ''
 
+  // Boceto/demo personalizado del lead (su `pagina_url`). Anti-ban (Fase 2): el
+  // primer mensaje en frío ya NO lleva link — el boceto se comparte ACÁ, cuando el
+  // lead respondió y muestra interés. Normalizamos para no mostrar nunca un
+  // `*.vercel.app`. Aplica a cualquier proyecto (boceto de APEX, demo de Carta, …).
+  const bocetoLink = normalizarPaginaUrlCarta(
+    leadActualizado?.pagina_url as string | null | undefined
+  )
+  const bocetoBloque = bocetoLink
+    ? `[BOCETO] Ya hay un boceto/demo hecho para ESTE negocio: ${bocetoLink}\nCompartilo cuando el cliente quiera verlo o muestre interés ("¿te lo paso?", "mostrame", "dale"). Es el ejemplo personalizado de su negocio; preferilo por sobre cualquier demo genérica. No lo mandes si el cliente no mostró interés.`
+    : ''
+
   const projectInfoTextoRaw = [
     ...(projectInfo ?? []).map(info => `[${info.categoria.toUpperCase()}] ${info.titulo}\n${info.contenido}`),
+    ...(bocetoBloque ? [bocetoBloque] : []),
     ...(demoBloque ? [demoBloque] : []),
   ].join('\n\n')
 
@@ -1341,6 +1356,32 @@ async function handleConnectionUpdate(
 
   if (state === 'close') {
     const reason = reasonFromStatusCode(statusCode)
+
+    // ── Baneo terminal de WhatsApp (device_removed/code_403) ──
+    // Es específico de ESTE sender (WhatsApp lo baneó), NO un outage de Evolution,
+    // así que NO pasa por la outage-detection de abajo. markBanned hace la transición
+    // ATÓMICA (lo saca del pool y corta el auto-restart) y devuelve true solo si ESTE
+    // evento la realizó: así promovemos un reemplazo y alertamos a Manuel UNA sola vez,
+    // aunque lleguen close events repetidos o concurrentes del mismo chip muerto.
+    if (classifyDisconnection(reason) === 'banned') {
+      const transiciono = await markBanned(supabase, sender.id, reason)
+      if (transiciono) {
+        const promoted = await promoteFromReserve(supabase)
+        await alertSenderBanned(supabase, {
+          alias: sender.alias,
+          instanceName,
+          reason,
+          promotedAlias: promoted?.alias ?? null,
+        })
+        console.error(
+          `[Evolution Webhook] sender ${sender.alias ?? instanceName} BANEADO (${reason}) → markBanned + ` +
+          (promoted
+            ? `promoví "${promoted.alias ?? promoted.instance_name}" desde la reserva`
+            : 'SIN reserva para promover (pool más chico, reponer)')
+        )
+      }
+      return
+    }
 
     // Outage detection: si la razón NO es específica al sender y ya hay otros
     // senders disconnected por causa transitoria reciente, asumimos outage de

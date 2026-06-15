@@ -37,6 +37,7 @@ function makeSelectMock(rows: unknown[] | null, error: unknown = null): Supabase
   const chain: SelectChain & {
     select: jest.Mock
     eq: jest.Mock
+    in: jest.Mock
     order: jest.Mock
     or: jest.Mock
     update: jest.Mock
@@ -47,6 +48,7 @@ function makeSelectMock(rows: unknown[] | null, error: unknown = null): Supabase
     error,
     select: jest.fn(() => chain),
     eq: jest.fn(() => chain),
+    in: jest.fn(() => chain),
     order: jest.fn(() => chain),
     or: jest.fn(() => chain),
     update: jest.fn(() => chain),
@@ -93,6 +95,7 @@ describe('selectNextSender', () => {
     last_sent_at: null,
     connected: true,
     activo: true,
+    status: 'active',
   }
 
   it('devuelve null si no hay senders activos', async () => {
@@ -143,6 +146,45 @@ describe('selectNextSender', () => {
   it('throwea si Supabase devuelve error', async () => {
     const supa = makeSelectMock(null, { message: 'boom' })
     await expect(selectNextSender(supa)).rejects.toThrow(/boom/)
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// selectNextSender — filtro por status (lifecycle)
+// ───────────────────────────────────────────────────────────────────────────
+
+describe('selectNextSender — filtro por status (lifecycle)', () => {
+  const base = {
+    alias: 'x',
+    instance_name: 'wa-x',
+    phone_number: '+5491100000000',
+    daily_limit: 30,
+    msgs_today: 0,
+    last_sent_at: null,
+    connected: true,
+    activo: true,
+  }
+
+  it('NO elige reserve/banned/archived aunque sean activo+connected con capacidad', async () => {
+    // Todos con msgs_today=0 (máxima prioridad por el ORDER BY). Sin el filtro de
+    // status elegiría 'reserve1' (primer 0); con el filtro debe elegir 'active1'.
+    const supa = makeSelectMock([
+      { ...base, id: 'reserve1', status: 'reserve' },
+      { ...base, id: 'banned1', status: 'banned' },
+      { ...base, id: 'archived1', status: 'archived' },
+      { ...base, id: 'active1', status: 'active', msgs_today: 2 },
+    ])
+    expect((await selectNextSender(supa))?.id).toBe('active1')
+  })
+
+  it('un único sender reserve → null (no hay nadie seleccionable)', async () => {
+    const supa = makeSelectMock([{ ...base, id: 'reserve1', status: 'reserve' }])
+    expect(await selectNextSender(supa)).toBeNull()
+  })
+
+  it('incluye warming en el pool (chip nuevo en ramp-up)', async () => {
+    const supa = makeSelectMock([{ ...base, id: 'w1', status: 'warming', daily_limit: 10 }])
+    expect((await selectNextSender(supa))?.id).toBe('w1')
   })
 })
 

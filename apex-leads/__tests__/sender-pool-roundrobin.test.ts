@@ -19,6 +19,7 @@ type Row = {
   connected: boolean
   activo: boolean
   provider: string
+  status: string
 }
 
 /**
@@ -63,6 +64,10 @@ function makeInMemorySupabase(rows: Row[]): {
       }),
       eq: jest.fn((col: keyof Row, val: unknown) => {
         filters.push(r => r[col] === val)
+        return chain
+      }),
+      in: jest.fn((col: keyof Row, vals: unknown[]) => {
+        filters.push(r => vals.includes(r[col]))
         return chain
       }),
       order: jest.fn(() => chain),
@@ -135,6 +140,7 @@ describe('round-robin distribution', () => {
       provider: 'evolution',
       activo: true,
       connected: true,
+      status: 'active',
       msgs_today: 0,
       last_sent_at: null,
       phone_number: '+1',
@@ -176,6 +182,7 @@ describe('round-robin distribution', () => {
       provider: 'evolution',
       activo: true,
       connected: true,
+      status: 'active',
       msgs_today: 0,
       last_sent_at: null,
       phone_number: '+1',
@@ -224,6 +231,7 @@ describe('round-robin distribution', () => {
       provider: 'evolution',
       activo: true,
       connected: true,
+      status: 'active',
       msgs_today: 0,
       last_sent_at: null,
       phone_number: '+1',

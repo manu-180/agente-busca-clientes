@@ -30,7 +30,16 @@ export type PoolSender = {
   last_sent_at: string | null
   connected: boolean
   activo: boolean
+  status: string
 }
+
+/**
+ * Estados del ciclo de vida que entran al pool de selección: `active` (chip
+ * maduro) y `warming` (chip nuevo en ramp-up). `reserve` (vinculado esperando
+ * turno), `banned` y `archived` (terminales) NO se eligen. Ver sender-lifecycle.ts
+ * y la migración 20260615130000_sender-lifecycle.sql.
+ */
+export const POOL_SELECTABLE_STATUSES = ['active', 'warming']
 
 export type CapacitySender = {
   id: string
@@ -61,7 +70,7 @@ export type CapacityStats = {
 }
 
 const SELECT_FIELDS =
-  'id, alias, instance_name, phone_number, daily_limit, msgs_today, last_sent_at, connected, activo'
+  'id, alias, instance_name, phone_number, daily_limit, msgs_today, last_sent_at, connected, activo, status'
 
 const SELECT_FIELDS_CAPACITY =
   'id, alias, instance_name, phone_number, color, daily_limit, msgs_today, connected, activo'
@@ -97,19 +106,27 @@ function compareLastSentAtNullsFirst(a: string | null, b: string | null): number
  * Equivalente SQL:
  * ```
  * SELECT id, alias, instance_name, phone_number, daily_limit, msgs_today,
- *        last_sent_at, connected, activo
+ *        last_sent_at, connected, activo, status
  * FROM senders
  * WHERE provider = 'evolution'
  *   AND activo = true
  *   AND connected = true
+ *   AND status IN ('active', 'warming')
  *   AND msgs_today < daily_limit
  * ORDER BY msgs_today ASC, last_sent_at ASC NULLS FIRST
  * LIMIT 1;
  * ```
  *
+ * El filtro de `status` saca del pool los `reserve` (esperando turno) y los
+ * terminales (`banned`/`archived`). Es la pieza que hace que la promoción de
+ * reserva (sender-lifecycle.promoteFromReserve: reserve→warming) tenga efecto:
+ * un `reserve` NO se elige aunque esté activo+connected; recién entra al volverse
+ * `warming`/`active`.
+ *
  * Implementación: PostgREST no soporta comparaciones columna-columna
  * (`msgs_today < daily_limit`), así que filtramos esa condición en JS sobre
- * los candidatos `activo AND connected` (típicamente <10 filas).
+ * los candidatos `activo AND connected`. Re-aplicamos también el filtro de
+ * `status` en JS (defensivo: algunos mocks de tests ignoran `.in(...)`).
  *
  * @returns el sender elegido o `null` si no hay ninguno disponible.
  */
@@ -123,6 +140,7 @@ export async function selectNextSender(
     .eq('provider', 'evolution')
     .eq('activo', true)
     .eq('connected', true)
+    .in('status', POOL_SELECTABLE_STATUSES)
     .order('msgs_today', { ascending: true })
     .order('last_sent_at', { ascending: true, nullsFirst: true })
 
@@ -131,7 +149,10 @@ export async function selectNextSender(
 
   const excludeSet = new Set(opts?.excludeIds ?? [])
   const candidates = (data as PoolSender[]).filter(
-    s => s.msgs_today < s.daily_limit && !excludeSet.has(s.id)
+    s =>
+      POOL_SELECTABLE_STATUSES.includes(s.status) &&
+      s.msgs_today < s.daily_limit &&
+      !excludeSet.has(s.id)
   )
   if (candidates.length === 0) return null
 

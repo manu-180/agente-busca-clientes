@@ -9,12 +9,7 @@ import {
   PRIMER_CONTACTO_HORA_FIN_AR,
   PRIMER_CONTACTO_HORA_INICIO_AR,
 } from '@/lib/first-contact-window'
-import {
-  extraerRatingParaPlantilla,
-  resolveWhatsAppDemoHost,
-  SITIO_PRINCIPAL_APEX,
-} from '@/lib/whatsapp-template-demos'
-import { normalizarPaginaUrlCarta } from '@/lib/carta-url'
+import { construirMensajePrimerContacto } from '@/lib/primer-mensaje'
 import { enviarMensajeEvolution, EVO_ERR, isEvolutionError } from '@/lib/evolution'
 import { fetchAllInstances, restartInstance } from '@/lib/evolution-instance'
 import {
@@ -27,6 +22,7 @@ import {
   updateHealthCheck,
   type PoolSender,
 } from '@/lib/sender-pool'
+import { tickWarming } from '@/lib/sender-lifecycle'
 
 // Inline health-check piggybacking: cada N min ejecutamos un health-check
 // dentro de este cron porque el cron Vercel `/api/cron/health-evolution`
@@ -131,45 +127,6 @@ function authCron(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET
   if (!secret) return false
   return req.headers.get('authorization') === `Bearer ${secret}`
-}
-
-function interpolarPlantilla(
-  template: string,
-  lead: LeadColaRow,
-  rating: string,
-  demoHost: string,
-): string {
-  return template
-    .replace(/\{\{nombre\}\}/g, lead.nombre)
-    .replace(/\{\{rating\}\}/g, rating)
-    .replace(/\{\{zona\}\}/g, lead.zona)
-    .replace(/\{\{rubro\}\}/g, lead.rubro)
-    .replace(/\{\{demo_url\}\}/g, demoHost)
-    .replace(/\{\{sitio\}\}/g, SITIO_PRINCIPAL_APEX)
-}
-
-function construirMensajePrimerContacto(lead: LeadColaRow, plantilla?: string | null): string {
-  const rating = extraerRatingParaPlantilla(lead.descripcion)
-  // `pagina_url` es la página de Carta del lead. La normalizamos para que el
-  // dominio gratuito de Vercel de las filas viejas (`*.vercel.app`) nunca llegue
-  // al mensaje: siempre sale `https://www.carta.it.com/r/<slug>`. Si está vacía,
-  // caemos a la demo genérica por rubro como siempre.
-  const demoHost =
-    normalizarPaginaUrlCarta(lead.pagina_url) || resolveWhatsAppDemoHost(lead.rubro, lead.descripcion)
-
-  // Plantilla personalizada del proyecto (con variables {{nombre}}, {{rating}}, etc.)
-  if (plantilla?.trim()) {
-    return interpolarPlantilla(plantilla, lead, rating, demoHost)
-  }
-
-  // Mensaje default de APEX
-  return [
-    `Hola ${lead.nombre}`,
-    `Vi que tu negocio tiene ${rating}⭐ en Google Maps.`,
-    `Hice este boceto para un negocio como el tuyo: ${demoHost}`,
-    `Trabajo con negocios de ${lead.zona} haciendo páginas web para ${lead.rubro} - conocé mi trabajo en ${SITIO_PRINCIPAL_APEX}`,
-    `¿Te lo armamos con tu marca?`,
-  ].join('\n')
 }
 
 async function claimYEnviarLead(
@@ -469,12 +426,33 @@ async function ejecutarHealthCheckInlineSiCorresponde(sup: SupabaseClient): Prom
   const stale = Date.now() - lastCheckAt > INLINE_HEALTH_THROTTLE_MS
   if (!stale) return
 
+  // Warming ramp (piggyback en el throttle del health-check, ~cada 3min): recalcula
+  // el daily_limit de los chips en `status='warming'` según los días transcurridos y
+  // los gradúa a `active` al completar el ramp. Barato (query indexada por
+  // senders_lifecycle_idx sobre status='warming', normalmente 0 filas) e idempotente.
+  // El throttle evita correrlo en cada uno de los ticks frecuentes del cron.
   try {
+    await tickWarming(sup)
+  } catch (err) {
+    console.warn(
+      '[cron inline-warming] tickWarming falló (no bloquea):',
+      err instanceof Error ? err.message : err
+    )
+  }
+
+  try {
+    // Fase 1: excluimos senders terminales (status IN banned/archived) del loop de
+    // health-check/auto-restart. Antes intentaba revivir cadáveres cada tick
+    // (restartInstance + fetchAllInstances) gastando tiempo de función Vercel y
+    // llamadas a Evolution para siempre. Un baneado NO se recupera con restart, y
+    // un archivado fue retirado a mano. El filtro es back-compat: la columna
+    // `status` default 'active', así que senders sin clasificar siguen entrando.
     const { data: senders } = await sup
       .from('senders')
       .select('id, alias, instance_name, connected, disconnected_at, disconnection_reason')
       .eq('provider', 'evolution')
       .eq('activo', true)
+      .not('status', 'in', '("banned","archived")')
 
     const senderRows = senders ?? []
     if (senderRows.length === 0) return
