@@ -1,7 +1,7 @@
 # Migración del sistema de envío de WhatsApp — Plan y diagnóstico
 
 > **Fuente de verdad.** Estado al 2026-06-15. Reconstruir TODO desde este archivo, no desde el chat.
-> Fase actual: **Fase 1 (runtime) + Fase 2 🔴 integradas y verdes (tsc 0, jest 292/292). Migración APLICADA a prod (con bug de backfill corregido). SIN commit, SIN deploy todavía.** Ver §Estado de implementación (sesión 2) al final.
+> Fase actual: **Fase 1 (runtime) + Fase 2 🔴 integradas y verdes (tsc 0, jest 293/293, code-review OK, `next build` OK). Migración APLICADA a prod. Commiteado en rama `feat/sender-lifecycle-antiban` (2c59c17). SIN deploy todavía.** Ver §Estado de implementación (sesión 2) al final.
 
 ## Objetivo
 
@@ -160,8 +160,8 @@ Hecho:
 Los `markDisconnected` del cron usan razones que son **constantes temporales** (`preflight_close`, `send_failure_threshold`) → `classifyDisconnection` siempre da 'temporary'. Un baneo NUNCA llega como error de envío; llega como caída de sesión vía el webhook (statusReason 401 → device_removed). El webhook (2a) es el detector correcto y suficiente → enganchar markBanned en el cron sería **código muerto**. Pendiente opcional (Fase 1.5): heurística "down > N horas y auto-restart falla → banned" como red de seguridad por si el webhook pierde un evento (necesita umbral para no falsear positivos con teléfonos apagados).
 
 ### ⚠️ ORDEN DE DEPLOY (crítico)
-1. **Commit** (rama nueva — estamos en `master`).
-2. **Deploy a Vercel.** Seguro: la migración YA está aplicada, así que el código que referencia `status` no rompe ninguna query.
+1. ✅ **Commit** hecho en rama `feat/sender-lifecycle-antiban` (2c59c17). NO mergeado a master, NO pusheado. `next build` verificado OK.
+2. **Deploy a Vercel** (pushear/mergear la rama o `vercel --prod`). Seguro: la migración YA está aplicada, así que el código que referencia `status` no rompe ninguna query. Carta (queue activa) mantiene su plantilla con link hasta el paso 3 → el deploy del código solo NO rompe el funnel.
 3. **Recién DESPUÉS del deploy: editar la plantilla de Carta en DB** (Carta es la queue activa hoy → `active_queue_project_id`). 🔴 **NO antes del deploy**: si se saca el link de la plantilla sin el código del `[BOCETO]` deployado, los leads de Carta reciben mensaje sin link Y el reply no manda el demo → funnel roto. Deploy primero, plantilla después.
 4. Verificar en prod: baneo real → markBanned + promote + email; lead nuevo → 1er mensaje sin link; al responder "dale/mostrame" → llega el boceto.
 
