@@ -20,6 +20,7 @@ import {
   incrementSendFailures,
   resetSendFailures,
   updateHealthCheck,
+  setSendCooldown,
   type PoolSender,
 } from '@/lib/sender-pool'
 import { tickWarming } from '@/lib/sender-lifecycle'
@@ -256,6 +257,13 @@ async function claimYEnviarLead(
 
       // Reset contador de fallos consecutivos del sender (sender está sano).
       await resetSendFailures(sup, sender.id)
+
+      // Jitter anti-ban: cooldown aleatorio de 2–12 min antes de reusar este sender.
+      // Hace los intervalos de envío irregulares (menos detectable como bot).
+      const jitterMs = (120 + Math.floor(Math.random() * 600)) * 1000
+      await setSendCooldown(sup, sender.id, jitterMs).catch(err =>
+        console.warn('[cron] setSendCooldown falló (no bloquea):', err instanceof Error ? err.message : err)
+      )
 
       return {
         status: 'ok',

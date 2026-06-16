@@ -28,6 +28,7 @@ export type PoolSender = {
   daily_limit: number
   msgs_today: number
   last_sent_at: string | null
+  send_cooldown_until: string | null
   connected: boolean
   activo: boolean
   status: string
@@ -70,7 +71,7 @@ export type CapacityStats = {
 }
 
 const SELECT_FIELDS =
-  'id, alias, instance_name, phone_number, daily_limit, msgs_today, last_sent_at, connected, activo, status'
+  'id, alias, instance_name, phone_number, daily_limit, msgs_today, last_sent_at, send_cooldown_until, connected, activo, status'
 
 const SELECT_FIELDS_CAPACITY =
   'id, alias, instance_name, phone_number, color, daily_limit, msgs_today, connected, activo'
@@ -148,11 +149,13 @@ export async function selectNextSender(
   if (!data || data.length === 0) return null
 
   const excludeSet = new Set(opts?.excludeIds ?? [])
+  const now = new Date().toISOString()
   const candidates = (data as PoolSender[]).filter(
     s =>
       POOL_SELECTABLE_STATUSES.includes(s.status) &&
       s.msgs_today < s.daily_limit &&
-      !excludeSet.has(s.id)
+      !excludeSet.has(s.id) &&
+      (!s.send_cooldown_until || s.send_cooldown_until <= now)
   )
   if (candidates.length === 0) return null
 
@@ -472,6 +475,27 @@ export async function resetSendFailures(
     .eq('id', senderId)
 
   if (error) throw new Error(`resetSendFailures failed: ${error.message}`)
+}
+
+/**
+ * Setea `send_cooldown_until` para que el sender no sea elegido hasta que
+ * venza el cooldown. Llamar tras cada envío exitoso con un jitter aleatorio.
+ *
+ * @param cooldownMs — milisegundos de espera. Ej: `(120 + Math.random() * 600) * 1000`
+ *   produce cooldowns de 2–12 min, creando patrones de envío irregulares.
+ */
+export async function setSendCooldown(
+  supabase: SupabaseClient,
+  senderId: string,
+  cooldownMs: number
+): Promise<void> {
+  const until = new Date(Date.now() + cooldownMs).toISOString()
+  const { error } = await supabase
+    .from('senders')
+    .update({ send_cooldown_until: until })
+    .eq('id', senderId)
+
+  if (error) throw new Error(`setSendCooldown failed: ${error.message}`)
 }
 
 /**
