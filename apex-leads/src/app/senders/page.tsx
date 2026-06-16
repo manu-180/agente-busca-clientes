@@ -57,9 +57,9 @@ interface CapacityStats {
 }
 
 const COLORS = ['#84cc16', '#22d3ee', '#f97316', '#a855f7', '#ec4899', '#ef4444', '#3b82f6', '#f59e0b']
-const DAILY_LIMIT_OPTIONS = [10, 15, 20, 25, 30]
+const DAILY_LIMIT_OPTIONS = [5, 10, 15, 20, 25, 30]
 
-const emptyAddForm = { alias: '', daily_limit: 15, color: '#84cc16' }
+const emptyAddForm = { alias: '', daily_limit: 5, color: '#84cc16' }
 const emptyEditForm = { alias: '', descripcion: '', color: '#84cc16', daily_limit: 15 }
 const emptyAdoptForm = { alias: '', daily_limit: 15, color: '#84cc16' }
 
