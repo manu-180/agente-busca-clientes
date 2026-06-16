@@ -223,13 +223,22 @@ export async function resetDailyCountersIfNeeded(
   supabase: SupabaseClient
 ): Promise<void> {
   const todayAR = todayInArgentina()
-  const { error } = await supabase
+
+  // Dos queries separadas en lugar de .or() para evitar 402 del API gateway de Supabase
+  // con queries complejas que superan límites de compute del plan free.
+  const { error: e1 } = await supabase
     .from('senders')
     .update({ msgs_today: 0, last_reset_date: todayAR })
     .eq('provider', 'evolution')
-    .or(`last_reset_date.is.null,last_reset_date.lt.${todayAR}`)
+    .is('last_reset_date', null)
+  if (e1) throw new Error(`resetDailyCountersIfNeeded (null) failed: ${e1.message}`)
 
-  if (error) throw new Error(`resetDailyCountersIfNeeded failed: ${error.message}`)
+  const { error: e2 } = await supabase
+    .from('senders')
+    .update({ msgs_today: 0, last_reset_date: todayAR })
+    .eq('provider', 'evolution')
+    .lt('last_reset_date', todayAR)
+  if (e2) throw new Error(`resetDailyCountersIfNeeded (lt) failed: ${e2.message}`)
 }
 
 /**

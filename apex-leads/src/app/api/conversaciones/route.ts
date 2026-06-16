@@ -109,7 +109,7 @@ export async function GET() {
     .from('conversaciones_ultima_por_lead')
     .select(SELECT_CABEZA)
     .order('timestamp', { ascending: false })
-    .range(0, 19_999)
+    .limit(200)
 
   if (viewError) {
     console.warn(
@@ -120,7 +120,7 @@ export async function GET() {
       .from('conversaciones')
       .select(SELECT_CABEZA)
       .order('timestamp', { ascending: false })
-      .limit(10_000)
+      .limit(200)
     if (convError) return NextResponse.json({ error: convError.message }, { status: 500 })
     const filas = [...(recientes ?? [])].reverse()
     const idsFromConvs = Array.from(
