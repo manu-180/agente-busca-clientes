@@ -216,4 +216,21 @@ Sesión corta para cerrar pendientes que requerían acción de Manuel (tokens / 
 
 **Auditoría completa:** 5/5 proyectos activos (apex, assistify, handy, botlode, carta) tienen `plantilla_primer_mensaje` sin links (`LIKE '%http%' = false`). Principio global cumplido.
 
-**Fases futuras (2🟡/🟢, 3, 0):** sin tocar, cuando Manuel quiera.
+**Fases futuras (2🟢, 3, 0):** sin tocar, cuando Manuel quiera.
+
+## Estado de implementación (sesión 5 — 2026-06-16) — Fase 2 🟡 jitter deployado
+
+**Fase 2 🟡 DEPLOYADA a producción** (commit `5301902`, master → Vercel `apex-leads`). tsc 0 · jest 297/297.
+
+**Qué se hizo:**
+- `supabase/migrations/20260616130000_sender-cooldown.sql` — agrega `send_cooldown_until TIMESTAMPTZ NULL` a `senders`. Aplicada a prod vía MCP `supabase-apex`.
+- `src/lib/sender-pool.ts` — `PoolSender` y `SELECT_FIELDS` incluyen `send_cooldown_until`; `selectNextSender` descarta senders cuyo `send_cooldown_until > now()` (filtro JS defensivo, mismo patrón que status); nueva fn `setSendCooldown(supabase, senderId, cooldownMs)`.
+- `src/app/api/cron/leads-pendientes/route.ts` — tras cada envío exitoso (después de `resetSendFailures`), llama `setSendCooldown` con jitter aleatorio de 2–12 min (`(120 + Math.floor(Math.random() * 600)) * 1000` ms). Best-effort (`.catch` → no bloquea).
+- `apex-leads/vercel.json` — cron `leads-pendientes`: `*/5` → `*/2` min (mayor resolución para capturar vencimientos de cooldown con chips nuevos).
+
+**Cómo funciona:**
+- El cron dispara cada 2 min; `selectNextSender` devuelve el sender disponible Y con cooldown vencido.
+- Tras enviar, ese sender queda bloqueado 2–12 min (aleatorio). Con múltiples senders, se intercalan en patrones irregulares.
+- Con 1 solo sender (situación actual): manda cada 2–12 min en vez de cada 5 min exactos → menos robótico.
+
+**Siguiente (cuando Manuel reconecte SIMs):** conectarlos como `reserve` desde el panel `/senders` → warming automático → entran al pool → jitter los distribuye naturalmente. Fases 2🟢 (shadowban detection, IPs), 3 (onboarding asistido), 0 (limpieza pool) siguen pendientes.
