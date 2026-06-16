@@ -4,7 +4,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 import { buildAgentPrompt } from '@/lib/prompts'
 import { detectarVertical, sanitizarProjectInfoPorVertical } from '@/lib/verticales'
-import { cargarProyectoPorId } from '@/lib/projects'
+import { cargarProyectoPorId, cargarProjectInfoActivo } from '@/lib/projects'
 
 export async function POST(request: Request) {
   const { lead_id } = await request.json()
@@ -16,7 +16,11 @@ export async function POST(request: Request) {
 
   const supabase = createSupabaseServer()
 
-  const { data: lead } = await supabase.from('leads').select('*').eq('id', lead_id).single()
+  const { data: lead } = await supabase
+    .from('leads')
+    .select('id, project_id, rubro, descripcion, nombre, zona, mensaje_inicial, origen')
+    .eq('id', lead_id)
+    .single()
   if (!lead) return NextResponse.json({ error: 'Lead no encontrado' }, { status: 404 })
   if (!lead.project_id) {
     return NextResponse.json({ error: 'Lead sin project_id' }, { status: 400 })
@@ -27,13 +31,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Proyecto del lead no encontrado' }, { status: 404 })
   }
 
-  const { data: projectInfo } = await supabase
-    .from('project_info')
-    .select('categoria, titulo, contenido')
-    .eq('project_id', project.id)
-    .eq('activo', true)
+  const projectInfo = await cargarProjectInfoActivo(supabase, project.id)
 
-  const projectInfoTextoRaw = (projectInfo ?? [])
+  const projectInfoTextoRaw = projectInfo
     .map(info => `[${info.categoria.toUpperCase()}] ${info.titulo}\n${info.contenido}`)
     .join('\n\n')
 

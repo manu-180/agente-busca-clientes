@@ -267,27 +267,29 @@ describe('incrementMsgsToday', () => {
 // ───────────────────────────────────────────────────────────────────────────
 
 describe('resetDailyCountersIfNeeded', () => {
+  // El código divide el reset en DOS updates (en vez de un .or() compuesto, que
+  // disparaba 402 del gateway de Supabase): uno con .is('last_reset_date', null)
+  // y otro con .lt('last_reset_date', today_AR). Ambos terminan en .is()/.lt(),
+  // que son los thenables que resuelven { data, error }.
   function makeUpdateMock(error: unknown = null) {
     const chain: Record<string, unknown> = {
       update: jest.fn(() => chain),
       eq: jest.fn(() => chain),
-      or: jest.fn(() => chain),
+      is: jest.fn(() => Promise.resolve({ data: null, error })),
+      lt: jest.fn(() => Promise.resolve({ data: null, error })),
     }
-    ;(chain as { then: (cb: (v: { data: unknown; error: unknown }) => void) => void }).then =
-      (cb) => cb({ data: null, error })
-
     const supa = { from: jest.fn(() => chain) } as unknown as SupabaseClient
     return { supa, chain }
   }
 
-  it('llama UPDATE con or(last_reset_date.is.null, last_reset_date.lt.today_AR)', async () => {
+  it('llama dos UPDATE: is(last_reset_date, null) y lt(last_reset_date, today_AR)', async () => {
     const { supa, chain } = makeUpdateMock()
     await resetDailyCountersIfNeeded(supa)
     const today = todayInArgentina()
     expect(chain.update).toHaveBeenCalledWith({ msgs_today: 0, last_reset_date: today })
-    expect(chain.or).toHaveBeenCalledWith(
-      `last_reset_date.is.null,last_reset_date.lt.${today}`
-    )
+    expect(chain.eq).toHaveBeenCalledWith('provider', 'evolution')
+    expect(chain.is).toHaveBeenCalledWith('last_reset_date', null)
+    expect(chain.lt).toHaveBeenCalledWith('last_reset_date', today)
   })
 
   it('throwea si Supabase devuelve error', async () => {

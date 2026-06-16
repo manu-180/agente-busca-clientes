@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseServer } from '@/lib/supabase-server'
+import { createTtlCache } from '@/lib/ttl-cache'
 import {
   buildWebhookUrl,
   createInstance,
@@ -9,6 +10,30 @@ import {
 } from '@/lib/evolution-instance'
 
 export const dynamic = 'force-dynamic'
+
+// Los conteos de conversaciones por sender son una métrica informativa que
+// cambia lento; recomputarlos en CADA poll del panel (varias pestañas, cada
+// 180s) era el 2º mayor consumidor de compute del proyecto: un COUNT por cada
+// uno de los ~18 senders vía join lateral sobre `conversaciones` (10k filas).
+// Los cacheamos 5 min y los fusionamos sobre filas de senders SIEMPRE frescas
+// (estado de conexión, msgs_today, etc. nunca se sirven stale). TTL ajustable
+// vía env SENDERS_COUNT_TTL_MS.
+const SENDERS_COUNT_TTL_MS = Number(process.env.SENDERS_COUNT_TTL_MS ?? 5 * 60_000)
+const sendersCountCache = createTtlCache<Record<string, number>>(SENDERS_COUNT_TTL_MS)
+
+async function conteosPorSender(
+  supabase: ReturnType<typeof createSupabaseServer>
+): Promise<Record<string, number>> {
+  const hit = sendersCountCache.get('all')
+  if (hit) return hit
+  const { data } = await supabase.from('senders').select('id, conversaciones(count)')
+  const counts: Record<string, number> = {}
+  for (const row of (data ?? []) as Array<{ id: string; conversaciones?: { count: number }[] }>) {
+    counts[row.id] = row.conversaciones?.[0]?.count ?? 0
+  }
+  sendersCountCache.set('all', counts)
+  return counts
+}
 
 export async function GET(req: NextRequest) {
   const supabase = createSupabaseServer()
@@ -28,12 +53,19 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(data)
   }
 
-  const { data, error } = await supabase
-    .from('senders')
-    .select('*, conversaciones(count)')
-    .order('created_at', { ascending: true })
+  // Filas de senders SIEMPRE frescas; conteos desde caché (5 min). Reconstruimos
+  // la forma `conversaciones: [{ count }]` que la UI ya consume → el frontend no
+  // cambia. La mayoría de los polls evitan por completo el COUNT lateral caro.
+  const [{ data, error }, counts] = await Promise.all([
+    supabase.from('senders').select('*').order('created_at', { ascending: true }),
+    conteosPorSender(supabase),
+  ])
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json(data)
+  const out = (data ?? []).map((s: Record<string, unknown>) => ({
+    ...s,
+    conversaciones: [{ count: counts[s.id as string] ?? 0 }],
+  }))
+  return NextResponse.json(out)
 }
 
 async function generateUniqueInstanceName(

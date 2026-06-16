@@ -46,7 +46,7 @@ export function Sidebar() {
     } catch {}
   }, [])
 
-  usePolling(fetchUnread, 60_000)
+  usePolling(fetchUnread, 90_000)
 
   useEffect(() => {
     fetchUnread()

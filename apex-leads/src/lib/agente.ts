@@ -28,7 +28,7 @@ import {
 } from '@/lib/response-guardrails'
 import { ANTHROPIC_CHAT_MODEL } from '@/lib/anthropic-model'
 import { detectarVertical, sanitizarProjectInfoPorVertical } from '@/lib/verticales'
-import { cargarProyectoPorId } from '@/lib/projects'
+import { cargarProyectoPorId, cargarProjectInfoActivo } from '@/lib/projects'
 
 export async function generarRespuestaAgente({
   telefono,
@@ -97,15 +97,14 @@ export async function generarRespuestaAgente({
     }
     console.log('[AGENTE] Proyecto del lead:', project.slug, '(' + project.nombre + ')')
 
-    // 4. Traer info del proyecto del lead (NO mezclar con otros proyectos)
+    // 4. Traer info del proyecto del lead (NO mezclar con otros proyectos).
+    //    Reusamos cargarProjectInfoActivo (cache TTL): la knowledge base se lee
+    //    en CADA full_reply y cambia rara vez — mismo query/columnas que antes,
+    //    pero sin re-pegar a Supabase por mensaje.
     console.log('[AGENTE] Cargando información del proyecto...')
-    const { data: projectInfo } = await supabase
-      .from('project_info')
-      .select('categoria, titulo, contenido')
-      .eq('project_id', project.id)
-      .eq('activo', true)
+    const projectInfo = await cargarProjectInfoActivo(supabase, project.id)
 
-    const projectInfoTextoRaw = (projectInfo ?? [])
+    const projectInfoTextoRaw = projectInfo
       .map(info => `[${info.categoria.toUpperCase()}] ${info.titulo}\n${info.contenido}`)
       .join('\n\n')
 

@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { data: senderData } = resolvedSenderId
-    ? await supabase.from('senders').select('*').eq('id', resolvedSenderId).single()
+    ? await supabase.from('senders').select('instance_name').eq('id', resolvedSenderId).single()
     : { data: null }
 
   const instanceName = senderData?.instance_name as string | undefined

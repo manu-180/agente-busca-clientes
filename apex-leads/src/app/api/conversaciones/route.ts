@@ -46,7 +46,20 @@ async function contarNoLeidosPorLead(supabase: Sb, leadIds: string[]): Promise<M
   return m
 }
 
-/** Trae el primer rol por lead, chunkeando para no superar el límite de URL. */
+/**
+ * Caché del "primer rol" por lead. El rol del PRIMER mensaje de un lead es
+ * INMUTABLE: una vez que el lead tiene su primera fila en `conversaciones`, ese
+ * primer registro (y su rol) no cambia nunca. Por eso lo memorizamos de forma
+ * permanente a nivel de módulo y solo consultamos los lead_id que todavía no
+ * vimos. Antes esto re-consultaba la vista `conversaciones_primera_por_lead`
+ * para los ~200 leads en CADA poll del inbox (cada 60s) — uno de los mayores
+ * consumidores de egress/compute del proyecto (~407k llamadas acumuladas).
+ * Persistencia: por instancia serverless caliente; un cold start lo re-puebla
+ * bajo demanda. Cota de memoria: ~1 entrada por lead distinto (≈14k → <1 MB).
+ */
+const primerRolCache = new Map<string, string>()
+
+/** Trae el primer rol por lead, cacheado (inmutable) y chunkeando para no superar el límite de URL. */
 async function obtenerPrimerRol(
   supabase: Sb,
   leadIds: string[]
@@ -54,8 +67,18 @@ async function obtenerPrimerRol(
   const m = new Map<string, string>()
   if (leadIds.length === 0) return m
 
+  // 1. Servir desde caché lo ya conocido; juntar los lead_id faltantes.
+  const faltantes: string[] = []
+  for (const id of leadIds) {
+    const hit = primerRolCache.get(id)
+    if (hit !== undefined) m.set(id, hit)
+    else faltantes.push(id)
+  }
+  if (faltantes.length === 0) return m
+
+  // 2. Consultar SOLO los lead_id que aún no están cacheados.
   const resultados = await Promise.all(
-    chunkArray(leadIds, CHUNK_IDS).map((chunk) =>
+    chunkArray(faltantes, CHUNK_IDS).map((chunk) =>
       supabase
         .from('conversaciones_primera_por_lead')
         .select('lead_id, rol')
@@ -66,7 +89,11 @@ async function obtenerPrimerRol(
   for (const { data, error } of resultados) {
     if (error || !data) continue
     for (const r of data as { lead_id: string | null; rol: string }[]) {
-      if (r.lead_id) m.set(r.lead_id, String(r.rol))
+      if (r.lead_id) {
+        const rol = String(r.rol)
+        primerRolCache.set(r.lead_id, rol)
+        m.set(r.lead_id, rol)
+      }
     }
   }
   return m

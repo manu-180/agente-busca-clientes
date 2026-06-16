@@ -151,9 +151,10 @@ export default function SendersPage() {
     }
   }
 
-  // Polling cada 120s (antes 30s) — 3 fetch en paralelo (senders, orphans,
-  // capacity); es el endpoint más caro del sistema. En pestaña oculta pausa.
-  usePolling(cargar, 120_000)
+  // Polling cada 180s — 3 fetch en paralelo (senders, orphans, capacity). El
+  // endpoint /api/senders ahora sirve conteos cacheados (5 min) sobre estado
+  // fresco, así que el COUNT caro casi nunca corre. En pestaña oculta pausa.
+  usePolling(cargar, 180_000)
 
   // ─── ADD FLOW ─────────────────────────────────────────────────────────
   const abrirAgregar = () => {
