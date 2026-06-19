@@ -352,7 +352,11 @@ export default function NuevoLeadClient() {
   }
 
   // Re-fetch stats cada vez que cambia el proyecto seleccionado.
+  // Salteamos el call inicial cuando proyectoId es null para evitar que
+  // una respuesta sin filtro (todos los proyectos) pise los stats del
+  // proyecto real cuando ambos requests resuelven fuera de orden.
   useEffect(() => {
+    if (!proyectoId) return
     cargarStats(proyectoId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [proyectoId])
