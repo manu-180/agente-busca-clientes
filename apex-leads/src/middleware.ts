@@ -29,7 +29,13 @@ function getRateLimit(): number {
     const parsed = parseInt(env, 10)
     if (!isNaN(parsed) && parsed > 0) return parsed
   }
-  return 60
+  // 600/min: el rate-limit solo aplica a rutas autenticadas (webhook/cron/auth
+  // están exentas arriba), así que en la práctica solo frena al propio panel de
+  // admin. Los barridos de Google Places hacen 1 request por localidad; un scan
+  // nacional son cientos en pocos minutos. 60 era muy bajo y abortaba el barrido
+  // (429) antes de llegar al encolado. 600 cubre incluso concurrencia 8 (el
+  // máximo que ofrece la UI de "Nuevo Lead").
+  return 600
 }
 
 /**
