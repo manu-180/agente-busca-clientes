@@ -123,6 +123,25 @@ describe('buildAgentPrompt — manejo de mensajes automáticos/predefinidos del 
   })
 })
 
+describe('buildAgentPrompt — Instagram / página web → www.theapexweb.com en TODOS los proyectos', () => {
+  const apex = fakeProject({ slug: 'apex', nombre: 'APEX', descripcion: 'Agencia web.' })
+  const assistify = fakeProject({ slug: 'assistify', nombre: 'Assistify', descripcion: DESC_ASSISTIFY })
+  const handy = fakeProject({ slug: 'handy', nombre: 'Handy', descripcion: 'una herramienta para equipos.' })
+
+  for (const project of [apex, assistify, handy]) {
+    it(`${project.nombre}: inyecta la regla de Instagram/web con el hub público`, () => {
+      const prompt = buildAgentPrompt('inbound', project, '[INFO] x', '', lead)
+      expect(prompt).toContain('INSTAGRAM / PÁGINA WEB / TRABAJOS')
+      expect(prompt).toContain('www.theapexweb.com')
+    })
+  }
+
+  it('en self-serve, theapexweb.com aparece como excepción explícita (no como prohibición total)', () => {
+    const prompt = buildAgentPrompt('inbound', assistify, '[INFO] x', '', lead)
+    expect(prompt).toContain('ÚNICA excepción: si te piden tu Instagram')
+  })
+})
+
 describe('buildAgentPrompt — APEX queda intacto', () => {
   const project = fakeProject({ slug: 'apex', nombre: 'APEX', descripcion: 'Agencia web.' })
   const prompt = buildAgentPrompt('outbound', project, '[INFO] x', '', lead)
