@@ -140,6 +140,51 @@ describe('buildAgentPrompt — Instagram / página web → www.theapexweb.com en
     const prompt = buildAgentPrompt('inbound', assistify, '[INFO] x', '', lead)
     expect(prompt).toContain('ÚNICA excepción: si te piden tu Instagram')
   })
+
+  it('self-serve con URL en project_info incluye DOS links: el del proyecto y theapexweb.com', () => {
+    const prompt = buildAgentPrompt(
+      'inbound',
+      assistify,
+      '[INFO] Descargá Assistify gratis: https://assistify.lat/download',
+      '',
+      lead,
+    )
+    expect(prompt).toContain('assistify.lat/download')
+    expect(prompt).toContain('www.theapexweb.com')
+    expect(prompt).toContain('DOS links')
+  })
+
+  it('self-serve con URL en plantilla (sin URL en project_info) incluye ambos links', () => {
+    const conPlantilla = fakeProject({
+      slug: 'assistify',
+      nombre: 'Assistify',
+      descripcion: DESC_ASSISTIFY,
+      plantilla_primer_mensaje: 'Hola! Probá Assistify gratis: https://assistify.lat/download',
+    })
+    const prompt = buildAgentPrompt('inbound', conPlantilla, '[INFO] info sin url', '', lead)
+    expect(prompt).toContain('assistify.lat/download')
+    expect(prompt).toContain('www.theapexweb.com')
+    expect(prompt).toContain('DOS links')
+  })
+
+  it('self-serve sin URL en ningún lado → solo theapexweb.com (sin "DOS links")', () => {
+    const prompt = buildAgentPrompt('inbound', assistify, '[INFO] sin url', '', lead)
+    expect(prompt).toContain('www.theapexweb.com')
+    expect(prompt).not.toContain('DOS links')
+  })
+
+  it('APEX con URL en projectInfo NO incluye la URL (regla fija, hub solo)', () => {
+    const prompt = buildAgentPrompt(
+      'inbound',
+      apex,
+      '[INFO] Descargá algo: https://otro.com/link',
+      '',
+      lead,
+    )
+    // APEX siempre usa solo theapexweb.com, nunca extrae URLs de project_info
+    expect(prompt).not.toContain('DOS links')
+    expect(prompt).toContain('www.theapexweb.com')
+  })
 })
 
 describe('buildAgentPrompt — APEX queda intacto', () => {

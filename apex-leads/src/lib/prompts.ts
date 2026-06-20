@@ -8,7 +8,7 @@ import {
   detectarVertical,
   labelVertical,
 } from '@/lib/verticales'
-import type { ProjectRow } from '@/lib/projects'
+import { linkDescargaProyecto, type ProjectRow } from '@/lib/projects'
 import { SITIO_PRINCIPAL_APEX } from '@/lib/whatsapp-template-demos'
 
 /**
@@ -20,6 +20,19 @@ import { SITIO_PRINCIPAL_APEX } from '@/lib/whatsapp-template-demos'
  */
 const REGLA_INSTAGRAM_WEB = `REGLA — INSTAGRAM / PÁGINA WEB / TRABAJOS:
 Si el cliente te pide tu Instagram, tus redes, tu página web o quiere ver quién sos y tus trabajos, SIEMPRE le pasás *${SITIO_PRINCIPAL_APEX}* — ahí adentro está el link a Instagram y todos los trabajos juntos. Le das el link directo, en una línea y con buena onda. Que pida el Instagram o la web es una buena señal: se lo facilitás al toque. PROHIBIDO responder con "¿por qué preguntás?", devolver otra pregunta o dar vueltas.`
+
+/**
+ * Versión dinámica de la regla para proyectos self-serve: si hay URL del proyecto,
+ * el agente comparte AMBOS links (proyecto + hub theapexweb.com). Sin URL, cae a
+ * solo theapexweb.com (mismo texto que la versión APEX).
+ */
+function buildReglaInstagramWeb(projectUrl?: string | null): string {
+  const linksFragment = projectUrl
+    ? `compartís DOS links: primero *${projectUrl}* (la web del proyecto) y también *${SITIO_PRINCIPAL_APEX}* — ahí está el link a mi Instagram y mis otros trabajos`
+    : `le pasás *${SITIO_PRINCIPAL_APEX}* — ahí adentro está el link a Instagram y todos los trabajos juntos`
+  return `REGLA — INSTAGRAM / PÁGINA WEB / TRABAJOS:
+Si el cliente te pide tu Instagram, tus redes, tu página web o quiere ver quién sos y tus trabajos, ${linksFragment}. Le das el link directo, con buena onda. Que pida el Instagram o la web es una buena señal: se lo facilitás al toque. PROHIBIDO responder con "¿por qué preguntás?", devolver otra pregunta o dar vueltas.`
+}
 
 export const SYSTEM_PROMPT_BASE = `Sos Manuel, parte del equipo de APEX, una agencia de desarrollo web y apps en Buenos Aires. Llevás tres años trabajando con clientes y tu laburo en WhatsApp es atender consultas y cerrar proyectos de páginas web, e-commerce y aplicaciones. Hablás como una persona real del equipo y no mencionás sistemas automatizados, bots ni asistentes virtuales bajo ningún concepto.
 
@@ -534,18 +547,21 @@ function bloqueContextoNegocio(ctx: AgenteContextoLead, project: ProjectRow): st
  *
  * TODO V2: mover objeciones y ejemplos a `projects.*` y dejar de condicionar por slug.
  */
-function bloqueOverrideProyecto(project: ProjectRow): string {
+function bloqueOverrideProyecto(project: ProjectRow, projectUrl?: string | null): string {
   if (project.slug === 'apex') return ''
   const nombre = project.nombre
   const esGratis = /gratuit|gratis/i.test((project.descripcion ?? '').trim())
   const reglaPago = esGratis
     ? `${nombre} es completamente GRATIS. Nunca menciones precios, cuotas, financiación, seña, suscripción ni pagos futuros ("por ahora gratis", "después se paga", etc.).`
     : `Para precios o pagos usás SOLO lo que está en <project_info>. Nunca inventes cuotas, financiación ni montos.`
+  const urlsExcepcion = projectUrl
+    ? `*${projectUrl}* (la web del proyecto) y también *${SITIO_PRINCIPAL_APEX}* (tu hub: Instagram + todos los trabajos)`
+    : `*${SITIO_PRINCIPAL_APEX}* (tu hub: Instagram + todos tus trabajos)`
   return `<recordatorio_final priority="MAXIMA">
 Antes de responder, repasá lo esencial de ${nombre}:
 - NO existe ningún "boceto", "muestra" ni nada "en 24 horas". ${nombre} se usa/descarga directo: el próximo paso siempre es que el cliente lo use o lo descargue (link en <project_info> / <plantilla_proyecto>).
 - ${reglaPago}
-- No hables de "bocetos", "agencias web" ni del servicio a medida de otro producto. ÚNICA excepción: si te piden tu Instagram o tu página web, ahí sí compartís *${SITIO_PRINCIPAL_APEX}* (tu hub: Instagram + todos tus trabajos).
+- No hables de "bocetos", "agencias web" ni del servicio a medida de otro producto. ÚNICA excepción: si te piden tu Instagram o tu página web, compartís ${urlsExcepcion}.
 - Salvo ese link de Instagram/web, toda tu respuesta se basa en <project_info> de arriba; si no figura ahí, no lo afirmás.
 </recordatorio_final>`
 }
@@ -558,7 +574,7 @@ Antes de responder, repasá lo esencial de ${nombre}:
  * de pagos. Los ejemplos están orientados a Assistify (único producto no-APEX en
  * vivo); la objeción/ejemplos por proyecto son el camino V2.
  */
-function buildBaseGenerico(project: ProjectRow): string {
+function buildBaseGenerico(project: ProjectRow, projectUrl?: string | null): string {
   const nombre = project.nombre
   const desc = (project.descripcion ?? '').trim()
   const esGratis = /gratuit|gratis/i.test(desc)
@@ -687,7 +703,7 @@ Si el mensaje del contacto parece automático o una plantilla (bienvenida, "grac
 - NO le des por interesado ni cierres ("ya tengo lo que necesito").
 - Reconocés en UNA línea que tu propuesta quedó arriba y que cuando quieran la pueden probar (link en <plantilla_proyecto> / <project_info>). Ej: "Gracias. Te dejé la info arriba — cuando quieras la probás, sin compromiso."
 
-${REGLA_INSTAGRAM_WEB}
+${buildReglaInstagramWeb(projectUrl)}
 </hard_rules>
 
 <continuity_rules priority="ALTA">
@@ -909,16 +925,24 @@ export function buildAgentPrompt(
   // APEX usa sus literales maduros tal cual. Para el resto de proyectos armamos
   // un prompt base limpio (sin "boceto" ni venta de servicio pago) para que el
   // modelo no copie ejemplos de APEX.
+  //
+  // URL del proyecto self-serve: primero busca en project_info (post-anti-ban Fase 2,
+  // el link de descarga vive ahí), con fallback a plantilla_primer_mensaje.
+  const projectUrl =
+    project.slug === 'apex'
+      ? null
+      : (projectInfo.match(/https?:\/\/[^\s)]+/i)?.[0]?.replace(/[.,;]+$/, '') ??
+        linkDescargaProyecto(project))
   const basePrompt =
     project.slug === 'apex'
       ? origen === 'outbound'
         ? SYSTEM_PROMPT_OUTBOUND
         : SYSTEM_PROMPT_INBOUND
-      : buildBaseGenerico(project) +
+      : buildBaseGenerico(project, projectUrl) +
         (origen === 'outbound' ? bloqueOutboundGenerico(project) : bloqueInboundGenerico(project))
   const vertical = detectarVertical(contextoLead.rubro ?? '', contextoLead.descripcion)
   const lexico = bloqueLexicoVertical(vertical)
-  const override = bloqueOverrideProyecto(project)
+  const override = bloqueOverrideProyecto(project, projectUrl)
   const plantilla = (project.plantilla_primer_mensaje ?? '').trim()
 
   const partes: string[] = [
