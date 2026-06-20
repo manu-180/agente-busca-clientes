@@ -13,6 +13,7 @@
  */
 import type { ProjectRow } from '@/lib/projects'
 import { esProyectoGratis, linkDescargaProyecto } from '@/lib/projects'
+import { normalizarPaginaUrlCarta } from '@/lib/carta-url'
 import { RESPUESTA_OUTBOUND_TRAS_AUTOMATICO } from '@/lib/outbound-auto-reply'
 import { MENSAJE_COMPROMISO_BOCETO_24H } from '@/lib/mensaje-boceto-24h'
 
@@ -39,7 +40,7 @@ export function respuestaTrasAutomatico(
   downloadLink?: string | null,
 ): string {
   if (esApex(project)) return RESPUESTA_OUTBOUND_TRAS_AUTOMATICO
-  const link = downloadLink ?? linkDescargaProyecto(project!)
+  const link = normalizarPaginaUrlCarta(downloadLink ?? linkDescargaProyecto(project!))
   if (link) {
     const gratis = esProyectoGratis(project!) ? ' (es gratis)' : ''
     return `${PREFIJO_RESPUESTA_AUTO}\n\nCuando quieras la probás${gratis}: ${link}`
@@ -61,7 +62,7 @@ export function mensajeCierreInteresado(
   if (esApex(project)) {
     return 'Genial. Te escribe alguien del equipo a la brevedad para coordinar los detalles.'
   }
-  const link = downloadLink ?? linkDescargaProyecto(project!)
+  const link = normalizarPaginaUrlCarta(downloadLink ?? linkDescargaProyecto(project!))
   const gratis = esProyectoGratis(project!) ? ' gratis' : ''
   if (link) {
     return `Buenísimo. La bajás${gratis} acá y en un par de minutos la tenés andando: ${link}. Cualquier cosa por acá estoy.`
@@ -81,7 +82,7 @@ export function mensajeHandoffHumano(
   downloadLink?: string | null,
 ): string {
   if (esApex(project)) return MENSAJE_COMPROMISO_BOCETO_24H
-  const link = downloadLink ?? linkDescargaProyecto(project!)
+  const link = normalizarPaginaUrlCarta(downloadLink ?? linkDescargaProyecto(project!))
   const gratis = esProyectoGratis(project!) ? ' gratis' : ''
   if (link) {
     return `Dale, contame qué necesitás y te ayudo por acá mismo. Si querés ya probarla, la bajás${gratis} acá: ${link}`
