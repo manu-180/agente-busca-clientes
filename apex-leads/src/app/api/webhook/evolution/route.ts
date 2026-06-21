@@ -764,7 +764,7 @@ async function procesarConLock(
     leadActualizado?.pagina_url as string | null | undefined
   )
   const bocetoBloque = bocetoLink
-    ? `[BOCETO] Ya hay un boceto/demo hecho para ESTE negocio: ${bocetoLink}\nCompartilo cuando el cliente quiera verlo o muestre interés ("¿te lo paso?", "mostrame", "dale"). Es el ejemplo personalizado de su negocio; preferilo por sobre cualquier demo genérica. No lo mandes si el cliente no mostró interés.`
+    ? `[BOCETO] Ya hay una página/demo REAL hecha para ESTE negocio: ${bocetoLink}\nEs su página personalizada (con sus datos y fotos), creada por el sistema. Cuando el cliente quiera verlo o muestre interés ("¿te lo paso?", "mostrame", "dale", "tenés un ejemplo"), compartís EXACTAMENTE este link y NINGÚN otro: es el ÚNICO que mandás para mostrar la página. NUNCA mandes otra URL, ni un ejemplo, ni un dominio genérico/raíz, ni inventes una. No lo mandes si el cliente no mostró interés.`
     : ''
 
   const projectInfoTextoRaw = [

@@ -201,3 +201,48 @@ describe('buildAgentPrompt — APEX queda intacto', () => {
     expect(prompt).not.toContain('ES GRATIS')
   })
 })
+
+describe('buildAgentPrompt — disciplina de links (Carta: usar el [BOCETO], nunca inventar URLs)', () => {
+  const carta = fakeProject({
+    slug: 'carta',
+    nombre: 'Carta',
+    descripcion: 'Carta digital con QR para restaurantes — el cliente escanea, elige y pide desde su cel.',
+  })
+  const projectInfoSinLink = '[SERVICIOS] Que es Carta\nUna carta digital con QR para restaurantes.'
+
+  it('inyecta la REGLA 11: nunca inventar URLs, solo las del contexto', () => {
+    const prompt = buildAgentPrompt('inbound', carta, projectInfoSinLink, '', lead)
+    expect(prompt).toContain('LINKS: SOLO LOS DEL CONTEXTO, NUNCA INVENTADOS')
+    expect(prompt).toContain('NUNCA inventes')
+    // La regla nombra explícitamente el host prohibido y el placeholder.
+    expect(prompt).toContain('.vercel.app')
+    expect(prompt).toContain('[BOCETO]')
+  })
+
+  it('el prompt NUNCA contiene el placeholder viejo carta.vercel.app', () => {
+    const prompt = buildAgentPrompt('inbound', carta, projectInfoSinLink, '', lead)
+    expect(prompt).not.toContain('carta.vercel.app')
+  })
+
+  it('sin link en el contexto, no hay ninguna URL que el agente pueda copiar', () => {
+    const prompt = buildAgentPrompt('inbound', carta, projectInfoSinLink, '', lead)
+    // Salvo el hub fijo de Instagram/web, no debe haber otra URL "compartible".
+    expect(prompt).not.toContain('https://www.carta.it.com/r/')
+  })
+
+  it('con un bloque [BOCETO] en el contexto, comparte EXACTO ese link (la página real del lead)', () => {
+    const projectInfoConBoceto =
+      '[SERVICIOS] Que es Carta\nUna carta digital.\n\n' +
+      '[BOCETO] Ya hay una página/demo REAL hecha para ESTE negocio: https://www.carta.it.com/r/lo-de-facu\n' +
+      'Compartís EXACTAMENTE este link y NINGÚN otro.'
+    const prompt = buildAgentPrompt('inbound', carta, projectInfoConBoceto, '', lead)
+    expect(prompt).toContain('https://www.carta.it.com/r/lo-de-facu')
+    // REGLA 11 / objection exigen mandarlo EXACTO.
+    expect(prompt).toContain('EXACTO')
+  })
+
+  it('la objeción "¿me mostrás alguno?" enruta al link [BOCETO], no a inventar', () => {
+    const prompt = buildAgentPrompt('inbound', carta, projectInfoSinLink, '', lead)
+    expect(prompt).toContain('¿Me mostrás alguno?')
+  })
+})
