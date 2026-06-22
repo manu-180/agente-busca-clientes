@@ -24,6 +24,7 @@ import {
   type PoolSender,
 } from '@/lib/sender-pool'
 import { tickWarming } from '@/lib/sender-lifecycle'
+import { dispararGeneracionCarta } from '@/lib/carta-generation-trigger'
 
 // Inline health-check piggybacking: cada N min ejecutamos un health-check
 // dentro de este cron porque el cron Vercel `/api/cron/health-evolution`
@@ -264,6 +265,16 @@ async function claimYEnviarLead(
       await setSendCooldown(sup, sender.id, jitterMs).catch(err =>
         console.warn('[cron] setSendCooldown falló (no bloquea):', err instanceof Error ? err.message : err)
       )
+
+      // Pieza B — "siempre tener la carta": si es un lead de Carta sin página, disparamos
+      // (fire-and-forget) la generación de su carta AHORA que lo contactamos, así está lista
+      // para cuando responda. No-op para otros proyectos, si ya tiene pagina_url, o si falta
+      // CARTA_GEN_SECRET. El cron generate-active de Carta es la red de seguridad.
+      dispararGeneracionCarta({
+        projectSlug: proyecto?.slug ?? null,
+        paginaUrl: lead.pagina_url,
+        leadId: lead.id,
+      })
 
       return {
         status: 'ok',
