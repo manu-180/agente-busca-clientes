@@ -246,3 +246,34 @@ describe('buildAgentPrompt — disciplina de links (Carta: usar el [BOCETO], nun
     expect(prompt).toContain('¿Me mostrás alguno?')
   })
 })
+
+describe('buildAgentPrompt — compartir el link de forma PROACTIVA (no esperar a que lo pidan)', () => {
+  const carta = fakeProject({
+    slug: 'carta',
+    nombre: 'Carta',
+    descripcion: 'Carta digital con QR para restaurantes.',
+  })
+  const assistify = fakeProject({ slug: 'assistify', nombre: 'Assistify', descripcion: DESC_ASSISTIFY })
+  const apex = fakeProject({ slug: 'apex', nombre: 'APEX', descripcion: 'Agencia web.' })
+
+  it('genérico: el <objetivo> manda mostrar el link clave sin que lo pidan y no cerrar sin mostrarlo', () => {
+    const prompt = buildAgentPrompt('outbound', assistify, '[INFO] x', '', lead)
+    expect(prompt).toContain('MOSTRALE EL LINK CLAVE SIN QUE TE LO PIDA')
+    expect(prompt).toContain('NO termines una conversación con alguien receptivo sin habérselo mostrado')
+  })
+
+  it('genérico: REGLA 11 pasa a proactiva (genera el momento, no espera a que lo pidan)', () => {
+    const prompt = buildAgentPrompt('inbound', carta, '[INFO] x', '', lead)
+    expect(prompt).toContain('No esperes a que el cliente la pida')
+    expect(prompt).toContain('generá el momento')
+  })
+
+  it('APEX: agrega la regla de mostrar el portfolio proactivamente sin romper el boceto calibrado', () => {
+    const prompt = buildAgentPrompt('outbound', apex, '[INFO] x', '', lead)
+    expect(prompt).toContain('MOSTRÁ TU TRABAJO SIN ESPERAR A QUE TE LO PIDAN')
+    expect(prompt).toContain('www.theapexweb.com')
+    // el boceto a medida conserva su lógica (no se promete sin interés)
+    expect(prompt).toContain('boceto a medida')
+    expect(prompt).toContain('En menos de 24 horas te mando el boceto')
+  })
+})

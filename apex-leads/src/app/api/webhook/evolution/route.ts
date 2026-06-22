@@ -52,7 +52,7 @@ import {
   mensajeHandoffHumano,
 } from '@/lib/respuestas-canned'
 import { estaEnVentanaPrimerContacto, getHoraArgentina } from '@/lib/first-contact-window'
-import { normalizarPaginaUrlCarta } from '@/lib/carta-url'
+import { construirBloqueBoceto } from '@/lib/boceto-proactivo'
 
 // maxDuration = 30s → da margen para el background tras devolver 200
 export const maxDuration = 30
@@ -757,15 +757,20 @@ async function procesarConLock(
     : ''
 
   // Boceto/demo personalizado del lead (su `pagina_url`). Anti-ban (Fase 2): el
-  // primer mensaje en frío ya NO lleva link — el boceto se comparte ACÁ, cuando el
-  // lead respondió y muestra interés. Normalizamos para no mostrar nunca un
-  // `*.vercel.app`. Aplica a cualquier proyecto (boceto de APEX, demo de Carta, …).
-  const bocetoLink = normalizarPaginaUrlCarta(
-    leadActualizado?.pagina_url as string | null | undefined
+  // primer mensaje en frío ya NO lleva link; apenas el lead responde algo real, el
+  // agente comparte ESTE link de forma PROACTIVA (genera el momento, no espera a que
+  // lo pidan, no cierra la charla sin mostrarlo). Le pasamos los mensajes previos del
+  // agente para que el bloque sepa si ya se mandó y no lo repita. La normalización
+  // (anti `*.vercel.app`) vive dentro de construirBloqueBoceto. Aplica a cualquier
+  // proyecto (boceto de APEX, carta de Carta, …).
+  const mensajesAgentePrevios = filasHistorial
+    .filter(h => h.rol === 'agente')
+    .map(h => h.mensaje)
+    .filter((m): m is string => typeof m === 'string' && m.length > 0)
+  const bocetoBloque = construirBloqueBoceto(
+    leadActualizado?.pagina_url as string | null | undefined,
+    mensajesAgentePrevios
   )
-  const bocetoBloque = bocetoLink
-    ? `[BOCETO] Ya hay una página/demo REAL hecha para ESTE negocio: ${bocetoLink}\nEs su página personalizada (con sus datos y fotos), creada por el sistema. Cuando el cliente quiera verlo o muestre interés ("¿te lo paso?", "mostrame", "dale", "tenés un ejemplo"), compartís EXACTAMENTE este link y NINGÚN otro: es el ÚNICO que mandás para mostrar la página. NUNCA mandes otra URL, ni un ejemplo, ni un dominio genérico/raíz, ni inventes una. No lo mandes si el cliente no mostró interés.`
-    : ''
 
   const projectInfoTextoRaw = [
     ...(projectInfo ?? []).map(info => `[${info.categoria.toUpperCase()}] ${info.titulo}\n${info.contenido}`),
